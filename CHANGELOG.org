@@ -1,0 +1,9 @@
+* v0.1.0-baseline
+
+從 Sioyek 擷取最小可運行的 PDF 渲染核心。
+
+移除所有上層（設定系統、鍵盤輸入、觸控 UI、SyncTeX），僅保留：
+MuPDF 解析 → GLSL 渲染 → Qt OpenGL 視窗。
+
+新增薄層封裝：透過 Unix socket（=/tmp/sioyek-core=）接收 JSON 指令——
+=open=、=scroll=、=zoom=、=goto-page=、=dark-mode=——供外部程式（如 Lisp 控制層）驅動。
