@@ -1,1 +1,54 @@
 result
+
+# ── sioyek vendor tree ────────────────────────────────────────────────────────
+# Track sioyek/pdf_viewer/ source files + top-level .pro/.qrc.
+# Exclude vendored libs, generated Qt artifacts, and build output.
+
+# Vendored libraries (too large / not our code)
+sioyek/mupdf/
+sioyek/zlib/
+sioyek/android/
+sioyek/windows_runtime/
+
+# Qt-generated and build artifacts
+sioyek/*.o
+sioyek/pdf_viewer/*.o
+sioyek/moc_*.cpp
+sioyek/moc_predefs.h
+sioyek/qrc_resources.cpp
+sioyek/sioyek.app/
+
+# Sioyek top-level non-source files
+sioyek/bak/
+sioyek/fzf/
+sioyek/.github/
+sioyek/scripts/
+sioyek/data/
+sioyek/icons/
+sioyek/tutorial/
+sioyek/resources/
+sioyek/begin.png
+sioyek/end.png
+sioyek/CMakeLists.txt
+sioyek/Makefile
+sioyek/LICENSE
+sioyek/README.md
+sioyek/last_version.txt
+sioyek/*.sh
+sioyek/*.py
+sioyek/*.bat
+sioyek/result
+
+# Binary assets inside pdf_viewer/ (referenced via resources.qrc instead)
+sioyek/pdf_viewer/fonts/
+sioyek/pdf_viewer/shaders/
+sioyek/pdf_viewer/icon1.ico
+sioyek/pdf_viewer/icon2.ico
+
+# Config/key files (user-facing runtime data, not source)
+sioyek/pdf_viewer/*.config
+sioyek/pdf_viewer/data/
+sioyek/pdf_viewer/diff/
+
+# Our sioyek-core additions — tracked in the next commit, not the baseline
+sioyek/pdf_viewer/_*
