@@ -1,0 +1,126 @@
+#+TITLE: Sioyek Core：定義與邊界
+#+AUTHOR: Jin
+#+DATE: 2026-05-20
+
+* 什麼是 Sioyek Core
+
+Sioyek Core 是從 Sioyek 抽出來的渲染核心，去掉所有上層邏輯，只保留
+「自己重寫成本極高」的部分。
+
+它不是一個完整的應用程式。它是一個可被外部控制的 PDF 渲染引擎。
+
+* 渲染 Pipeline
+
+#+BEGIN_SRC
+PDF 檔案
+  → MuPDF（C library）：解析 PDF，產生每一頁的 pixel bitmap
+  → OpenGL texture：把 bitmap 上傳到 GPU 記憶體
+  → GLSL shader：在 GPU 上對每個 pixel 做即時變換（dark mode 等）
+  → Qt QOpenGLWidget：把結果顯示在螢幕上
+#+END_SRC
+
+每一層都不可替換：
+- MuPDF 負責 PDF 解析的正確性（RTL、CJK、字型嵌入）
+- OpenGL 負責 scroll/zoom 的流暢度（inertial animation）
+- Shader 負責 real-time 影像處理（不破壞原始 PDF 資料）
+- Qt 負責跨平台視窗與事件迴圈
+
+* 保留的檔案
+
+| 檔案 | 行數 | 職責 |
+|---|---|---|
+| =document.cpp/h= | 5,016 | MuPDF wrapper；文字抽取；bookmark/highlight/portal 的 in-memory 管理與 SQLite 同步 |
+| =document_view.cpp/h= | 2,508 | Viewport 狀態機；zoom/scroll/座標換算 |
+| =pdf_view_opengl_widget.cpp/h= | 4,169 | Qt OpenGL widget；GPU 合成；shader 呼叫；inertial scroll 動畫 |
+| =pdf_renderer.cpp/h= | 887 | 背景 render thread；tile 切割；texture cache |
+| =database.cpp/h= | 2,233 | SQLite 持久化；local/global 雙 database；checksum-based key |
+| =book.cpp/h= | 727 | Annotation 資料結構（Mark、BookMark、Highlight、Portal） |
+| =coordinates.cpp/h= | 622 | 座標系換算（文件座標 ↔ 螢幕座標） |
+| =shaders/= | 273 | GLSL shader programs（dark mode、highlight、freehand drawing） |
+| *合計* | *~16,400* | |
+
+* 砍掉的檔案
+
+| 檔案 | 行數 | 原因 |
+|---|---|---|
+| =main_widget.cpp/h= | 13,036 | 所有 command switch-case、keybinding 分派、command palette UI |
+| =input.cpp/h= | 8,481 | Keybinding 解析與 dispatch 邏輯 |
+| =config.cpp/h= | 1,751 | =keys.config= / =prefs.config= parser |
+| =ui.cpp/h= | 2,897 | Command palette widget（QLineEdit + QListWidget） |
+| =main.cpp= | 952 | Entry point，含 Qt app 初始化（之後會重寫一個最小版本） |
+| *合計* | *~27,100* | |
+
+* PDF 的 Native 內容
+
+PDF format 本身內建很多東西，不只有 link。Sioyek 透過 MuPDF 讀取其中一部分：
+
+** PDF Native 結構（Core 讀取）
+
+- *Outline / TOC*（=fz_outline=）：PDF 內建的目錄樹，就是你在 Preview 左側
+  看到的章節列表。Sioyek 讀出來轉成 =TocNode= 樹。
+
+- *Internal Link*（=PdfLink=）：PDF 頁面裡的超連結（點了跳到另一頁，或跳到
+  外部 URL）。Sioyek 讀出來顯示為可點擊區域。
+
+** PDF Native Annotation（Core 讀取，不寫回）
+
+PDF spec 定義了很多 annotation 類型。Sioyek 目前透過 =get_pdf_annotations()=
+讀取以下幾種，顯示在畫面上，但 *全部唯讀，不寫回 PDF*：
+
+| PDF Annotation 類型  | 意義                                   |
+|----------------------+----------------------------------------|
+| =PDF_ANNOT_TEXT=       | 浮動 sticky note（小圖示，點開有文字） |
+| =PDF_ANNOT_FREE_TEXT=  | 直接顯示在頁面上的文字框               |
+| =PDF_ANNOT_HIGHLIGHT=  | 黃色（或其他顏色）螢光筆標記           |
+| =PDF_ANNOT_UNDERLINE=  | 底線標記                               |
+| =PDF_ANNOT_STRIKE_OUT= | 刪除線標記                             |
+| =PDF_ANNOT_INK=        | 手繪筆跡（freehand drawing）           |
+
+PDF spec 還有更多類型（Square、Circle、Stamp、Widget 表單欄位、3D 等），
+Sioyek 忽略這些。
+
+有一個 toggle（=should_render_pdf_annotations=）可以整個關掉 native annotation
+的顯示。
+
+* 成功的定義
+
+Sioyek Core 算是活著，當且僅當：
+
+1. 一個 Qt 視窗開啟，裡面渲染出一份 PDF
+2. 透過 Unix socket 送入 JSON 命令，視窗正確回應：
+   - ={"cmd": "scroll", "dy": 200}= → 畫面捲動
+   - ={"cmd": "zoom", "level": 1.5}= → 縮放
+   - ={"cmd": "goto-page", "page": 5}= → 跳頁
+3. Dark mode 可切換
+4. 沒有任何硬編碼的 keybinding 在 C++ 裡
+
+控制層完全在外部。Core 本身不知道鍵盤。
+
+* 不在 Core 裡的東西
+
+- Keybinding（屬於控制層，由 Lisp 決定）
+- Command palette UI（屬於上層 UI，之後另外建）
+- 設定檔解析（屬於控制層）
+- 檔案瀏覽 UI（屬於上層 UI）
+- 任何 hard-coded 的使用者行為
+  
+** Extension Layer（Core 之上的第一層）
+
+Core 只管「渲染 PDF 和暴露 PDF 本身的結構」。以下這些概念屬於 Extension
+Layer——它們有意義，但不應硬編碼進 Core：
+
+*** Sioyek 自創的 Annotation
+
+這些存在 SQLite，不是 PDF native：
+
+- =Mark=：vim 式單字元跳點（=a=-=z= 本地，=A=-=Z= 全局）。概念來自 vim。
+- =BookMark=：有描述文字的位置標記，可附帶顏色與 freetext box。
+- =Highlight=：Sioyek 自己管的螢光筆標記，獨立於 PDF native highlight。
+- =Portal=：兩個文件位置之間的 wormhole。連結 src 位置與 dst 文件的完整
+  viewport state（zoom、scroll、checksum）。可跨文件。這是 Sioyek 最獨特的概念。
+
+*** 設計原則
+
+Extension Layer 的所有操作都透過 Core 的 socket 介面進出，不硬編碼在 C++ 裡。
+未來可以用 Lisp 實作，也可以用別的語言替換，Core 不感知。
+
