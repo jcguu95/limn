@@ -1,0 +1,162 @@
+#+AUTHOR: Jin
+#+COAUTHOR: Claude Opus 4.7
+#+DATE: 2026-05-19
+
+* Sioyek Fork: Sioyek Core & Lisp UI
+
+** 為什麼做這件事
+
+Sioyek 本身是 C++ 上的 hack。它有些設計我不滿意，但它把幾件難事做對了，
+重做這幾件事的工程成本對我來說不划算。所以策略是：
+
+- *保留 Sioyek 已做對的渲染與引擎整合*
+- *砍掉所有 C++ hack 性質的上層邏輯*
+- *用我選的方式重建上層，把控制權交回給 Lisp*
+
+這跟 Emacs 自己的 C core + Elisp 上層、qutebrowser 的 Qt + Python、
+pdf-tools 的 Poppler + Elisp 是同一個 pattern。我接受「rendering 給專
+業引擎做、控制層自己寫」這個分工。
+
+** 我的哲學前提
+
+每一種資料（網頁、SGF、PDF、文字、圖、影音）對我來說都應該是「可定址、
+可內省、可程式化、可組合」的物件。我要能：
+
+- 用單一指令跳到它任何一個內部位置（網址、棋譜 node、PDF 某頁、某行）
+- 即時把它當下的狀態 dump 成可讀資料流送到 Emacs / shell / 別的程式
+- 反向從 Emacs 一條指令送回去執行任意操作（含複合動作）
+- 渲染外包給專業引擎，但 *控制層必須完全暴露*：每個 internal function
+  都可被 introspect、每個 state slot 都可被讀寫、每個 keybinding 都可
+  被攔截重綁、出錯時要能進入 REPL 修改行為而不必重啟
+
+Emacs 是 cockpit。底下用什麼 renderer 是工程選擇而非生活方式。
+
+關鍵原則：*「核心用低階語言寫求效能、頂層用高階動態語言開放 hack」是工
+具長壽的關鍵；C++/Rust monolith 是工具短命的根源*。Sioyek 全 C++，違反
+此原則，因此不能直接接受。
+
+** 目標：抽出 sioyek-core
+
+*** 必須保留（精華）
+
+這些是 Sioyek 已做對、自己重寫成本極高的部分：
+
+- OpenGL + MuPDF 整合的 ~PdfViewOpenGLWidget~：真正流暢的 zoom / scroll /
+  inertial。從零做要會 OpenGL texture management + Qt OpenGL widget +
+  MuPDF render-to-texture，半年起跳。
+- Text extraction with position data：點到 PDF 某座標 → 拿到對應
+  paragraph + bounding box，含 RTL / CJK 處理。
+- Smart fit / single-column extraction：自動裁邊、學術 PDF 單欄／雙欄
+  reflow 的 heuristic。這是 Sioyek 對「論文閱讀」的核心 value，pdf-tools /
+  Preview 都沒有。
+- Cross-reference / synctex backend：PDF 內引用 hyperlink 跳；TeX
+  source ↔ PDF 雙向跳。
+- OpenGL filter pipeline：dark-mode shader、color invert，real-time、
+  不破壞原 PDF 資料。
+- MuPDF wrapper in ~document.cpp~：caching、page loading、threading、
+  error recovery。
+- Sqlite state database：~/.local/share/Sioyek/database/sioyek.db
+  schema 漂亮、可外面直接 SQL 操作。
+
+*** 必須砍掉
+
+這些是 Sioyek 上層 C++ hack 性質的東西，全部不要：
+
+- ~keys.config~ 字串-based syntax：簡陋、無 hot redefine、不能組合命令、
+  不能參數化。
+- Command palette UI（~QLineEdit~ + ~QListWidget~）：太基本、無
+  marginalia / preview / embark。
+- 內部命令分派（switch-case based）：hard-coded、加新 command 要動 C++。
+- 設定檔解析（~prefs_user.config~ parser）：one-off parser、不能 macro /
+  條件、不能引用其他變數。
+- Help system / tooltip：基本上沒有。
+- ~MMServer~ 協定：為 synctex 設計、太狹窄，應該被新的 JSON-RPC 取代。
+
+*** 切割線的意義
+
+保留「performance-critical / hardware-dependent」的部分，砍掉
+「ergonomics / customization」的部分。這條切割線 *剛好對應「自己重寫成
+本 ≫ 換掉成本」的分界*。
+
+** 重建上層的設計約束
+
+*** 控制權必須回到 Lisp
+
+外面必須能：
+
+- 跑任意命令（open file、jump page、scroll、zoom、search、annotate）
+- 訂閱事件（page-changed、selection-made、annotation-added）
+- 查詢任意 state（current file、page、scroll-y、zoom、selection、
+  bookmarks、highlights）
+- 攔截 keypress（讓 Lisp 決定下一步動作）
+
+*** 互動的歸屬
+
+不是所有 user-facing interaction 都要過 Emacs minibuffer。具體說，
+fuzzy search command list 這種 *不應該跳回 Emacs*，那樣破壞 workflow。
+
+Implications：
+
+- Sioyek 內仍要有強大的 command palette / completion UI
+- *Emacs 是 controller，不是所有 user-facing interaction 的歸屬*
+- Sioyek 端的 UX 需要更強，現在 Qt Widgets 的命令面板太簡陋
+
+*** 現在 Sioyek UI 的具體痛點（重建上層時要解決）
+
+- 命令面板沒 marginalia（不知道每個 command 在做什麼）
+- 沒 preview（不知道執行後會發生什麼）
+- 沒 embark-style secondary action（不能對 candidate 做次要動作）
+- 沒 transient menu / which-key（不知道現在 prefix key 之後能接什麼）
+- 搜尋結果沒 fuzzy 高亮 / score sort
+- 沒 minibuffer 樣的「上次輸入」歷史 ring
+- annotation 編輯沒 inline preview
+- 沒 ediff-like 兩個 PDF 對照模式
+
+** 規範化的承諾與不承諾
+
+*** 我承諾
+
+- 保留 sioyek-core 的渲染品質（OpenGL + MuPDF 那條 pipeline 不動）
+- 跨平台（Linux / macOS / Windows，跟 Qt 一樣）
+- 每個 user-facing 操作 *都能從 Emacs 送進來，也能 dump state 出去*
+- 控制層完全 Lispy（不會出現 hard-coded 的 C++ switch-case 邏輯主宰行為）
+
+*** 我不承諾
+
+- 從第一天就跟 Sioyek upstream 同步（fork 後可能會 diverge）
+- 重寫 OpenGL 或 MuPDF binding（這是別人的工作）
+- 在 mobile 上跑（Qt 在 iOS / Android 有限，不是優先）
+- 100% pure Lisp（底下永遠會有 C++/C，這是 purity 的程度問題不是 0/1 問題）
+
+** 待回答的設計決定（下次 session 開始前要想清楚）
+
+1. fork 出來的 repo 叫什麼？放哪？
+2. 第一個要砍的 C++ 模組是哪個？（建議從 ~keys.config~ parser 開刀，
+   因為它最沒精華成分）
+3. 上層用什麼方式跟 sioyek-core 講話？
+   - JSON-RPC over Unix socket
+   - 或 embed SBCL 進 Sioyek process
+   - 或其他
+4. Sioyek 端的新 UI 用什麼技術？
+   - Qt Widgets 加強
+   - QML overlay
+   - QtWebEngine overlay
+   - 或其他
+5. 跟 pdf-tools 並存還是取代？
+
+** 平行 / 同樣思路的其他資料類型
+
+這套「抽核心、重上層」的策略在以下場景同樣適用，列在這當提醒：
+
+- *SGF / 圍棋*：Sabaki 是 Electron + React 已可從 DevTools hack；現階段
+  不需 fork 也能 80% 控制
+- *網頁*：qutebrowser 已經夠 Emacs-friendly，只需要寫 ~qute.el~ 包現
+  有 IPC
+- *文字*：Emacs 自己已是這個架構的範本
+
+PDF 是目前最痛的點，所以從 Sioyek 開始。
+
+** 開始之前的一個 reality check
+
+先用 ~pdf-tools~ 一週，看實際痛點剩多少。如果 pdf-tools 已能滿足 90%
+需求，這整份 fork 計畫的 ROI 就要重新評估。
