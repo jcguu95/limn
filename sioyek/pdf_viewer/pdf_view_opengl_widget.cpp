@@ -87,41 +87,7 @@ extern float KEYBOARD_SELECTED_TAG_TEXT_COLOR[4];
 extern float KEYBOARD_SELECTED_TAG_BACKGROUND_COLRO[4];
 
 extern int RULER_UNDERLINE_PIXEL_WIDTH;
-extern UIRect PORTRAIT_EDIT_PORTAL_UI_RECT;
-extern UIRect LANDSCAPE_EDIT_PORTAL_UI_RECT;
-
-extern UIRect PORTRAIT_BACK_UI_RECT;
-extern UIRect PORTRAIT_FORWARD_UI_RECT;
-extern UIRect LANDSCAPE_BACK_UI_RECT;
-extern UIRect LANDSCAPE_FORWARD_UI_RECT;
-extern UIRect PORTRAIT_VISUAL_MARK_PREV;
-extern UIRect PORTRAIT_VISUAL_MARK_NEXT;
-extern UIRect LANDSCAPE_VISUAL_MARK_PREV;
-extern UIRect LANDSCAPE_VISUAL_MARK_NEXT;
-extern UIRect PORTRAIT_MIDDLE_LEFT_UI_RECT;
-extern UIRect PORTRAIT_MIDDLE_RIGHT_UI_RECT;
-extern UIRect LANDSCAPE_MIDDLE_LEFT_UI_RECT;
-extern UIRect LANDSCAPE_MIDDLE_RIGHT_UI_RECT;
-extern UIRect PORTRAIT_EDIT_PORTAL_UI_RECT;
-extern UIRect LANDSCAPE_EDIT_PORTAL_UI_RECT;
-
-extern std::wstring BACK_RECT_TAP_COMMAND;
-extern std::wstring BACK_RECT_HOLD_COMMAND;
-extern std::wstring FORWARD_RECT_TAP_COMMAND;
-extern std::wstring FORWARD_RECT_HOLD_COMMAND;
-extern std::wstring TOP_CENTER_TAP_COMMAND;
-extern std::wstring TOP_CENTER_HOLD_COMMAND;
-extern std::wstring VISUAL_MARK_NEXT_TAP_COMMAND;
-extern std::wstring VISUAL_MARK_NEXT_HOLD_COMMAND;
-extern std::wstring VISUAL_MARK_PREV_TAP_COMMAND;
-extern std::wstring VISUAL_MARK_PREV_HOLD_COMMAND;
-extern std::wstring MIDDLE_LEFT_RECT_TAP_COMMAND;
-extern std::wstring MIDDLE_LEFT_RECT_HOLD_COMMAND;
-extern std::wstring MIDDLE_RIGHT_RECT_TAP_COMMAND;
-extern std::wstring MIDDLE_RIGHT_RECT_HOLD_COMMAND;
-extern std::wstring MIDDLE_RIGHT_RECT_HOLD_COMMAND;
-extern std::wstring TOP_CENTER_TAP_COMMAND;
-extern std::wstring TOP_CENTER_HOLD_COMMAND;
+// removed: touch UI UIRect externs (ui layer cut)
 extern std::wstring TAG_FONT_FACE;
 
 extern bool BACKGROUND_PIXEL_FIX;
@@ -235,9 +201,23 @@ bool num_slices_for_page_rect(PagelessDocumentRect page_rect, int* h_slices, int
 }
 
 std::string read_file_contents(const Path& path) {
+    QString qpath = QString::fromStdWString(path.get_path());
+
+    // Qt resource paths (:/...) must be read via QFile on all platforms.
+    // Path::get_path() prepends '/' on Unix, so :/... becomes /:/...
+    if (qpath.startsWith("/:/")) qpath = qpath.mid(1);
+    if (qpath.startsWith(":/")) {
+        QFile qfile(qpath);
+        if (qfile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            std::string content = qfile.readAll().toStdString();
+            qfile.close();
+            return content;
+        }
+        return "";
+    }
+
 #ifdef SIOYEK_ANDROID
-    std::wstring actual_path = path.get_path();
-    QFile qfile(QString::fromStdWString(path.get_path()));
+    QFile qfile(qpath);
     qfile.open(QIODeviceBase::Text | QIODeviceBase::ReadOnly);
     std::string content = qfile.readAll().toStdString();
     qfile.close();
@@ -1364,7 +1344,6 @@ void PdfViewOpenGLWidget::my_render(QPainter* painter) {
 
     std::vector<int> visible_pages;
     document_view->get_visible_pages(document_view->get_view_height(), visible_pages);
-
     clear_background_color();
 
     std::vector<PdfLink> all_visible_links;
@@ -1877,20 +1856,7 @@ void PdfViewOpenGLWidget::my_render(QPainter* painter) {
         }
     }
 
-    if (should_show_rect_hints) {
-        std::vector<std::pair<QRect, QString>> hints = get_hint_rect_and_texts();
-        int flags = Qt::TextWordWrap | Qt::AlignCenter;
-
-        for (auto [hint_rect, hint_text] : hints) {
-            painter->fillRect(hint_rect, QColor(0, 0, 0, 200));
-        }
-
-        painter->setPen(QColor(255, 255, 255, 255));
-
-        for (auto [hint_rect, hint_text] : hints) {
-            painter->drawText(hint_rect, flags, hint_text);
-        }
-    }
+    // removed: touch UI rect hints (ui layer cut)
 
 
     painter->beginNativePainting();
@@ -3448,62 +3414,10 @@ bool PdfViewOpenGLWidget::has_synctex_timed_out() {
     return false;
 }
 
-struct UIRectDescriptor {
-    UIRect* ui_rect;
-    std::wstring* tap_command;
-    std::wstring* hold_command;
-    std::string name;
-};
+// removed: UIRectDescriptor (touch UI, ui layer cut)
 
-std::vector<std::pair<QRect, QString>> PdfViewOpenGLWidget::get_hint_rect_and_texts() {
-    std::vector<std::pair< QRect, QString>> res;
-
-    std::vector<UIRectDescriptor> rect_descriptors;
-
-    if (screen()->orientation() == Qt::PortraitOrientation) {
-        rect_descriptors = {
-            UIRectDescriptor {&PORTRAIT_BACK_UI_RECT, &BACK_RECT_TAP_COMMAND, &BACK_RECT_HOLD_COMMAND, "back"},
-            UIRectDescriptor {&PORTRAIT_FORWARD_UI_RECT, &FORWARD_RECT_TAP_COMMAND, &FORWARD_RECT_HOLD_COMMAND, "forward"},
-            UIRectDescriptor {&PORTRAIT_VISUAL_MARK_PREV, &VISUAL_MARK_PREV_TAP_COMMAND, &VISUAL_MARK_PREV_HOLD_COMMAND, "move_ruler_prev"},
-            UIRectDescriptor {&PORTRAIT_VISUAL_MARK_NEXT, &VISUAL_MARK_NEXT_TAP_COMMAND, &VISUAL_MARK_NEXT_HOLD_COMMAND, "move_ruler_next"},
-            UIRectDescriptor {&PORTRAIT_MIDDLE_LEFT_UI_RECT, &MIDDLE_LEFT_RECT_TAP_COMMAND, &MIDDLE_LEFT_RECT_HOLD_COMMAND, "middle_left"},
-            UIRectDescriptor {&PORTRAIT_MIDDLE_RIGHT_UI_RECT, &MIDDLE_RIGHT_RECT_TAP_COMMAND, &MIDDLE_RIGHT_RECT_HOLD_COMMAND, "middle_right"},
-            UIRectDescriptor {&PORTRAIT_EDIT_PORTAL_UI_RECT, &TOP_CENTER_TAP_COMMAND, &TOP_CENTER_HOLD_COMMAND, "edit_portal"},
-        };
-    }
-    else {
-        rect_descriptors = {
-            UIRectDescriptor {&LANDSCAPE_BACK_UI_RECT, &BACK_RECT_TAP_COMMAND, &BACK_RECT_HOLD_COMMAND, "back"},
-            UIRectDescriptor {&LANDSCAPE_FORWARD_UI_RECT, &FORWARD_RECT_TAP_COMMAND, &FORWARD_RECT_HOLD_COMMAND, "forward"},
-            UIRectDescriptor {&LANDSCAPE_VISUAL_MARK_PREV, &VISUAL_MARK_PREV_TAP_COMMAND, &VISUAL_MARK_PREV_HOLD_COMMAND, "move_ruler_prev"},
-            UIRectDescriptor {&LANDSCAPE_VISUAL_MARK_NEXT, &VISUAL_MARK_NEXT_TAP_COMMAND, &VISUAL_MARK_NEXT_HOLD_COMMAND, "move_ruler_next"},
-            UIRectDescriptor {&LANDSCAPE_MIDDLE_LEFT_UI_RECT, &MIDDLE_LEFT_RECT_TAP_COMMAND, &MIDDLE_LEFT_RECT_HOLD_COMMAND, "middle_left"},
-            UIRectDescriptor {&LANDSCAPE_MIDDLE_RIGHT_UI_RECT, &MIDDLE_RIGHT_RECT_TAP_COMMAND, &MIDDLE_RIGHT_RECT_HOLD_COMMAND, "middle_right"},
-            UIRectDescriptor {&LANDSCAPE_EDIT_PORTAL_UI_RECT, &TOP_CENTER_TAP_COMMAND, &TOP_CENTER_HOLD_COMMAND, "edit_portal"},
-        };
-    }
-
-    for (auto desc : rect_descriptors) {
-        bool is_visual = QString::fromStdString(desc.name).startsWith("move_ruler");
-
-        if (is_visual || (desc.ui_rect->enabled && ((desc.hold_command->size() > 0) || (desc.tap_command->size() > 0)))) {
-            QString str = "";
-            if (desc.tap_command->size() > 0) {
-                str += "tap: " + QString::fromStdWString(*desc.tap_command);
-            }
-            if (desc.hold_command->size() > 0) {
-                if (str.size() > 0) str += "\n";
-                str += "hold: " + QString::fromStdWString(*desc.hold_command);
-            }
-            if (is_visual) {
-                if (str.size() > 0) str += "\n";
-                str += "visual: " + QString::fromStdString(desc.name);
-            }
-            res.push_back(std::make_pair(desc.ui_rect->to_window(width(), height()), str));
-        }
-    }
-    return res;
-} 
+// removed: get_hint_rect_and_texts (touch UI, ui layer cut)
+std::vector<std::pair<QRect, QString>> PdfViewOpenGLWidget::get_hint_rect_and_texts() { return {}; }
 
 void PdfViewOpenGLWidget::show_rect_hints() {
     should_show_rect_hints = true;

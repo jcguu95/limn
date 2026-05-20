@@ -50,5 +50,5 @@ sioyek/pdf_viewer/*.config
 sioyek/pdf_viewer/data/
 sioyek/pdf_viewer/diff/
 
-# Our sioyek-core additions — tracked in the next commit, not the baseline
-sioyek/pdf_viewer/_*
+# _* files: original sioyek files preserved aside when we removed/replaced them
+# (tracked — the rename from file.cpp → _file.cpp shows the removal intent)

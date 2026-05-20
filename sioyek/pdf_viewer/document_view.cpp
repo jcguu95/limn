@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cfloat>
 
 #include "document_view.h"
 #include "checksum.h"
@@ -7,7 +8,7 @@
 #include "qlogging.h"
 #include "utils.h"
 #include "config.h"
-#include "ui.h"
+// #include "ui.h"  // removed: ui layer cut
 
 extern float MOVE_SCREEN_PERCENTAGE;
 extern float FIT_TO_PAGE_WIDTH_RATIO;
@@ -787,7 +788,6 @@ void DocumentView::open_document(const std::wstring& doc_path,
     //current_document = new Document(mupdf_context, doc_path, database);
     //current_document = document_manager->get_document(doc_path);
     current_document = document_manager->get_document(canonical_path);
-    //current_document->open();
     if (!current_document->open(invalid_flag, force_load_dimensions)) {
         current_document = nullptr;
     }
