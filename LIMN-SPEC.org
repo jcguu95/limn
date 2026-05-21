@@ -3,7 +3,6 @@
 Limn 是一個由 Common Lisp（SBCL）控制的 Qt 顯示框架。
 Backend（Lisp）透過 Bridge（Unix socket + JSON）驅動 Frontend（Qt），
 Qt 載入各種 Engine 來顯示不同類型的內容。
-[LLM, Qt is just a frontend. While it's the only frontend it may not be in the future. So our design must be modular.]
 
 ** 一、核心概念
 
@@ -12,7 +11,7 @@ Qt 載入各種 Engine 來顯示不同類型的內容。
 | frame   | OS 層級的獨立視窗                              | Emacs frame      |
 | window  | frame 內的視埠，顯示一個 buffer                | Emacs window     |
 | buffer  | Limn 的基本內容單元，持有內容與其狀態          | Emacs buffer     |
-| engine  | 處理特定類型 buffer 的機器（mupdf, web, ...）  | Emacs major mode (LLM: not exactly though..) |
+| engine  | 處理特定類型 buffer 的機器（mupdf, web, ...）  | Emacs major mode |
 
 關係：
 
@@ -52,16 +51,13 @@ buffer ──由────▶  engine 管理（一種 engine 可管理多個 b
 
 #+begin_src
 使用者按鍵
-  → Qt 捕捉原始事件 (READ)
+  → Qt 捕捉原始事件
     → Bridge 推送 event 給 SBCL
-      → Lisp dispatch table 找到對應動作 (EVAL)
+      → Lisp dispatch table 找到對應動作
         → Bridge 送出指令給 Qt
-          → Qt 執行，更新畫面 (PRINT)
+          → Qt 執行，更新畫面
             → Bridge 回傳結果給 SBCL
-(LOOP)
 #+end_src
-
-LLM, So does each "frame" correspond to a lisp thread?
 
 ** 三、目錄結構
 
@@ -72,18 +68,18 @@ limn/
     limn-bridge.lisp        ← socket I/O，message loop，request ID
     limn-buffer.lisp        ← buffer 表，open/close/switch
     limn-window.lisp        ← window/frame 的 Lisp 端追蹤
-    limn-keys.lisp          ← 鍵盤綁定 dispatch table (emacs-like keymap)
+    limn-keys.lisp          ← 鍵盤綁定 dispatch table
     limn-hooks.lisp         ← hook 系統
     limn-undo.lisp          ← undo tree
-    limn-search.lisp        ← 搜尋（組裝自 buffer/text） (LLM, is this MuPDF specific?)
-    limn-session.lisp       ← session 儲存/還原 (LLM, what is this?)
+    limn-search.lisp        ← 搜尋（組裝自 buffer/text）
+    limn-session.lisp       ← session 儲存/還原
     engines/
       limn-mupdf.lisp       ← mupdf 的 Lisp 端封裝
-      limn-web.lisp         ← (未來)
+      limn-web.lisp         ← 未來
 
   bridge/
-    LIMN-SPEC.org           ← 本文件 (should be here? or one level higher?)
-    SOCKET-API.org          ← 指令速查表 (obsolete?)
+    LIMN-SPEC.org           ← 本文件
+    SOCKET-API.org          ← 指令速查表
 
   frontend/
     qt/
@@ -92,7 +88,7 @@ limn/
       frame.cpp / .h        ← QMainWindow 管理
       window.cpp / .h       ← window 分割、focus（QSplitter）
       engines/
-        mupdf/              ← mupdf engine（原 sioyek/pdf_viewer） (so we should move some parts to the previous layer? how can we do this nicely?)
+        mupdf/              ← mupdf engine（原 sioyek/pdf_viewer）
         web/                ← 未來（QWebEngineView）
         text/               ← 未來（QPlainTextEdit）
 
@@ -105,12 +101,9 @@ limn/
 *** 4.1 傳輸層
 
 - 協議：Unix domain socket
-- 預設路徑：=/tmp/limn-PID?=
+- 預設路徑：=/tmp/limn=
 - 格式：UTF-8，每行一個 JSON 物件（以 =\n= 分隔）
 - 方向：雙向，同一條連線
-
-LLM, we can always make it embedding in the future easily, right? We can also
-compress the requests?
 
 *** 4.2 訊息類型
 
@@ -201,7 +194,7 @@ Frontend 的回應順序不保證與 request 順序相同，靠 =id= 對應。
 
 *** 5.2 view/ ── 視埠顯示
 
-所有 engine 都必須實作。=win-id= 決定路由到哪個 engine。 (LLM, what is win-id?)
+所有 engine 都必須實作。=win-id= 決定路由到哪個 engine。
 
 #+begin_src json
 // 設定視埠（可部分更新）
@@ -225,7 +218,7 @@ Frontend 的回應順序不保證與 request 順序相同，靠 =id= 對應。
 → {"id":"r12", "ok":true}
 #+end_src
 
-view/set 的可選欄位，engine 支援哪些就接受哪些： (LLM, this is MuPDF specific?)
+view/set 的可選欄位，engine 支援哪些就接受哪些：
 
 | 欄位        | 類型   | 說明                   |
 |-------------+--------+------------------------|
@@ -288,7 +281,7 @@ engine 依能力實作，不支援的指令回傳 ={"ok":false,"error":"not supp
 
 ** 六、事件參考
 
-Frontend 主動推送，無 =id= (LLM, we need to remember which frame it is from?)。SBCL 在背景執行緒持續接收。
+Frontend 主動推送，無 =id=。SBCL 在背景執行緒持續接收。
 
 | 事件              | 推送時機             | 主要欄位                        |
 |-------------------+----------------------+---------------------------------|
@@ -299,7 +292,6 @@ Frontend 主動推送，無 =id= (LLM, we need to remember which frame it is fro
 | =buffer-opened=   | buffer 成功開啟      | =buffer-id, page-count=         |
 | =buffer-closed=   | buffer 關閉          | =buffer-id=                     |
 | =error=           | 指令執行失敗         | =cmd, message=                  |
-important: mouse drag, third mouse tap? macos specific multi finger motions? input method (e.g. audio input? what are some other general types of inputs?).  send "still alive message"? drag and drop?! -- also, does the frontend (now Qt) have an error stack thing like lisp? if so how do we control that from lisp?
 
 事件格式範例：
 
@@ -326,9 +318,9 @@ engine 必須能正確處理這些指令，否則不算合法的 Limn engine：
 #+begin_src
 buffer/open    接受 path 或 url，回傳 buffer-id 與基本 metadata
 buffer/close   釋放資源
-view/set       更新視埠（至少支援 page、zoom、offset-y） -- LLM, do you mean update engine's status..?
-view/get       回傳目前視埠狀態 -- LLM, do you mean engine's status? 
-view/overlays  在視埠上繪製指定矩形（搜尋高亮、書籤用） -- LLM, this is MuPDF specific?
+view/set       更新視埠（至少支援 page、zoom、offset-y）
+view/get       回傳目前視埠狀態
+view/overlays  在視埠上繪製指定矩形（搜尋高亮、書籤用）
 #+end_src
 
 *** 7.2 SHOULD 實作（有能力才回傳，否則回 "not supported"）
@@ -373,11 +365,9 @@ error           任何內部錯誤
 *** 7.5 Engine 命名慣例
 
 engine 名稱用小寫字母加連字號：=mupdf=、=web=、=plain-text=、=sgf=。
-在 =bridge/capabilities= 回應中列出所有已載入的 engine。 -- LLM, remind that we have CL's "package".
+在 =bridge/capabilities= 回應中列出所有已載入的 engine。
 
 ** 八、實作路線圖
-
-LLM, test-driven. We have spec, then write tests, then write codes that pass tests.
 
 *** v0.2 查詢層（讓 SBCL 不再是瞎的）
 - 實作 =buffer/text=、=buffer/toc=、=buffer/links=、=view/get=
