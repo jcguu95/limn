@@ -61,14 +61,18 @@ MainWidget::~MainWidget() {
 bool MainWidget::open_document(const std::wstring& path) {
     bool invalid = false;
     document_view_->open_document(path, &invalid);
-    if (!invalid) {
-        // In headless / pre-layout state, the OpenGL widget hasn't sized
-        // itself yet, so sioyek's auto-resize zoom doesn't fire. Force a
-        // sensible default so view/get returns a positive zoom.
-        if (document_view_->get_zoom_level() <= 0.0f) {
-            document_view_->set_zoom_level(1.0f, true);
-        }
+    // sioyek's invalid_flag isn't reliable for "file does not exist". The
+    // ground truth is whether DocumentView ended up with a non-null Document.
+    Document* doc = document_view_->get_document();
+    if (invalid || !doc) {
+        return false;
+    }
+    // In headless / pre-layout state, the OpenGL widget hasn't sized
+    // itself yet, so sioyek's auto-resize zoom doesn't fire. Force a
+    // sensible default so view/get returns a positive zoom.
+    if (document_view_->get_zoom_level() <= 0.0f) {
+        document_view_->set_zoom_level(1.0f, true);
     }
     opengl_widget_->update();
-    return !invalid;
+    return true;
 }
