@@ -1,0 +1,406 @@
+* Limn 規格書 v0.1
+
+Limn 是一個由 Common Lisp（SBCL）控制的 Qt 顯示框架。
+Backend（Lisp）透過 Bridge（Unix socket + JSON）驅動 Frontend（Qt），
+Qt 載入各種 Engine 來顯示不同類型的內容。
+[LLM, Qt is just a frontend. While it's the only frontend it may not be in the future. So our design must be modular.]
+
+** 一、核心概念
+
+| 概念    | 定義                                           | 類比             |
+|---------+------------------------------------------------+------------------|
+| frame   | OS 層級的獨立視窗                              | Emacs frame      |
+| window  | frame 內的視埠，顯示一個 buffer                | Emacs window     |
+| buffer  | Limn 的基本內容單元，持有內容與其狀態          | Emacs buffer     |
+| engine  | 處理特定類型 buffer 的機器（mupdf, web, ...）  | Emacs major mode (LLM: not exactly though..) |
+
+關係：
+
+#+begin_src
+frame  ──包含──▶  window（一個 frame 可有多個，可分割）
+window ──顯示──▶  buffer（多個 window 可顯示同一個 buffer）
+buffer ──由────▶  engine 管理（一種 engine 可管理多個 buffer）
+#+end_src
+
+一個 engine 的內部資源管理（執行緒池、快取等）是 engine 自己的事，
+不屬於 Limn 規格的範圍。
+
+** 二、架構
+
+#+begin_src
+┌─────────────────────────────────────────────────────────────┐
+│                          Limn                               │
+│                                                             │
+│   ┌──────────┐    ┌────────────────┐    ┌───────────────┐  │
+│   │ Backend  │    │     Bridge     │    │   Frontend    │  │
+│   │  (SBCL)  │◀──▶│  Unix socket  │◀──▶│     (Qt)      │  │
+│   │          │    │  JSON + ID     │    │               │  │
+│   │ 所有邏輯 │    └────────────────┘    │  ┌─────────┐  │  │
+│   │ 鍵盤綁定 │                          │  │ mupdf   │  │  │
+│   │ undo tree│                          │  │ engine  │  │  │
+│   │ buffer表 │                          │  ├─────────┤  │  │
+│   │ hooks    │                          │  │  web    │  │  │
+│   │ session  │                          │  │ engine  │  │  │
+│   └──────────┘                          │  ├─────────┤  │  │
+│                                         │  │   ...   │  │  │
+│                                         │  └─────────┘  │  │
+│                                         └───────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+#+end_src
+
+資料流：
+
+#+begin_src
+使用者按鍵
+  → Qt 捕捉原始事件 (READ)
+    → Bridge 推送 event 給 SBCL
+      → Lisp dispatch table 找到對應動作 (EVAL)
+        → Bridge 送出指令給 Qt
+          → Qt 執行，更新畫面 (PRINT)
+            → Bridge 回傳結果給 SBCL
+(LOOP)
+#+end_src
+
+LLM, So does each "frame" correspond to a lisp thread?
+
+** 三、目錄結構
+
+#+begin_src
+limn/
+  backend/                  ← Lisp（SBCL）
+    limn.lisp               ← entry point，連線，啟動
+    limn-bridge.lisp        ← socket I/O，message loop，request ID
+    limn-buffer.lisp        ← buffer 表，open/close/switch
+    limn-window.lisp        ← window/frame 的 Lisp 端追蹤
+    limn-keys.lisp          ← 鍵盤綁定 dispatch table (emacs-like keymap)
+    limn-hooks.lisp         ← hook 系統
+    limn-undo.lisp          ← undo tree
+    limn-search.lisp        ← 搜尋（組裝自 buffer/text） (LLM, is this MuPDF specific?)
+    limn-session.lisp       ← session 儲存/還原 (LLM, what is this?)
+    engines/
+      limn-mupdf.lisp       ← mupdf 的 Lisp 端封裝
+      limn-web.lisp         ← (未來)
+
+  bridge/
+    LIMN-SPEC.org           ← 本文件 (should be here? or one level higher?)
+    SOCKET-API.org          ← 指令速查表 (obsolete?)
+
+  frontend/
+    qt/
+      main.cpp              ← Qt application entry
+      bridge.cpp / .h       ← socket server，JSON dispatcher
+      frame.cpp / .h        ← QMainWindow 管理
+      window.cpp / .h       ← window 分割、focus（QSplitter）
+      engines/
+        mupdf/              ← mupdf engine（原 sioyek/pdf_viewer） (so we should move some parts to the previous layer? how can we do this nicely?)
+        web/                ← 未來（QWebEngineView）
+        text/               ← 未來（QPlainTextEdit）
+
+  flake.nix
+  CHANGELOG.org
+#+end_src
+
+** 四、Bridge 協議
+
+*** 4.1 傳輸層
+
+- 協議：Unix domain socket
+- 預設路徑：=/tmp/limn-PID?=
+- 格式：UTF-8，每行一個 JSON 物件（以 =\n= 分隔）
+- 方向：雙向，同一條連線
+
+LLM, we can always make it embedding in the future easily, right? We can also
+compress the requests?
+
+*** 4.2 訊息類型
+
+**** Request（Backend → Frontend）
+
+#+begin_src json
+{
+  "id":  "r42",
+  "cmd": "view/set",
+  "win-id": "w1",
+  "page": 5
+}
+#+end_src
+
+- =id=：唯一字串，由 Backend 生成，用於對應 Response
+- =cmd=：指令名稱（見第五節）
+- 其餘欄位為指令參數
+
+**** Response（Frontend → Backend）
+
+成功：
+#+begin_src json
+{"id": "r42", "ok": true, "data": { ... }}
+#+end_src
+
+失敗：
+#+begin_src json
+{"id": "r42", "ok": false, "error": "page out of range"}
+#+end_src
+
+- =id=：與 Request 相同
+- 無 data 的成功回應：={"id":"r42", "ok":true}=
+
+**** Event（Frontend → Backend，主動推送）
+
+#+begin_src json
+{"event": "key", "win-id": "w1", "key": "j", "mods": []}
+#+end_src
+
+- 無 =id=（不是 request，不需要 response）
+- Frontend 在特定情況下自動推送
+
+*** 4.3 並行請求
+
+SBCL 可同時有多個 pending request，不須等上一個完成：
+
+#+begin_src lisp
+(let ((a (async-send '(:cmd "buffer/toc"  :win-id "w1")))
+      (b (async-send '(:cmd "buffer/text" :win-id "w1" :page 5))))
+  (await-all a b))
+#+end_src
+
+Frontend 的回應順序不保證與 request 順序相同，靠 =id= 對應。
+
+** 五、指令參考
+
+*** 5.1 bridge/ ── 視窗、frame、engine 管理
+
+與內容無關，Frontend 的 shell 層處理。
+
+#+begin_src json
+// 載入 engine 到 window，開啟內容
+{"id":"r1", "cmd":"bridge/engine-load",
+            "win-id":"w1", "engine":"mupdf", "path":"/tmp/paper.pdf"}
+→ {"id":"r1", "ok":true, "buffer-id":"b1"}
+
+// 查詢 frontend 能力（engine 版本、支援格式等）
+{"id":"r2", "cmd":"bridge/capabilities"}
+→ {"id":"r2", "ok":true,
+   "data":{"engines":["mupdf","web"], "version":"0.1"}}
+
+// Window 管理
+{"id":"r3", "cmd":"bridge/win-split", "win-id":"w1", "dir":"h"}
+→ {"id":"r3", "ok":true, "win-a":"w1", "win-b":"w2"}
+
+{"id":"r4", "cmd":"bridge/win-close", "win-id":"w2"}
+{"id":"r5", "cmd":"bridge/win-focus", "win-id":"w1"}
+{"id":"r6", "cmd":"bridge/win-list"}
+→ {"id":"r6", "ok":true,
+   "data":[{"win-id":"w1","buffer-id":"b1","engine":"mupdf"},
+           {"win-id":"w2","buffer-id":"b2","engine":"mupdf"}]}
+
+// Frame 管理（◇ 長期目標）
+{"cmd":"bridge/frame-new"}   → {"frame-id":"f2"}
+{"cmd":"bridge/frame-close", "frame-id":"f2"}
+{"cmd":"bridge/frame-list"}  → [{"frame-id":"f1","windows":["w1","w2"]}]
+#+end_src
+
+*** 5.2 view/ ── 視埠顯示
+
+所有 engine 都必須實作。=win-id= 決定路由到哪個 engine。 (LLM, what is win-id?)
+
+#+begin_src json
+// 設定視埠（可部分更新）
+{"id":"r10", "cmd":"view/set", "win-id":"w1",
+             "page":5, "offset-y":1234.5, "zoom":1.5, "dark-mode":true}
+→ {"id":"r10", "ok":true}
+
+// 查詢視埠狀態
+{"id":"r11", "cmd":"view/get", "win-id":"w1"}
+→ {"id":"r11", "ok":true,
+   "data":{"buffer-id":"b1", "page":5, "offset-y":1234.5,
+           "zoom":1.5, "dark-mode":true, "rotation":0}}
+
+// 設定疊加層（Lisp 決定畫什麼，engine 負責畫）
+// 搜尋高亮、書籤、選取——全部走這一個原語
+{"id":"r12", "cmd":"view/overlays", "win-id":"w1",
+             "rects":[
+               {"page":5, "rect":[x0,y0,x1,y1], "color":"#FFD700"},
+               {"page":5, "rect":[x0,y0,x1,y1], "color":"#FF6B6B"}
+             ]}
+→ {"id":"r12", "ok":true}
+#+end_src
+
+view/set 的可選欄位，engine 支援哪些就接受哪些： (LLM, this is MuPDF specific?)
+
+| 欄位        | 類型   | 說明                   |
+|-------------+--------+------------------------|
+| =page=      | int    | 頁碼（0-based）        |
+| =offset-y=  | float  | 垂直捲動位置（文件座標）|
+| =offset-x=  | float  | 水平捲動位置           |
+| =zoom=      | float  | 縮放倍率               |
+| =dark-mode= | bool   | 深色模式               |
+| =rotation=  | int    | 旋轉角度（0/90/180/270）|
+
+*** 5.3 buffer/ ── buffer 內容操作
+
+engine 依能力實作，不支援的指令回傳 ={"ok":false,"error":"not supported"}=。
+
+#+begin_src json
+// 開啟內容，建立 buffer
+{"id":"r20", "cmd":"buffer/open",
+             "engine":"mupdf", "path":"/tmp/paper.pdf"}
+→ {"id":"r20", "ok":true,
+   "data":{"buffer-id":"b1", "page-count":42,
+           "title":"Paper Title", "supports":["toc","text","links","render"]}}
+
+// 關閉 buffer
+{"id":"r21", "cmd":"buffer/close", "buffer-id":"b1"}
+→ {"id":"r21", "ok":true}
+
+// 目錄 / 結構
+{"id":"r30", "cmd":"buffer/toc", "buffer-id":"b1"}
+→ {"id":"r30", "ok":true,
+   "data":[{"title":"Chapter 1", "page":0,
+            "children":[{"title":"1.1","page":2,"children":[]}]}]}
+
+// 頁面文字（含每字邊界框，供 Lisp 做搜尋）
+{"id":"r31", "cmd":"buffer/text", "buffer-id":"b1", "page":5}
+→ {"id":"r31", "ok":true,
+   "data":{"words":[{"text":"hello","rect":[x0,y0,x1,y1]}, ...]}}
+
+// 頁面連結
+{"id":"r32", "cmd":"buffer/links", "buffer-id":"b1", "page":5}
+→ {"id":"r32", "ok":true,
+   "data":[{"type":"internal","dest-page":12,"rect":[x0,y0,x1,y1]},
+           {"type":"uri","uri":"https://...","rect":[x0,y0,x1,y1]}]}
+
+// 整頁渲染 → PNG base64（截圖、送 LLM 用）
+{"id":"r40", "cmd":"buffer/render",
+             "buffer-id":"b1", "page":5, "dpi":150}
+→ {"id":"r40", "ok":true, "data":{"png":"iVBORw0K..."}}
+
+// 矩形截圖 → PNG base64
+{"id":"r41", "cmd":"buffer/render-region",
+             "buffer-id":"b1", "page":5,
+             "rect":[x0,y0,x1,y1], "dpi":150}
+→ {"id":"r41", "ok":true, "data":{"png":"..."}}
+
+// Metadata
+{"id":"r42", "cmd":"buffer/metadata", "buffer-id":"b1"}
+→ {"id":"r42", "ok":true,
+   "data":{"title":"...","author":"...","page-count":42,"format":"pdf"}}
+#+end_src
+
+** 六、事件參考
+
+Frontend 主動推送，無 =id= (LLM, we need to remember which frame it is from?)。SBCL 在背景執行緒持續接收。
+
+| 事件              | 推送時機             | 主要欄位                        |
+|-------------------+----------------------+---------------------------------|
+| =key=             | 鍵盤輸入             | =win-id, key, mods=             |
+| =mouse-click=     | 滑鼠點擊             | =win-id, page, x, y=（文件座標）|
+| =mouse-scroll=    | 滑鼠捲動             | =win-id, dx, dy=                |
+| =resize=          | 視窗大小改變         | =win-id, width, height=         |
+| =buffer-opened=   | buffer 成功開啟      | =buffer-id, page-count=         |
+| =buffer-closed=   | buffer 關閉          | =buffer-id=                     |
+| =error=           | 指令執行失敗         | =cmd, message=                  |
+important: mouse drag, third mouse tap? macos specific multi finger motions? input method (e.g. audio input? what are some other general types of inputs?).  send "still alive message"? drag and drop?! -- also, does the frontend (now Qt) have an error stack thing like lisp? if so how do we control that from lisp?
+
+事件格式範例：
+
+#+begin_src json
+{"event":"key",          "win-id":"w1", "key":"j",    "mods":[]}
+{"event":"key",          "win-id":"w1", "key":"s",    "mods":["ctrl"]}
+{"event":"mouse-click",  "win-id":"w1", "page":4, "x":0.3, "y":0.7}
+{"event":"resize",       "win-id":"w1", "width":1200, "height":900}
+{"event":"buffer-opened","buffer-id":"b1", "page-count":42}
+{"event":"error",        "cmd":"buffer/open", "message":"file not found"}
+#+end_src
+
+滑鼠座標以 **文件座標系**回報（x, y 為頁面內的比例，0.0–1.0），
+避免 Lisp 做像素座標換算。
+
+** 七、Engine Interface Spec
+
+任何人都可以為 Limn 寫 engine。以下是合法 Limn engine 的介面規格。
+
+*** 7.1 MUST 實作
+
+engine 必須能正確處理這些指令，否則不算合法的 Limn engine：
+
+#+begin_src
+buffer/open    接受 path 或 url，回傳 buffer-id 與基本 metadata
+buffer/close   釋放資源
+view/set       更新視埠（至少支援 page、zoom、offset-y） -- LLM, do you mean update engine's status..?
+view/get       回傳目前視埠狀態 -- LLM, do you mean engine's status? 
+view/overlays  在視埠上繪製指定矩形（搜尋高亮、書籤用） -- LLM, this is MuPDF specific?
+#+end_src
+
+*** 7.2 SHOULD 實作（有能力才回傳，否則回 "not supported"）
+
+#+begin_src
+buffer/text         回傳頁面文字與邊界框
+buffer/toc          回傳結構/目錄樹
+buffer/links        回傳頁面連結
+buffer/render       整頁 PNG 渲染
+buffer/render-region 矩形 PNG 渲染
+buffer/metadata     回傳 title、author 等
+#+end_src
+
+*** 7.3 能力宣告
+
+engine 必須在 =buffer/open= 的回應中包含 =supports= 欄位，
+列出它支援的 SHOULD 指令：
+
+#+begin_src json
+{"id":"r1", "cmd":"buffer/open", "engine":"mupdf", "path":"..."}
+→ {
+    "ok": true,
+    "data": {
+      "buffer-id":  "b1",
+      "page-count": 42,
+      "format":     "pdf",
+      "supports":   ["buffer/text","buffer/toc","buffer/links",
+                     "buffer/render","buffer/render-region","buffer/metadata"]
+    }
+  }
+#+end_src
+
+Lisp 端在開啟 buffer 後，從 =supports= 欄位知道能做什麼。
+
+*** 7.4 MUST 推送的事件
+
+#+begin_src
+buffer-opened   buffer 成功載入、可以接受指令時
+error           任何內部錯誤
+#+end_src
+
+*** 7.5 Engine 命名慣例
+
+engine 名稱用小寫字母加連字號：=mupdf=、=web=、=plain-text=、=sgf=。
+在 =bridge/capabilities= 回應中列出所有已載入的 engine。 -- LLM, remind that we have CL's "package".
+
+** 八、實作路線圖
+
+LLM, test-driven. We have spec, then write tests, then write codes that pass tests.
+
+*** v0.2 查詢層（讓 SBCL 不再是瞎的）
+- 實作 =buffer/text=、=buffer/toc=、=buffer/links=、=view/get=
+- SBCL 寫 =limn-bridge.lisp=，能送指令、收回應
+
+*** v0.3 鍵盤事件穿透（核心里程碑）
+- 實作 =key= 事件推送
+- SBCL 寫 =limn-keys.lisp=，鍵盤綁定完全在 Lisp 定義
+- 這是讓 Limn 真正「活」起來的一步
+
+*** v0.4 疊加層
+- 實作 =view/overlays=
+- Lisp 端實作搜尋高亮、書籤標記——不加任何新 C 指令
+
+*** v0.5 Buffer 管理 + Window 分割
+- 實作 =bridge/win-split=、=bridge/win-close=
+- SBCL 寫 =limn-buffer.lisp=、=limn-window.lisp=
+
+*** v0.6 Undo Tree + Hooks
+- SBCL 寫 =limn-undo.lisp=、=limn-hooks.lisp=
+- 純 Lisp，無需修改 C
+
+*** v1.0 完整 Lisp 控制層
+- Key macro、session、registers——全部 Lisp
+- Bridge 在 v0.4 之後幾乎不再動
+- 開始加第二個 engine（=web= 或 =text=）
