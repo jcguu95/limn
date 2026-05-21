@@ -10,6 +10,12 @@ sioyek/zlib/
 sioyek/android/
 sioyek/windows_runtime/
 
+# Sioyek's own VCS dotfiles (reference submodules we don't have)
+sioyek/.gitattributes
+sioyek/.gitignore
+sioyek/.gitmodules
+sioyek/tutorial.pdf
+
 # Qt-generated and build artifacts
 sioyek/*.o
 sioyek/pdf_viewer/*.o

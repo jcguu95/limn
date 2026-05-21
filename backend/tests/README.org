@@ -1,0 +1,69 @@
+* Limn Test Suite
+
+A complete test suite for the Limn spec, written in Common Lisp.
+
+Tests are split into two categories:
+
+** Integration tests (=suites/=)
+
+These tests connect to a running Limn process via Unix socket and
+exercise the bridge protocol. They require Limn to be running with
+=--headless --socket /tmp/limn-test=.
+
+| Suite              | Covers                                              |
+|--------------------+-----------------------------------------------------|
+| =smoke.lisp=       | Basic sanity: can connect, fixture exists           |
+| =protocol.lisp=    | Wire protocol: ids, response shape, errors          |
+| =bridge.lisp=      | =bridge/= namespace: windows, frames, engine-load   |
+| =view.lisp=        | =view/set= and =view/get= (universal viewport ops)  |
+| =overlays.lisp=    | =view/overlays= (rect/line/text drawing primitives) |
+| =buffer.lisp=      | =buffer/= namespace: content extraction & rendering |
+| =events.lisp=      | Frontend → Backend pushed events                    |
+| =engine-spec.lisp= | Engine Interface Spec compliance                    |
+| =mupdf-engine.lisp=| mupdf-specific behaviors (dark-mode, rotation, PDF) |
+| =integration.lisp= | Multi-step flows (search+highlight, portal, undo)   |
+| =stress.lisp=      | Many requests, large payloads, malformed input      |
+
+** Unit tests (=unit/=)
+
+Pure Lisp tests that do NOT need a running Limn. They test the backend
+modules in =backend/=, specifying their API contract.
+
+| Suite                    | Covers                                       |
+|--------------------------+----------------------------------------------|
+| =bridge-client.lisp=     | =limn/bridge= — JSON encode/decode, requests |
+| =keymap.lisp=            | =limn/keys= — Emacs-like keymap              |
+| =undo.lisp=              | =limn/undo= — undo tree with branches        |
+| =hooks.lisp=             | =limn/hooks= — event hook registry           |
+| =buffer-registry.lisp=   | =limn/buffer= — Lisp-side buffer tracking    |
+| =search.lisp=            | =limn/search= — search logic (uses fake data)|
+
+** Running
+
+Integration tests (needs running Limn):
+
+#+begin_src bash
+./backend/tests/run-tests.sh
+#+end_src
+
+Unit tests (pure Lisp):
+
+#+begin_src bash
+sbcl --script backend/tests/unit/run-unit.lisp
+#+end_src
+
+** Environment variables
+
+| =LIMN_SOCKET=  | Socket path (default =/tmp/limn-test=)              |
+| =LIMN_FIXTURE= | PDF fixture (default =backend/tests/fixtures/test.pdf=) |
+| =LIMN_VERBOSE= | If set, log every wire message                      |
+
+** Fixtures
+
+Place a test PDF at =backend/tests/fixtures/test.pdf=. See the README in
+that directory for options.
+
+** Current status
+
+271 tests total (192 integration + 79 unit). All will fail until the
+matching implementation lands — by design (TDD).

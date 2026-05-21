@@ -142,6 +142,10 @@ limn/
 {"id": "r42", "ok": false, "error": "page out of range"}
 #+end_src
 
+*規則*：所有成功回應的 payload 一律放在 =data= 欄位下，即使只有一個欄位。
+即使不需要回傳資料，=data= 可省略（=={"id":"r1","ok":true}== 合法）。
+失敗回應的 =error= 是字串，描述具體原因。
+
 **** Event（Frontend → Backend，主動推送，無 id）
 
 #+begin_src json
@@ -159,7 +163,7 @@ limn/
 // 載入 engine，開啟 buffer
 {"id":"r1", "cmd":"bridge/engine-load",
             "win-id":"w1", "engine":"mupdf", "path":"/tmp/paper.pdf"}
-→ {"id":"r1", "ok":true, "buffer-id":"b1"}
+→ {"id":"r1", "ok":true, "data":{"buffer-id":"b1"}}
 
 // 查詢 frontend 能力
 {"id":"r2", "cmd":"bridge/capabilities"}
@@ -168,7 +172,7 @@ limn/
 
 // Window 管理
 {"id":"r3", "cmd":"bridge/win-split",  "win-id":"w1", "dir":"h"}
-→ {"id":"r3", "ok":true, "win-a":"w1", "win-b":"w2"}
+→ {"id":"r3", "ok":true, "data":{"win-a":"w1", "win-b":"w2"}}
 
 {"id":"r4", "cmd":"bridge/win-close",  "win-id":"w2"}
 {"id":"r5", "cmd":"bridge/win-focus",  "win-id":"w1"}
@@ -181,7 +185,7 @@ limn/
 // Floating window（懸浮子視窗，用於 portal view、side-by-side 參照等）
 {"id":"r7", "cmd":"bridge/win-float-create",
             "buffer-id":"b2", "x":100, "y":100, "width":400, "height":300}
-→ {"id":"r7", "ok":true, "win-id":"w3"}
+→ {"id":"r7", "ok":true, "data":{"win-id":"w3"}}
 
 {"id":"r8", "cmd":"bridge/win-float-move",   "win-id":"w3", "x":200, "y":150}
 {"id":"r9", "cmd":"bridge/win-float-resize", "win-id":"w3", "width":500, "height":350}
@@ -425,7 +429,99 @@ error           任何內部錯誤
 engine 名稱：小寫字母加連字號，如 =mupdf=、=web=、=plain-text=、=sgf=。
 對應的 Lisp 封裝使用 CL package，如 =limn/mupdf=、=limn/web=。
 
-** 八、實作路線圖
+** 八、測試協議（Testing Protocol）
+
+Frontend 在 =--test-mode= 旗標下啟用一組額外指令，命名空間為 =test/=。
+正式部署時不應啟用。這些指令的目的：讓自動化測試可以「假裝」輸入事件發生，
+不需要真的有滑鼠/鍵盤/觸控板。
+
+*** 8.1 啟用方式
+
+#+begin_src bash
+limn --headless --test-mode --socket /tmp/limn-test
+#+end_src
+
+=--test-mode= 開啟 =test/= 命名空間。未啟用時送 =test/*= 指令回傳
+={"ok":false, "error":"test mode disabled"}=。
+
+*** 8.2 輸入注入指令
+
+每個 inject 指令都是「觸發一次 Frontend 自己也會推送的 event」，
+方便 Backend 端的測試碼用同樣的 event handler 驗證行為。
+
+#+begin_src json
+// 注入按鍵
+{"cmd":"test/inject-key",
+ "frame-id":"f1", "key":"j", "mods":[]}
+→ {"ok":true}     // 同時 Frontend 推送 {"event":"key", ...}
+
+// 注入修飾鍵
+{"cmd":"test/inject-key",
+ "frame-id":"f1", "key":"s", "mods":["ctrl"]}
+
+// 注入滑鼠點擊（文件座標 0–1）
+{"cmd":"test/inject-mouse-click",
+ "frame-id":"f1", "win-id":"w1",
+ "page":0, "x":0.5, "y":0.5, "button":1}
+
+// 注入滑鼠拖曳
+{"cmd":"test/inject-mouse-drag",
+ "frame-id":"f1", "win-id":"w1",
+ "page":0, "x":0.3, "y":0.3, "dx":0.05, "dy":0.05, "button":1}
+
+// 注入捲動（滾輪 / trackpad 兩指）
+{"cmd":"test/inject-scroll",
+ "frame-id":"f1", "win-id":"w1", "dx":0, "dy":120}
+
+// 注入手勢
+{"cmd":"test/inject-gesture",
+ "frame-id":"f1", "win-id":"w1",
+ "type":"pinch", "scale":1.2}
+
+{"cmd":"test/inject-gesture",
+ "frame-id":"f1", "win-id":"w1",
+ "type":"swipe", "dx":-1, "dy":0}
+
+// 注入拖放
+{"cmd":"test/inject-drag-drop",
+ "frame-id":"f1", "win-id":"w1",
+ "paths":["/tmp/a.pdf"]}
+
+// 注入 IME 確認
+{"cmd":"test/inject-ime-commit",
+ "frame-id":"f1", "text":"你好"}
+
+// 注入語音/AI 音訊輸入
+{"cmd":"test/inject-audio-input",
+ "frame-id":"f1", "text":"scroll down"}
+
+// 注入視窗 resize
+{"cmd":"test/inject-resize",
+ "frame-id":"f1", "win-id":"w1", "width":1200, "height":900}
+#+end_src
+
+*** 8.3 設計原則
+
+- 每個 inject 指令對應一種 event，型別與正常 event 完全相同
+- Frontend 收到 inject 後，內部觸發跟「真正使用者操作」一樣的 event 路徑
+- 測試碼透過 inject 觸發，再透過正常 event 監聽，閉迴路驗證
+- =--test-mode= 也應該關閉所有非確定性行為（heartbeat 改為手動觸發、
+  動畫關閉、async render 等同步化），讓測試可重現
+
+*** 8.4 額外的測試輔助指令
+
+#+begin_src json
+// 強制送出一個 heartbeat（測試 heartbeat 處理）
+{"cmd":"test/emit-heartbeat"} → {"ok":true}
+
+// 取得內部狀態快照（除錯用）
+{"cmd":"test/snapshot"} → {"ok":true, "data":{...}}
+
+// 強制 GC / 釋放快取
+{"cmd":"test/flush-caches"} → {"ok":true}
+#+end_src
+
+** 九、實作路線圖
 
 開發方式：**先寫規格（本文件），再寫測試，再寫程式碼。**
 每個 v 版本的 tests 應在實作前完成。
