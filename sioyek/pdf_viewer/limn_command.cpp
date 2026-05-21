@@ -4,6 +4,7 @@
 #include "limn_buffer_registry.h"
 #include "limn_engine_mupdf.h"
 #include "limn_options.h"
+#include "limn_window_registry.h"
 #include "main_widget.h"
 #include "document.h"
 #include "document_view.h"
@@ -16,30 +17,11 @@
 
 namespace {
 
-// Per-window engine state we track ourselves (sioyek's DocumentView /
-// PdfViewOpenGLWidget don't expose getters for these). For Phase 2/3 we
-// have a single window "w1"; later this becomes per-window state.
-struct EngineState {
-    bool dark_mode = false;
-    int  rotation  = 0;        // 0/90/180/270
-    int  page      = 0;        // last-set page; tracked because in headless
-                                // mode sioyek's page-from-offset can lag.
-    int  overlay_count = 0;    // last view/overlays size, for test/snapshot
-};
-
 static double safe_double(float v) {
     if (std::isnan(v) || std::isinf(v)) return 0.0;
     return static_cast<double>(v);
 }
 
-static EngineState g_state_w1;   // single-window placeholder
-
-QString DEFAULT_WIN_ID = QStringLiteral("w1");
-
-// Convert std::wstring (sioyek) ↔ QString
-QString w_to_q(const std::wstring& w) {
-    return QString::fromStdWString(w);
-}
 std::wstring q_to_w(const QString& q) {
     return q.toStdWString();
 }
@@ -48,12 +30,14 @@ std::wstring q_to_w(const QString& q) {
 
 LimnCommand::LimnCommand(LimnBridge*         bridge,
                          LimnBufferRegistry* registry,
+                         LimnWindowRegistry* windows,
                          MainWidget*         main_widget,
                          const LimnOptions&  options,
                          QObject*            parent)
     : QObject(parent),
       bridge(bridge),
       registry(registry),
+      windows(windows),
       main_widget(main_widget),
       test_mode(options.test_mode) {}
 
@@ -69,9 +53,15 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     }
 
     // bridge/*
-    if (cmd == "bridge/capabilities") { cmd_bridge_capabilities(id, msg); return; }
-    if (cmd == "bridge/engine-load")  { cmd_bridge_engine_load (id, msg); return; }
-    if (cmd == "bridge/win-list")     { cmd_bridge_win_list    (id, msg); return; }
+    if (cmd == "bridge/capabilities")     { cmd_bridge_capabilities    (id, msg); return; }
+    if (cmd == "bridge/engine-load")      { cmd_bridge_engine_load     (id, msg); return; }
+    if (cmd == "bridge/win-list")         { cmd_bridge_win_list        (id, msg); return; }
+    if (cmd == "bridge/win-split")        { cmd_bridge_win_split       (id, msg); return; }
+    if (cmd == "bridge/win-close")        { cmd_bridge_win_close       (id, msg); return; }
+    if (cmd == "bridge/win-focus")        { cmd_bridge_win_focus       (id, msg); return; }
+    if (cmd == "bridge/win-float-create") { cmd_bridge_win_float_create(id, msg); return; }
+    if (cmd == "bridge/win-float-move")   { cmd_bridge_win_float_move  (id, msg); return; }
+    if (cmd == "bridge/win-float-resize") { cmd_bridge_win_float_resize(id, msg); return; }
 
     // view/*
     if (cmd == "view/set")      { cmd_view_set     (id, msg); return; }
@@ -135,7 +125,8 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
         bridge->send_fail(id, "missing required field: win-id, engine, and path are required");
         return;
     }
-    if (win_id != DEFAULT_WIN_ID) {
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
@@ -148,7 +139,6 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     if (!ok) {
         const QString err = QString("failed to open: %1").arg(path);
         bridge->send_fail(id, err);
-        // Per spec 7.4: engine MUST push an `error` event on failure.
         QJsonObject ev;
         ev.insert("cmd",     QStringLiteral("bridge/engine-load"));
         ev.insert("message", err);
@@ -163,11 +153,16 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     }
 
     const QString buffer_id = registry->register_buffer(doc);
-    w1_buffer_id = buffer_id;        // remember which id is "live" in w1
 
-    // Reset our per-window engine-state tracking — fresh doc means page 0,
-    // no rotation, no dark-mode override.
-    g_state_w1 = EngineState{};
+    // Reset per-window state for this window.
+    win->buffer_id     = buffer_id;
+    win->page          = 0;
+    win->zoom          = 1.0f;
+    win->offset_x      = 0.0f;
+    win->offset_y      = 0.0f;
+    win->dark_mode     = false;
+    win->rotation      = 0;
+    win->overlay_count = 0;
     main_widget->opengl_widget()->set_dark_mode(false);
 
     QJsonObject data;
@@ -180,51 +175,162 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
 // ─── bridge/win-list ──────────────────────────────────────────────────
 
 void LimnCommand::cmd_bridge_win_list(const QString& id, const QJsonObject&) {
-    QJsonArray data;
-    QJsonObject w1;
-    w1.insert("win-id", DEFAULT_WIN_ID);
-    w1.insert("engine", "mupdf");
-    w1.insert("type",   "tiled");
-    if (!w1_buffer_id.isEmpty()) {
-        w1.insert("buffer-id", w1_buffer_id);
+    bridge->send_ok_array(id, windows->to_json());
+}
+
+// ─── bridge/win-split ──────────────────────────────────────────────────
+
+void LimnCommand::cmd_bridge_win_split(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    const QString dir    = msg.value("dir").toString();
+    if (!windows->has(win_id)) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
     }
-    data.append(w1);
-    bridge->send_ok_array(id, data);
+    if (dir != "h" && dir != "v") {
+        bridge->send_fail(id, QString("invalid 'dir' (expected 'h' or 'v'): %1").arg(dir));
+        return;
+    }
+    const QString new_id = windows->allocate_id();
+    windows->add_tiled(new_id);
+    QJsonObject data;
+    data.insert("win-a", win_id);
+    data.insert("win-b", new_id);
+    bridge->send_ok(id, data);
+}
+
+// ─── bridge/win-close ──────────────────────────────────────────────────
+
+void LimnCommand::cmd_bridge_win_close(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* w = windows->get(win_id);
+    if (!w) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    // Refuse to close the last tiled window — otherwise Limn would have
+    // nowhere to display content.
+    if (w->type == "tiled" && windows->tiled_count() <= 1) {
+        bridge->send_fail(id, "cannot close the last tiled window");
+        return;
+    }
+    windows->remove(win_id);
+    bridge->send_ok(id);
+}
+
+// ─── bridge/win-focus ──────────────────────────────────────────────────
+
+void LimnCommand::cmd_bridge_win_focus(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    if (!windows->has(win_id)) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    windows->set_focused(win_id);
+    bridge->send_ok(id);
+}
+
+// ─── bridge/win-float-create ───────────────────────────────────────────
+
+void LimnCommand::cmd_bridge_win_float_create(const QString& id, const QJsonObject& msg) {
+    const QString buffer_id = msg.value("buffer-id").toString();
+    if (!buffer_id.isEmpty() && !registry->lookup(buffer_id)) {
+        bridge->send_fail(id, QString("unknown buffer-id: %1").arg(buffer_id));
+        return;
+    }
+    const int x = msg.value("x").toInt(50);
+    const int y = msg.value("y").toInt(50);
+    const int w = msg.value("width").toInt(400);
+    const int h = msg.value("height").toInt(300);
+
+    const QString new_id = windows->allocate_id();
+    LimnWindow* fw = windows->add_float(new_id, x, y, w, h);
+    fw->buffer_id = buffer_id;
+
+    QJsonObject data;
+    data.insert("win-id", new_id);
+    bridge->send_ok(id, data);
+}
+
+// ─── bridge/win-float-move ─────────────────────────────────────────────
+
+void LimnCommand::cmd_bridge_win_float_move(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* w = windows->get(win_id);
+    if (!w) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    if (w->type != "float") {
+        bridge->send_fail(id, QString("win-id %1 is not a floating window").arg(win_id));
+        return;
+    }
+    if (msg.contains("x")) w->x = msg.value("x").toInt();
+    if (msg.contains("y")) w->y = msg.value("y").toInt();
+    bridge->send_ok(id);
+}
+
+// ─── bridge/win-float-resize ───────────────────────────────────────────
+
+void LimnCommand::cmd_bridge_win_float_resize(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* w = windows->get(win_id);
+    if (!w) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    if (w->type != "float") {
+        bridge->send_fail(id, QString("win-id %1 is not a floating window").arg(win_id));
+        return;
+    }
+    if (msg.contains("width"))  w->width  = msg.value("width").toInt();
+    if (msg.contains("height")) w->height = msg.value("height").toInt();
+    bridge->send_ok(id);
 }
 
 // ─── view/set ─────────────────────────────────────────────────────────
 
 void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
     const QString win_id = msg.value("win-id").toString();
-    if (win_id != DEFAULT_WIN_ID) {
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
 
+    // The active document_view is the Qt widget; it currently holds whichever
+    // doc was last loaded. For multi-window state independence, we track each
+    // window's page/zoom in LimnWindow, and only forward to the live widget
+    // if this window is the focused/active one.
     DocumentView* dv = main_widget->document_view();
     Document* doc = dv->get_document();
-    if (!doc) {
+    const QString live_buf  = registry->find_id(doc);
+    const bool    is_active = (!win->buffer_id.isEmpty()
+                                && win->buffer_id == live_buf);
+
+    // For validation we need num_pages — use the window's buffer doc if set.
+    Document* val_doc = (!win->buffer_id.isEmpty())
+                         ? registry->lookup(win->buffer_id)
+                         : doc;
+    if (!val_doc) {
         bridge->send_fail(id, "no buffer loaded in this window");
         return;
     }
 
-    // Validate first (atomicity: don't partially apply)
     if (msg.contains("page")) {
         const QJsonValue v = msg.value("page");
         if (!v.isDouble()) { bridge->send_fail(id, "'page' must be integer"); return; }
         const int p = v.toInt();
         if (p < 0)              { bridge->send_fail(id, "page must be >= 0"); return; }
-        if (p >= doc->num_pages()) {
+        if (p >= val_doc->num_pages()) {
             bridge->send_fail(id, QString("page %1 out of range (num-pages=%2)")
-                                    .arg(p).arg(doc->num_pages()));
+                                    .arg(p).arg(val_doc->num_pages()));
             return;
         }
     }
     if (msg.contains("zoom")) {
-        const QJsonValue v = msg.value("zoom");
-        if (!v.isDouble()) { bridge->send_fail(id, "'zoom' must be numeric"); return; }
-        const double z = v.toDouble();
-        if (z <= 0) { bridge->send_fail(id, "zoom must be > 0"); return; }
+        if (!msg.value("zoom").isDouble()) { bridge->send_fail(id, "'zoom' must be numeric"); return; }
+        if (msg.value("zoom").toDouble() <= 0) { bridge->send_fail(id, "zoom must be > 0"); return; }
     }
     if (msg.contains("offset-y") && !msg.value("offset-y").isDouble()) {
         bridge->send_fail(id, "'offset-y' must be numeric"); return;
@@ -232,54 +338,48 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
     if (msg.contains("offset-x") && !msg.value("offset-x").isDouble()) {
         bridge->send_fail(id, "'offset-x' must be numeric"); return;
     }
-    // engine-params validation
     if (msg.contains("engine-params") && !msg.value("engine-params").isObject()) {
         bridge->send_fail(id, "'engine-params' must be an object"); return;
     }
 
-    // Apply (all validated above)
+    // Apply to per-window state.
     if (msg.contains("zoom")) {
-        dv->set_zoom_level(static_cast<float>(msg.value("zoom").toDouble()),
-                           true, true);
+        win->zoom = static_cast<float>(msg.value("zoom").toDouble());
+        if (is_active) dv->set_zoom_level(win->zoom, true, true);
     }
     if (msg.contains("page")) {
-        const int p = msg.value("page").toInt();
-        dv->goto_page(p);
-        g_state_w1.page = p;
+        win->page = msg.value("page").toInt();
+        if (is_active) dv->goto_page(win->page);
     }
     if (msg.contains("offset-y")) {
-        const float oy = static_cast<float>(msg.value("offset-y").toDouble());
-        const float ox = dv->get_offset_x();
-        dv->set_offsets(ox, oy, true);
+        win->offset_y = static_cast<float>(msg.value("offset-y").toDouble());
+        if (is_active) dv->set_offsets(win->offset_x, win->offset_y, true);
     }
     if (msg.contains("offset-x")) {
-        const float ox = static_cast<float>(msg.value("offset-x").toDouble());
-        const float oy = dv->get_offset_y();
-        dv->set_offsets(ox, oy, true);
+        win->offset_x = static_cast<float>(msg.value("offset-x").toDouble());
+        if (is_active) dv->set_offsets(win->offset_x, win->offset_y, true);
     }
     if (msg.contains("engine-params")) {
         const QJsonObject ep = msg.value("engine-params").toObject();
         if (ep.contains("dark-mode")) {
             const bool dm = ep.value("dark-mode").toBool();
-            g_state_w1.dark_mode = dm;
-            main_widget->opengl_widget()->set_dark_mode(dm);
+            win->dark_mode = dm;
+            if (is_active) main_widget->opengl_widget()->set_dark_mode(dm);
         }
         if (ep.contains("rotation")) {
             const int target = ep.value("rotation").toInt();
-            // Only accept multiples of 90 in [0, 360).
             if (target % 90 == 0 && target >= 0 && target < 360) {
-                int diff = (target - g_state_w1.rotation + 360) % 360;
-                const int steps = diff / 90;
-                for (int i = 0; i < steps; ++i) dv->rotate();
-                g_state_w1.rotation = target;
+                if (is_active) {
+                    int diff = (target - win->rotation + 360) % 360;
+                    const int steps = diff / 90;
+                    for (int i = 0; i < steps; ++i) dv->rotate();
+                }
+                win->rotation = target;
             }
-            // Non-multiples are silently ignored (we accepted the response
-            // already; per spec it's "rejected or snapped").
         }
-        // Unknown engine-params keys are silently ignored.
     }
 
-    main_widget->opengl_widget()->update();
+    if (is_active) main_widget->opengl_widget()->update();
     bridge->send_ok(id);
 }
 
@@ -370,7 +470,8 @@ QString validate_layer(const QJsonObject& layer) {
 
 void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
     const QString win_id = msg.value("win-id").toString();
-    if (win_id != DEFAULT_WIN_ID) {
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
@@ -390,7 +491,7 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
         if (!err.isEmpty()) { bridge->send_fail(id, err); return; }
     }
 
-    g_state_w1.overlay_count = layers.size();
+    win->overlay_count = layers.size();
     main_widget->opengl_widget()->update();
     bridge->send_ok(id);
 }
@@ -399,11 +500,11 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
 
 void LimnCommand::cmd_view_get(const QString& id, const QJsonObject& msg) {
     const QString win_id = msg.value("win-id").toString();
-    if (win_id != DEFAULT_WIN_ID) {
+    if (!windows->has(win_id)) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
-    bridge->send_ok(id, collect_view_state());
+    bridge->send_ok(id, collect_view_state(win_id));
 }
 
 // ─── buffer/open ──────────────────────────────────────────────────────
@@ -439,10 +540,20 @@ void LimnCommand::cmd_buffer_open(const QString& id, const QJsonObject& msg) {
         return;
     }
     const QString buffer_id = registry->register_buffer(doc);
-    w1_buffer_id = buffer_id;        // buffer/open shows in main view in v0.2
 
-    // Reset per-window state since main view now shows this buffer.
-    g_state_w1 = EngineState{};
+    // buffer/open attaches to the focused/default tiled window for now.
+    LimnWindow* fw = windows->get(windows->focused_id());
+    if (!fw) fw = windows->get("w1");
+    if (fw) {
+        fw->buffer_id     = buffer_id;
+        fw->page          = 0;
+        fw->zoom          = 1.0f;
+        fw->offset_x      = 0.0f;
+        fw->offset_y      = 0.0f;
+        fw->dark_mode     = false;
+        fw->rotation      = 0;
+        fw->overlay_count = 0;
+    }
     main_widget->opengl_widget()->set_dark_mode(false);
 
     bridge->send_ok(id, build_open_data(buffer_id, doc));
@@ -462,7 +573,11 @@ void LimnCommand::cmd_buffer_close(const QString& id, const QJsonObject& msg) {
         return;
     }
     registry->unregister(buffer_id);
-    if (w1_buffer_id == buffer_id) w1_buffer_id.clear();
+    // Detach from any window that pointed at this buffer.
+    for (const QString& wid : windows->all_ids()) {
+        LimnWindow* w = windows->get(wid);
+        if (w && w->buffer_id == buffer_id) w->buffer_id.clear();
+    }
     bridge->send_ok(id);
     emit_buffer_closed(buffer_id);
 }
@@ -478,25 +593,28 @@ QJsonObject LimnCommand::build_open_data(const QString& buffer_id, Document* doc
     return data;
 }
 
-QJsonObject LimnCommand::collect_view_state() {
+QJsonObject LimnCommand::collect_view_state(const QString& win_id) {
     QJsonObject data;
-    DocumentView* dv = main_widget->document_view();
-    Document* doc = dv->get_document();
+    LimnWindow* win = windows->get(win_id);
+    if (!win) return data;
 
+    Document* doc = (!win->buffer_id.isEmpty())
+                     ? registry->lookup(win->buffer_id) : nullptr;
+
+    if (!win->buffer_id.isEmpty()) data.insert("buffer-id", win->buffer_id);
     if (doc) {
-        if (!w1_buffer_id.isEmpty()) data.insert("buffer-id", w1_buffer_id);
         data.insert("num-pages",  doc->num_pages());
         data.insert("page-count", doc->num_pages());
     }
 
-    data.insert("page",     g_state_w1.page);
-    data.insert("zoom",     safe_double(dv->get_zoom_level()));
-    data.insert("offset-y", safe_double(dv->get_offset_y()));
-    data.insert("offset-x", safe_double(dv->get_offset_x()));
+    data.insert("page",     win->page);
+    data.insert("zoom",     safe_double(win->zoom));
+    data.insert("offset-y", safe_double(win->offset_y));
+    data.insert("offset-x", safe_double(win->offset_x));
 
     QJsonObject ep;
-    ep.insert("dark-mode", g_state_w1.dark_mode);
-    ep.insert("rotation",  g_state_w1.rotation);
+    ep.insert("dark-mode", win->dark_mode);
+    ep.insert("rotation",  win->rotation);
     data.insert("engine-params", ep);
     return data;
 }
@@ -701,7 +819,12 @@ void LimnCommand::cmd_test_emit_heartbeat(const QString& id, const QJsonObject&)
 void LimnCommand::cmd_test_snapshot(const QString& id, const QJsonObject&) {
     QJsonObject data;
     data.insert("buffer-count",  registry->count());
-    data.insert("overlay-count", g_state_w1.overlay_count);
+    // Sum overlay-count across all windows.
+    int total_overlays = 0;
+    for (const QString& wid : windows->all_ids()) {
+        if (LimnWindow* w = windows->get(wid)) total_overlays += w->overlay_count;
+    }
+    data.insert("overlay-count", total_overlays);
     data.insert("test-mode",     test_mode);
     bridge->send_ok(id, data);
 }

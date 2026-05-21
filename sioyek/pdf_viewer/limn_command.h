@@ -17,6 +17,7 @@
 
 class LimnBridge;
 class LimnBufferRegistry;
+class LimnWindowRegistry;
 class MainWidget;
 class Document;
 struct LimnOptions;
@@ -26,6 +27,7 @@ class LimnCommand : public QObject {
 public:
     LimnCommand(LimnBridge*         bridge,
                 LimnBufferRegistry* registry,
+                LimnWindowRegistry* windows,
                 MainWidget*         main_widget,
                 const LimnOptions&  options,
                 QObject*            parent = nullptr);
@@ -35,9 +37,15 @@ public:
 
 private:
     // ─── bridge/* ─────────────────────────────────────────────────────
-    void cmd_bridge_capabilities(const QString& id, const QJsonObject& msg);
-    void cmd_bridge_engine_load (const QString& id, const QJsonObject& msg);
-    void cmd_bridge_win_list    (const QString& id, const QJsonObject& msg);
+    void cmd_bridge_capabilities    (const QString& id, const QJsonObject& msg);
+    void cmd_bridge_engine_load     (const QString& id, const QJsonObject& msg);
+    void cmd_bridge_win_list        (const QString& id, const QJsonObject& msg);
+    void cmd_bridge_win_split       (const QString& id, const QJsonObject& msg);
+    void cmd_bridge_win_close       (const QString& id, const QJsonObject& msg);
+    void cmd_bridge_win_focus       (const QString& id, const QJsonObject& msg);
+    void cmd_bridge_win_float_create(const QString& id, const QJsonObject& msg);
+    void cmd_bridge_win_float_move  (const QString& id, const QJsonObject& msg);
+    void cmd_bridge_win_float_resize(const QString& id, const QJsonObject& msg);
 
     // ─── view/* ───────────────────────────────────────────────────────
     void cmd_view_set     (const QString& id, const QJsonObject& msg);
@@ -70,14 +78,13 @@ private:
 
     // Helpers
     QJsonObject build_open_data(const QString& buffer_id, Document* doc);
-    QJsonObject collect_view_state();
+    QJsonObject collect_view_state(const QString& win_id);
     void        emit_buffer_opened(const QString& buffer_id, Document* doc);
     void        emit_buffer_closed(const QString& buffer_id);
 
     LimnBridge*         bridge;
     LimnBufferRegistry* registry;
+    LimnWindowRegistry* windows;
     MainWidget*         main_widget;
     bool                test_mode;
-    // Per-window state. For Phase 2/3 there's a single window "w1".
-    QString             w1_buffer_id;
 };

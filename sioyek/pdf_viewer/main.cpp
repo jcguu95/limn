@@ -10,6 +10,7 @@
 #include "limn_buffer_registry.h"
 #include "limn_command.h"
 #include "limn_input.h"
+#include "limn_window_registry.h"
 
 fz_context* mupdf_context = nullptr;
 bool should_quit = false;
@@ -58,9 +59,10 @@ int main(int argc, char* argv[]) {
     if (!opts.headless) window.show();
 
     // ── Limn protocol layer ────────────────────────────────────────────
-    LimnBufferRegistry registry;
-    LimnBridge         bridge(opts.effective_socket_path());
-    LimnCommand        command(&bridge, &registry, &window, opts);
+    LimnBufferRegistry  registry;
+    LimnWindowRegistry  win_registry;
+    LimnBridge          bridge(opts.effective_socket_path());
+    LimnCommand         command(&bridge, &registry, &win_registry, &window, opts);
     bridge.set_command_handler(&command);
 
     // ── Input event capture (forwards Qt events as Limn events) ────────
