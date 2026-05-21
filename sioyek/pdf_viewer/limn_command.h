@@ -44,8 +44,14 @@ private:
     void cmd_view_get(const QString& id, const QJsonObject& msg);
 
     // ─── buffer/* ─────────────────────────────────────────────────────
-    void cmd_buffer_open (const QString& id, const QJsonObject& msg);
-    void cmd_buffer_close(const QString& id, const QJsonObject& msg);
+    void cmd_buffer_open         (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_close        (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_toc          (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_text         (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_links        (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_metadata     (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_render       (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_render_region(const QString& id, const QJsonObject& msg);
 
     // Helpers
     QJsonObject build_open_data(const QString& buffer_id, Document* doc);

@@ -2,6 +2,7 @@
 
 #include "limn_bridge.h"
 #include "limn_buffer_registry.h"
+#include "limn_engine_mupdf.h"
 #include "limn_options.h"
 #include "main_widget.h"
 #include "document.h"
@@ -11,6 +12,7 @@
 #include <QJsonArray>
 #include <QJsonValue>
 #include <cmath>
+#include <stdexcept>
 
 namespace {
 
@@ -75,8 +77,14 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "view/get") { cmd_view_get(id, msg); return; }
 
     // buffer/*
-    if (cmd == "buffer/open")  { cmd_buffer_open (id, msg); return; }
-    if (cmd == "buffer/close") { cmd_buffer_close(id, msg); return; }
+    if (cmd == "buffer/open")          { cmd_buffer_open         (id, msg); return; }
+    if (cmd == "buffer/close")         { cmd_buffer_close        (id, msg); return; }
+    if (cmd == "buffer/toc")           { cmd_buffer_toc          (id, msg); return; }
+    if (cmd == "buffer/text")          { cmd_buffer_text         (id, msg); return; }
+    if (cmd == "buffer/links")         { cmd_buffer_links        (id, msg); return; }
+    if (cmd == "buffer/metadata")      { cmd_buffer_metadata     (id, msg); return; }
+    if (cmd == "buffer/render")        { cmd_buffer_render       (id, msg); return; }
+    if (cmd == "buffer/render-region") { cmd_buffer_render_region(id, msg); return; }
 
     bridge->send_fail(id, QString("unknown command: %1").arg(cmd));
 }
@@ -114,7 +122,13 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
 
     const bool ok = main_widget->open_document(q_to_w(path));
     if (!ok) {
-        bridge->send_fail(id, QString("failed to open: %1").arg(path));
+        const QString err = QString("failed to open: %1").arg(path);
+        bridge->send_fail(id, err);
+        // Per spec 7.4: engine MUST push an `error` event on failure.
+        QJsonObject ev;
+        ev.insert("cmd",     QStringLiteral("bridge/engine-load"));
+        ev.insert("message", err);
+        bridge->push_event("error", ev);
         return;
     }
 
@@ -275,7 +289,12 @@ void LimnCommand::cmd_buffer_open(const QString& id, const QJsonObject& msg) {
     // window as a side effect (single-window limitation). Will be fixed in
     // phase 10 when multiple windows exist.
     if (!main_widget->open_document(q_to_w(path))) {
-        bridge->send_fail(id, QString("failed to open: %1").arg(path));
+        const QString err = QString("failed to open: %1").arg(path);
+        bridge->send_fail(id, err);
+        QJsonObject ev;
+        ev.insert("cmd",     QStringLiteral("buffer/open"));
+        ev.insert("message", err);
+        bridge->push_event("error", ev);
         return;
     }
     Document* doc = main_widget->document_view()->get_document();
@@ -319,9 +338,7 @@ QJsonObject LimnCommand::build_open_data(const QString& buffer_id, Document* doc
     data.insert("buffer-id",  buffer_id);
     data.insert("page-count", doc ? doc->num_pages() : 0);
     data.insert("format",     "pdf");
-    // supports list — empty for phase 2/3 (commands not yet implemented).
-    // Will be populated as buffer/text, buffer/toc, etc. land in phase 4+.
-    data.insert("supports",   QJsonArray{});
+    data.insert("supports",   LimnMupdf::supports());
     return data;
 }
 
@@ -361,4 +378,131 @@ void LimnCommand::emit_buffer_closed(const QString& buffer_id) {
     ev.insert("frame-id",  "f1");
     ev.insert("buffer-id", buffer_id);
     bridge->push_event("buffer-closed", ev);
+}
+
+// ─── Phase 4/5 dispatch helpers ───────────────────────────────────────
+//
+// Each buffer/* (content) command resolves the buffer-id, validates page,
+// and delegates the actual MuPDF work to LimnMupdf::*. We catch
+// std::runtime_error from those helpers and turn it into a fail-response.
+
+namespace {
+
+// Returns nullptr and sends a fail-response if the buffer-id is missing or
+// unknown. Otherwise returns the Document*.
+Document* resolve_buffer(LimnBridge*         bridge,
+                         LimnBufferRegistry* registry,
+                         const QString&      id,
+                         const QJsonObject&  msg) {
+    const QString buffer_id = msg.value("buffer-id").toString();
+    if (buffer_id.isEmpty()) {
+        bridge->send_fail(id, "missing 'buffer-id'");
+        return nullptr;
+    }
+    Document* doc = registry->lookup(buffer_id);
+    if (!doc) {
+        bridge->send_fail(id, QString("unknown buffer-id: %1").arg(buffer_id));
+        return nullptr;
+    }
+    return doc;
+}
+
+}  // anonymous namespace
+
+void LimnCommand::cmd_buffer_toc(const QString& id, const QJsonObject& msg) {
+    Document* doc = resolve_buffer(bridge, registry, id, msg);
+    if (!doc) return;
+    try {
+        QJsonArray arr = LimnMupdf::extract_toc(doc);
+        QJsonObject resp;  // we want data as ARRAY at top level under "data"
+        bridge->send_ok_array(id, arr);
+    } catch (const std::exception& e) {
+        bridge->send_fail(id, QString::fromUtf8(e.what()));
+    }
+}
+
+void LimnCommand::cmd_buffer_text(const QString& id, const QJsonObject& msg) {
+    Document* doc = resolve_buffer(bridge, registry, id, msg);
+    if (!doc) return;
+    if (!msg.contains("page") || !msg.value("page").isDouble()) {
+        bridge->send_fail(id, "missing or invalid 'page'");
+        return;
+    }
+    const int page = msg.value("page").toInt();
+    try {
+        bridge->send_ok(id, LimnMupdf::extract_page_text(doc, page));
+    } catch (const std::exception& e) {
+        bridge->send_fail(id, QString::fromUtf8(e.what()));
+    }
+}
+
+void LimnCommand::cmd_buffer_links(const QString& id, const QJsonObject& msg) {
+    Document* doc = resolve_buffer(bridge, registry, id, msg);
+    if (!doc) return;
+    if (!msg.contains("page") || !msg.value("page").isDouble()) {
+        bridge->send_fail(id, "missing or invalid 'page'");
+        return;
+    }
+    const int page = msg.value("page").toInt();
+    try {
+        bridge->send_ok_array(id, LimnMupdf::extract_page_links(doc, page));
+    } catch (const std::exception& e) {
+        bridge->send_fail(id, QString::fromUtf8(e.what()));
+    }
+}
+
+void LimnCommand::cmd_buffer_metadata(const QString& id, const QJsonObject& msg) {
+    Document* doc = resolve_buffer(bridge, registry, id, msg);
+    if (!doc) return;
+    try {
+        bridge->send_ok(id, LimnMupdf::extract_metadata(doc));
+    } catch (const std::exception& e) {
+        bridge->send_fail(id, QString::fromUtf8(e.what()));
+    }
+}
+
+void LimnCommand::cmd_buffer_render(const QString& id, const QJsonObject& msg) {
+    Document* doc = resolve_buffer(bridge, registry, id, msg);
+    if (!doc) return;
+    if (!msg.contains("page") || !msg.value("page").isDouble()) {
+        bridge->send_fail(id, "missing or invalid 'page'");
+        return;
+    }
+    const int  page = msg.value("page").toInt();
+    const int  dpi  = msg.contains("dpi") ? msg.value("dpi").toInt() : 72;
+    try {
+        bridge->send_ok(id, LimnMupdf::render_page_to_png(doc, page, dpi));
+    } catch (const std::exception& e) {
+        bridge->send_fail(id, QString::fromUtf8(e.what()));
+    }
+}
+
+void LimnCommand::cmd_buffer_render_region(const QString& id, const QJsonObject& msg) {
+    Document* doc = resolve_buffer(bridge, registry, id, msg);
+    if (!doc) return;
+    if (!msg.contains("page") || !msg.value("page").isDouble()) {
+        bridge->send_fail(id, "missing or invalid 'page'");
+        return;
+    }
+    if (!msg.contains("rect") || !msg.value("rect").isArray()) {
+        bridge->send_fail(id, "missing or invalid 'rect' (expected 4-number array)");
+        return;
+    }
+    const QJsonArray rect = msg.value("rect").toArray();
+    if (rect.size() != 4) {
+        bridge->send_fail(id, "'rect' must have exactly 4 numbers");
+        return;
+    }
+    const int page = msg.value("page").toInt();
+    const int dpi  = msg.contains("dpi") ? msg.value("dpi").toInt() : 72;
+    const double x0 = rect[0].toDouble();
+    const double y0 = rect[1].toDouble();
+    const double x1 = rect[2].toDouble();
+    const double y1 = rect[3].toDouble();
+    try {
+        bridge->send_ok(id, LimnMupdf::render_region_to_png(doc, page,
+                                                              x0, y0, x1, y1, dpi));
+    } catch (const std::exception& e) {
+        bridge->send_fail(id, QString::fromUtf8(e.what()));
+    }
 }
