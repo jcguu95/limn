@@ -17,6 +17,7 @@
 #include <QLocalSocket>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QTimer>
 
 class LimnCommand;
 
@@ -37,6 +38,9 @@ public:
     // Push an event. Adds the "event" field; payload provides the rest.
     void push_event(const QString& event_type, const QJsonObject& payload);
 
+    // Force a heartbeat event right now (used by test/emit-heartbeat).
+    void emit_heartbeat();
+
     // True if a client is currently connected.
     bool has_client() const;
 
@@ -54,4 +58,5 @@ private:
     QLocalSocket*  client          = nullptr;
     QByteArray     read_buffer;            // accumulates partial lines
     LimnCommand*   command_handler = nullptr;
+    QTimer*        heartbeat_timer = nullptr;
 };

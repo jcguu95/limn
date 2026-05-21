@@ -9,6 +9,7 @@
 #include "limn_bridge.h"
 #include "limn_buffer_registry.h"
 #include "limn_command.h"
+#include "limn_input.h"
 
 fz_context* mupdf_context = nullptr;
 bool should_quit = false;
@@ -61,6 +62,10 @@ int main(int argc, char* argv[]) {
     LimnBridge         bridge(opts.effective_socket_path());
     LimnCommand        command(&bridge, &registry, &window, opts);
     bridge.set_command_handler(&command);
+
+    // ── Input event capture (forwards Qt events as Limn events) ────────
+    LimnInputFilter input_filter(&bridge);
+    app.installEventFilter(&input_filter);
 
     if (!opts.initial_path.isEmpty()) {
         window.open_document(opts.initial_path.toStdWString());

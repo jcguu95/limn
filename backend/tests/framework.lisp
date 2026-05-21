@@ -403,11 +403,12 @@
    not dropped."
   (let ((deadline (+ (get-internal-real-time)
                      (* timeout internal-time-units-per-second))))
-    ;; First check queued events
+    ;; First check queued events (oldest-first: queue is built via push,
+    ;; so find-if naturally returns newest; reverse to honor FIFO order).
     (let ((found (find-if (lambda (e) (or (null type) (string= (getf e :|event|) type)))
-                          *event-queue*)))
+                          (reverse *event-queue*))))
       (when found
-        (setf *event-queue* (remove found *event-queue*))
+        (setf *event-queue* (remove found *event-queue* :count 1))
         (return-from read-event found)))
     ;; Otherwise read from socket until one arrives or timeout
     (loop

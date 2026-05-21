@@ -29,9 +29,9 @@ fi
 # 2. clean up any stale socket
 rm -f "$SOCKET"
 
-# 3. start Limn headless in background
+# 3. start Limn headless + test-mode in background
 echo "→ Starting Limn (socket=$SOCKET)"
-"$LIMN_BIN" --headless --socket "$SOCKET" > "$LOG" 2>&1 &
+"$LIMN_BIN" --headless --test-mode --socket "$SOCKET" > "$LOG" 2>&1 &
 LIMN_PID=$!
 
 cleanup() {

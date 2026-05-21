@@ -46,6 +46,7 @@ HEADERS += \
     pdf_viewer/limn_bridge.h \
     pdf_viewer/limn_command.h \
     pdf_viewer/limn_engine_mupdf.h \
+    pdf_viewer/limn_input.h \
     fzf/fzf.h
 
 SOURCES += \
@@ -68,6 +69,7 @@ SOURCES += \
     pdf_viewer/limn_bridge.cpp \
     pdf_viewer/limn_command.cpp \
     pdf_viewer/limn_engine_mupdf.cpp \
+    pdf_viewer/limn_input.cpp \
     fzf/fzf.c
 
 mac {

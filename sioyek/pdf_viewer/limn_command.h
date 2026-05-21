@@ -40,8 +40,9 @@ private:
     void cmd_bridge_win_list    (const QString& id, const QJsonObject& msg);
 
     // ─── view/* ───────────────────────────────────────────────────────
-    void cmd_view_set(const QString& id, const QJsonObject& msg);
-    void cmd_view_get(const QString& id, const QJsonObject& msg);
+    void cmd_view_set     (const QString& id, const QJsonObject& msg);
+    void cmd_view_get     (const QString& id, const QJsonObject& msg);
+    void cmd_view_overlays(const QString& id, const QJsonObject& msg);
 
     // ─── buffer/* ─────────────────────────────────────────────────────
     void cmd_buffer_open         (const QString& id, const QJsonObject& msg);
@@ -52,6 +53,20 @@ private:
     void cmd_buffer_metadata     (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render       (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render_region(const QString& id, const QJsonObject& msg);
+
+    // ─── test/* (enabled only when --test-mode is set) ────────────────
+    void cmd_test_inject_key        (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_mouse_click(const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_mouse_drag (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_scroll     (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_gesture    (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_drag_drop  (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_ime_commit (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_audio_input(const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_resize     (const QString& id, const QJsonObject& msg);
+    void cmd_test_emit_heartbeat    (const QString& id, const QJsonObject& msg);
+    void cmd_test_snapshot          (const QString& id, const QJsonObject& msg);
+    void cmd_test_flush_caches      (const QString& id, const QJsonObject& msg);
 
     // Helpers
     QJsonObject build_open_data(const QString& buffer_id, Document* doc);

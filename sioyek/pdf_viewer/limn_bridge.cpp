@@ -1,6 +1,7 @@
 #include "limn_bridge.h"
 #include "limn_command.h"
 
+#include <QDateTime>
 #include <QJsonDocument>
 
 LimnBridge::LimnBridge(const QString& socket_path, QObject* parent)
@@ -16,6 +17,13 @@ LimnBridge::LimnBridge(const QString& socket_path, QObject* parent)
     }
     connect(server, &QLocalServer::newConnection,
             this,   &LimnBridge::on_new_connection);
+
+    // Periodic heartbeat — every 3 seconds. Backend may use this to detect
+    // a healthy bridge connection.
+    heartbeat_timer = new QTimer(this);
+    heartbeat_timer->setInterval(3000);
+    connect(heartbeat_timer, &QTimer::timeout, this, &LimnBridge::emit_heartbeat);
+    heartbeat_timer->start();
 
     fprintf(stderr, "[limn-bridge] listening on %s\n", qPrintable(socket_path));
 }
@@ -142,4 +150,11 @@ void LimnBridge::push_event(const QString& event_type, const QJsonObject& payloa
     QJsonObject o = payload;
     o.insert("event", event_type);
     write_object(o);
+}
+
+void LimnBridge::emit_heartbeat() {
+    QJsonObject ev;
+    ev.insert("timestamp",
+              static_cast<qint64>(QDateTime::currentMSecsSinceEpoch()));
+    push_event("heartbeat", ev);
 }
