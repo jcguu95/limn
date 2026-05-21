@@ -1,4 +1,4 @@
-* Limn 規格書 v0.2
+* Limn 規格書 v0.3
 
 Limn 是一個由 Common Lisp（SBCL）控制的顯示框架。
 Backend（Lisp）透過 Bridge（Unix socket + JSON）驅動 Frontend（Qt）。
@@ -13,7 +13,7 @@ GTK、terminal（sixel）、headless 等均可實作同一套 Bridge 協議。
 | frame   | OS 層級的獨立視窗                              | Emacs frame      |
 | window  | frame 內的視埠，顯示一個 buffer                | Emacs window     |
 | buffer  | Limn 的基本內容單元，持有內容與其狀態          | Emacs buffer     |
-| engine  | 處理特定類型 buffer 的 C++ 機器                | Emacs major mode（不完全相同：engine 是 C++，major mode 是 Lisp）| -- LLM it doesn't have to be C++
+| engine  | 處理特定類型 buffer 的機器                     | Emacs major mode（不完全相同：engine 實作語言不限，major mode 是 Lisp）|
 
 關係：
 
@@ -25,19 +25,19 @@ buffer ──由────▶  engine 管理（一種 engine 可管理多個 b
 
 ** 二、架構
 
-Limn 是一個 GUI REPL：
+Limn 是一個 async event-driven loop，概念上類似 REPL，但不是嚴格的
+sequential READ→EVAL→PRINT→LOOP。事件異步抵達、可以排隊；
+多個 EVAL/PRINT 可以並行進行，靠 request id 對應結果。
 
 #+begin_src
-READ  → Frontend（Qt）捕捉原始輸入事件
-          → Bridge 推送 event 給 SBCL
+READ  → events 從 Frontend 異步抵達，可排隊
+          → Bridge 推送給 SBCL
 
-EVAL  → Lisp dispatch table 找到對應動作
-          → Bridge 送出指令給 Frontend
+EVAL  → Lisp handler 處理事件
+          → Bridge 送出一個或多個指令（可與其他 event 的 EVAL 並行）
 
-PRINT → Frontend 執行，更新畫面
-          → Bridge 回傳結果給 SBCL
-
-LOOP  → 等待下一個事件 - LLM: Hmm.. maybe not quite, because the keys may all be read before eval and print take place?
+PRINT → Frontend 執行指令，更新畫面
+          → Bridge 以相同 id 回傳結果給 SBCL
 #+end_src
 
 整體結構：
