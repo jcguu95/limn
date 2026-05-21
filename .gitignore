@@ -23,6 +23,7 @@ sioyek/moc_*.cpp
 sioyek/moc_predefs.h
 sioyek/qrc_resources.cpp
 sioyek/sioyek.app/
+sioyek/limn.app/
 
 # Sioyek top-level non-source files
 sioyek/bak/

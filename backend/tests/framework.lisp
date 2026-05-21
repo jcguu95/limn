@@ -293,10 +293,11 @@
 ;;; Connection
 ;;; ─────────────────────────────────────────────────────────────────────────
 
-(defvar *socket*       nil)
-(defvar *stream*       nil)
-(defvar *counter*      0)
-(defvar *event-queue*  '())   ; events arriving while we wait for responses
+(defvar *socket*         nil)
+(defvar *stream*         nil)
+(defvar *counter*        0)
+(defvar *event-queue*    '())   ; events arriving while we wait for responses
+(defvar *response-queue* '())   ; responses for ids we haven't waited on yet
 
 (defun connected? ()
   (and *socket* *stream*))
@@ -324,7 +325,7 @@
                                        :input t :output t
                                        :buffering :line
                                        :external-format :utf-8))
-    (setf *event-queue* '())
+    (setf *event-queue* '() *response-queue* '())
     (format t "[framework] connected: ~a~%" path)
     t))
 
@@ -359,7 +360,16 @@
 
 (defun read-response (id &key (timeout 10))
   "Read messages until we get a response with the given id.
-   Spontaneous events get queued."
+   Spontaneous events get queued in *event-queue*. Responses for OTHER
+   ids get queued in *response-queue* (read-response will find them later)."
+  ;; First: check if we already have this response queued.
+  (let ((cached (find id *response-queue*
+                      :key (lambda (r) (getf r :|id|))
+                      :test #'equal)))
+    (when cached
+      (setf *response-queue* (remove cached *response-queue*))
+      (return-from read-response cached)))
+  ;; Otherwise: read from socket until we find it or time out.
   (let ((deadline (+ (get-internal-real-time)
                      (* timeout internal-time-units-per-second))))
     (loop
@@ -380,9 +390,10 @@
                (return parsed))
               ((getf parsed :|event|)
                (push parsed *event-queue*))
-              (t
-               ;; response for a different id — discard (test shouldn't rely)
-               nil))))))))
+              ((getf parsed :|id|)
+               ;; response for a different id — queue it for later
+               (push parsed *response-queue*))
+              (t nil))))))))
 
 (defun read-event (&key (timeout 3) type)
   "Wait for the next event (optionally of a specific type).

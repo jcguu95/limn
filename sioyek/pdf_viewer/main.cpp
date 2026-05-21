@@ -4,6 +4,10 @@
 #include <mupdf/fitz.h>
 
 #include "main_widget.h"
+#include "limn_options.h"
+#include "limn_bridge.h"
+#include "limn_buffer_registry.h"
+#include "limn_command.h"
 
 fz_context* mupdf_context = nullptr;
 bool should_quit = false;
@@ -13,7 +17,6 @@ static std::mutex mupdf_mutexes[FZ_LOCK_MAX];
 static void lock_mutex(void* user, int lock) {
     static_cast<std::mutex*>(user)[lock].lock();
 }
-
 static void unlock_mutex(void* user, int lock) {
     static_cast<std::mutex*>(user)[lock].unlock();
 }
@@ -25,7 +28,9 @@ int main(int argc, char* argv[]) {
     QSurfaceFormat::setDefaultFormat(format);
 
     QApplication app(argc, argv);
-    app.setApplicationName("sioyek-core");
+    app.setApplicationName("limn");
+
+    const LimnOptions opts = LimnOptions::parse(app.arguments());
 
     fz_locks_context locks;
     locks.user    = mupdf_mutexes;
@@ -34,21 +39,25 @@ int main(int argc, char* argv[]) {
 
     mupdf_context = fz_new_context(nullptr, &locks, FZ_STORE_DEFAULT);
     if (!mupdf_context) {
-        fprintf(stderr, "[core] could not create mupdf context\n");
+        fprintf(stderr, "[limn] could not create mupdf context\n");
         return 1;
     }
-    // silence MuPDF's internal warnings (e.g. duplicate fz_icc_link in store)
     fz_set_warning_callback(mupdf_context, nullptr, nullptr);
     fz_set_error_callback(mupdf_context, nullptr, nullptr);
     fz_register_document_handlers(mupdf_context);
 
     MainWidget window;
-    window.setWindowTitle("sioyek-core");
-    window.show();
+    window.setWindowTitle("limn");
+    if (!opts.headless) window.show();
 
-    if (argc >= 2) {
-        std::wstring path = QString::fromUtf8(argv[1]).toStdWString();
-        window.open_document(path);
+    // ── Limn protocol layer ────────────────────────────────────────────
+    LimnBufferRegistry registry;
+    LimnBridge         bridge(opts.effective_socket_path());
+    LimnCommand        command(&bridge, &registry, &window, opts);
+    bridge.set_command_handler(&command);
+
+    if (!opts.initial_path.isEmpty()) {
+        window.open_document(opts.initial_path.toStdWString());
     }
 
     int ret = app.exec();

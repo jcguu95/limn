@@ -1,6 +1,6 @@
 TEMPLATE = app
-TARGET = sioyek
-VERSION = 2.0.0
+TARGET = limn
+VERSION = 0.3.0
 
 INCLUDEPATH += ./pdf_viewer \
                mupdf/include \
@@ -41,6 +41,10 @@ HEADERS += \
     pdf_viewer/utf8/checked.h \
     pdf_viewer/utf8/core.h \
     pdf_viewer/utf8/unchecked.h \
+    pdf_viewer/limn_options.h \
+    pdf_viewer/limn_buffer_registry.h \
+    pdf_viewer/limn_bridge.h \
+    pdf_viewer/limn_command.h \
     fzf/fzf.h
 
 SOURCES += \
@@ -58,6 +62,10 @@ SOURCES += \
     pdf_viewer/sqlite3.c \
     pdf_viewer/path.cpp \
     pdf_viewer/utils.cpp \
+    pdf_viewer/limn_options.cpp \
+    pdf_viewer/limn_buffer_registry.cpp \
+    pdf_viewer/limn_bridge.cpp \
+    pdf_viewer/limn_command.cpp \
     fzf/fzf.c
 
 mac {
