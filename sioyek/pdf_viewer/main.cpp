@@ -1,3 +1,4 @@
+#include <csignal>
 #include <mutex>
 #include <qapplication.h>
 #include <qsurfaceformat.h>
@@ -22,6 +23,11 @@ static void unlock_mutex(void* user, int lock) {
 }
 
 int main(int argc, char* argv[]) {
+    // Ignore SIGPIPE — Qt's QLocalSocket on macOS doesn't always set
+    // SO_NOSIGPIPE, so writing to a peer-closed socket would otherwise
+    // terminate the process.
+    std::signal(SIGPIPE, SIG_IGN);
+
     QSurfaceFormat format;
     format.setVersion(3, 2);
     format.setProfile(QSurfaceFormat::CoreProfile);

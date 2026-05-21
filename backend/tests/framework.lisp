@@ -397,7 +397,10 @@
 
 (defun read-event (&key (timeout 3) type)
   "Wait for the next event (optionally of a specific type).
-   Returns NIL on timeout."
+   Returns NIL on timeout.
+   IMPORTANT: while waiting we may read responses (id-bearing messages)
+   destined for read-response — those get queued in *response-queue*,
+   not dropped."
   (let ((deadline (+ (get-internal-real-time)
                      (* timeout internal-time-units-per-second))))
     ;; First check queued events
@@ -410,14 +413,22 @@
     (loop
       (when (> (get-internal-real-time) deadline)
         (return-from read-event nil))
-      ;; Use listen to check if data is available
       (when (listen *stream*)
         (let ((line (read-line *stream* nil nil)))
           (when line
             (let ((parsed (ignore-errors (decode-json line))))
-              (when (and parsed (getf parsed :|event|)
-                         (or (null type) (string= (getf parsed :|event|) type)))
-                (return parsed))))))
+              (when parsed
+                (cond
+                  ;; event of desired type → return
+                  ((and (getf parsed :|event|)
+                        (or (null type) (string= (getf parsed :|event|) type)))
+                   (return parsed))
+                  ;; event of different type → queue for later
+                  ((getf parsed :|event|)
+                   (push parsed *event-queue*))
+                  ;; response with id → queue for read-response
+                  ((getf parsed :|id|)
+                   (push parsed *response-queue*))))))))
       (sleep 0.05))))
 
 (defun drain-events ()

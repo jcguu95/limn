@@ -35,6 +35,9 @@ bool LimnBridge::has_client() const {
 void LimnBridge::on_new_connection() {
     if (client) {
         // For now we accept only one client (spec: 同一條連線).
+        // Detach our slots first so the old client's delayed disconnected
+        // signal can't accidentally clear the NEW client we're about to set.
+        QObject::disconnect(client, nullptr, this, nullptr);
         client->disconnectFromServer();
         client->deleteLater();
         client = nullptr;
@@ -48,11 +51,15 @@ void LimnBridge::on_new_connection() {
 }
 
 void LimnBridge::on_disconnected() {
-    if (client) {
+    // Only act if the sender matches our current client. With lifecycle
+    // disconnect/reconnect churn, a stale 'disconnected' signal from an
+    // old QLocalSocket may arrive after we've already adopted a new one.
+    QObject* who = sender();
+    if (who && who == client) {
         client->deleteLater();
         client = nullptr;
+        read_buffer.clear();
     }
-    read_buffer.clear();
     fprintf(stderr, "[limn-bridge] client disconnected\n");
 }
 
