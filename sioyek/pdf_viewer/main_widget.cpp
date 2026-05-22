@@ -3,6 +3,7 @@
 #include <qboxlayout.h>
 #include <qstandardpaths.h>
 #include <qdir.h>
+#include <QSplitter>
 
 #include "document.h"
 #include "document_view.h"
@@ -46,19 +47,52 @@ MainWidget::MainWidget(QWidget* parent) : QMainWindow(parent) {
     connect(pdf_renderer_, &PdfRenderer::render_advance,
             opengl_widget_, QOverload<>::of(&QWidget::update));
 
-    // ── Limn chrome (SPEC §1.2 / §5.4–§5.6) ──────────────────────────
-    // Stack the OpenGL viewport on top of a fixed-height chrome bar that
-    // hosts modeline + echo / minibuffer rows. The two share the same
-    // QMainWindow centralWidget via a vertical layout.
-    chrome_bar_ = new LimnChromeBar(this);
+    // ── Limn chrome (SPEC §1.2 / §5.4–§5.6) + viewport splitter ─────
+    // Central widget layout:
+    //   [ viewport_splitter (Horizontal, holds N OpenGL viewports) ] ← stretches
+    //   [ chrome_bar         (fixed height)                          ]
+    //
+    // bridge/win-split adds a new viewport widget into viewport_splitter_
+    // (SPEC v0.5 §5.1 — real visible split). v0.8 shares DocumentView
+    // across panes — independent per-window state is v0.9 work.
+    chrome_bar_       = new LimnChromeBar(this);
+    viewport_splitter_= new QSplitter(Qt::Horizontal, this);
+    viewport_splitter_->setChildrenCollapsible(false);
+    viewport_splitter_->addWidget(opengl_widget_);
+
     auto* central  = new QWidget(this);
     auto* layout   = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    layout->addWidget(opengl_widget_, 1);   // stretch=1, gets all remaining height
-    layout->addWidget(chrome_bar_, 0);      // takes its natural fixed height
+    layout->addWidget(viewport_splitter_, 1);  // stretch=1, gets all height
+    layout->addWidget(chrome_bar_, 0);
     setCentralWidget(central);
     resize(1200, 900);
+}
+
+PdfViewOpenGLWidget* MainWidget::add_split_pane(const QString& orientation) {
+    if (!viewport_splitter_) return nullptr;
+    // Adjust splitter orientation. v0.8 keeps it simple: each call sets
+    // the orientation; mixing h/v needs nested splitters and is left for
+    // v0.9 (along with proper per-window state).
+    viewport_splitter_->setOrientation(
+        orientation == "v" ? Qt::Vertical : Qt::Horizontal);
+
+    // Build a new PdfViewOpenGLWidget sharing DocumentView + PdfRenderer.
+    // Shared DV means scrolling one pane affects the other — caveat
+    // documented; v0.9 will give each pane its own DocumentView.
+    // Reuses the module-static stub_config defined at file top — same
+    // ConfigManager that the original opengl_widget_ uses.
+    auto* pane = new PdfViewOpenGLWidget(document_view_, pdf_renderer_,
+                                          &stub_config, false, this);
+    connect(pdf_renderer_, &PdfRenderer::render_advance,
+            pane, QOverload<>::of(&QWidget::update));
+    viewport_splitter_->addWidget(pane);
+    return pane;
+}
+
+int MainWidget::viewport_count() const {
+    return viewport_splitter_ ? viewport_splitter_->count() : 0;
 }
 
 MainWidget::~MainWidget() {

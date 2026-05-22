@@ -288,6 +288,10 @@ void LimnCommand::cmd_bridge_win_split(const QString& id, const QJsonObject& msg
     }
     const QString new_id = windows->allocate_id();
     windows->add_tiled(new_id);
+    // SPEC v0.5 §5.1 — produce real visible split in GUI mode.
+    if (main_widget) {
+        main_widget->add_split_pane(dir);
+    }
     QJsonObject data;
     data.insert("win-a", win_id);
     data.insert("win-b", new_id);
