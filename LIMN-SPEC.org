@@ -1,4 +1,4 @@
-* Limn 規格書 v0.3
+* Limn 規格書 v0.4
 
 Limn 是一個由 Common Lisp（SBCL）控制的顯示框架。
 Backend（Lisp）透過 Bridge（Unix socket + JSON）驅動 Frontend（Qt）。
@@ -8,12 +8,13 @@ GTK、terminal（sixel）、headless 等均可實作同一套 Bridge 協議。
 
 ** 一、核心概念
 
-| 概念    | 定義                                           | 類比             |
-|---------+------------------------------------------------+------------------|
-| frame   | OS 層級的獨立視窗                              | Emacs frame      |
-| window  | frame 內的視埠，顯示一個 buffer                | Emacs window     |
-| buffer  | Limn 的基本內容單元，持有內容與其狀態          | Emacs buffer     |
-| engine  | 處理特定類型 buffer 的機器                     | Emacs major mode（不完全相同：engine 實作語言不限，major mode 是 Lisp）|
+| 概念    | 定義                                           | 類比                  |
+|---------+------------------------------------------------+-----------------------|
+| frame   | OS 層級的獨立視窗                              | Emacs frame           |
+| window  | frame 內的視埠，顯示一個 buffer                | Emacs window          |
+| buffer  | Limn 的基本內容單元，持有內容與其狀態          | Emacs buffer          |
+| engine  | 處理特定類型 buffer 的後端機器                 | Emacs 沒有直接對應    |
+| mode    | buffer 的 keymap + hook + 行為集合（細節 §1.1） | Emacs major/minor mode |
 
 關係：
 
@@ -21,7 +22,44 @@ GTK、terminal（sixel）、headless 等均可實作同一套 Bridge 協議。
 frame  ──包含──▶  window（可分割為多個，含 floating window）
 window ──顯示──▶  buffer（多個 window 可顯示同一個 buffer）
 buffer ──由────▶  engine 管理（一種 engine 可管理多個 buffer）
+buffer ──套用──▶  mode（一個 major、零或多個 minor，決定使用者怎麼互動）
 #+end_src
+
+*** 1.1 模式（Mode）
+
+Mode 是「在這個 buffer 裡按某個鍵會怎樣」的命名 bundle：
+
+- 一個 keymap（可繼承 parent keymap）
+- enter / exit hooks
+- 可選的 buffer-local 變數
+- 用於 modeline 顯示的短名
+
+每個 buffer 有**恰好一個** major mode 與 **零個以上** minor modes。
+Keymap 查詢順序：minor modes（依啟用順序新到舊）→ major mode → global。
+
+**Mode 與 engine 不同**：engine 決定 buffer **裝什麼內容**（PDF？HTML？
+純文字？），mode 決定 buffer **使用者怎麼互動**。同一個 PDF buffer
+可以套 =pdf-mode= 或 =presentation-mode=，內容不變、互動規則換了。
+
+Mode 的定義跟切換邏輯都在 backend；frontend 只透過 =modeline/set= 等
+指令更新 chrome 顯示。Mode 系統的 Backend 端慣例見 §9.1。
+
+*** 1.2 Chrome primitives
+
+「Chrome」指 framework 本身的視覺零件，跟 buffer 內容區分。任何 Limn
+frontend 必須提供三個：
+
+- **Minibuffer**：universal input prompt。=M-x=、=/=、=C-x C-f=、=M-:=
+  等所有從使用者讀字串的場景共用同一個 widget。本身是一個 text-engine
+  buffer，有自己的 keymap（=minibuffer-mode=）。指令見 §5.4。
+- **Echo area**：minibuffer 閒置時的同一條畫面區域，印 message / error /
+  hint。同時累積成 =*Messages*= text-engine buffer。指令見 §5.5。
+- **Modeline**：每個 window 底部一條 status line，顯示目前 mode 名、
+  buffer 名、scroll 位置等。指令見 §5.6。
+
+三者底層都是 text-engine buffer——好處是同一套 =buffer/*= 指令、同一個
+渲染路徑、同一份 SPEC 對待，frontend 不必特別處理「框架內部」vs「使用者
+內容」的區別。Text engine 是 bundled engine 之一，見 §7.6。
 
 ** 二、架構
 
@@ -299,6 +337,73 @@ engine 依能力實作。=buffer/open= 回應中的 =supports= 欄位
    "data":{"title":"...","author":"...","page-count":42,"format":"pdf"}}
 #+end_src
 
+*** 5.4 minibuffer/ ── universal input prompt
+
+Minibuffer 是 framework 的單行輸入區（chrome primitive，見 §1.2）。所有
+從使用者讀字串的場景——=M-x=、=/=、=C-x C-f=、=M-:=——都共用同一個 widget。
+
+#+begin_src json
+// 打開 minibuffer 並設定 prompt
+{"id":"r60", "cmd":"minibuffer/open", "prompt":"/"}
+→ {"id":"r60", "ok":true}
+
+// 已開啟下更換 prompt
+{"id":"r61", "cmd":"minibuffer/set-prompt", "prompt":"Search: "}
+
+// 替換目前文字（completion / history 回填）
+{"id":"r62", "cmd":"minibuffer/set-text", "text":"hello world"}
+
+// 關閉（不論使用者送出 / 取消，backend 都應呼叫一次收尾）
+{"id":"r63", "cmd":"minibuffer/close"}
+
+// 查詢狀態
+{"id":"r64", "cmd":"minibuffer/get"}
+→ {"id":"r64", "ok":true,
+   "data":{"open":true, "prompt":"/", "text":"hello"}}
+#+end_src
+
+使用者在 minibuffer 中的按鍵會經 =minibuffer-input= / =minibuffer-submit=
+/ =minibuffer-cancel= 事件推回 backend（細節見 §六）。
+
+*** 5.5 message/ ── echo area + =*Messages*= buffer
+
+Echo area 是 minibuffer 閒置時的同一條畫面區域，印短訊息；=*Messages*=
+是累積所有 message 的 text-engine buffer。
+
+#+begin_src json
+// 印一行到 echo area（覆蓋上一條）；自動 append 到 *Messages*
+{"id":"r70", "cmd":"message/echo",
+            "text":"Saved /tmp/x.pdf"}
+
+// 只 append 到 *Messages*、不打擾 echo area（背景訊息）
+{"id":"r71", "cmd":"message/log",
+            "text":"Background search: 3 hits in page 5"}
+
+// 清空 echo area（不影響 *Messages* 歷史）
+{"id":"r72", "cmd":"message/clear"}
+#+end_src
+
+*** 5.6 modeline/ ── window status line
+
+每個 window 底部一條 status line。三段：left（buffer 資訊）、middle（mode
+名）、right（位置、百分比等）。
+
+#+begin_src json
+// 設定某 window 的 modeline（win-id 省略 = 全域樣板）
+{"id":"r80", "cmd":"modeline/set",
+            "win-id":"w1",
+            "left":  "PDF: paper.pdf",
+            "middle":"pdf-mode",
+            "right": "p5/42 (12%)"}
+
+// 查詢目前 modeline
+{"id":"r81", "cmd":"modeline/get", "win-id":"w1"}
+→ {"id":"r81", "ok":true,
+   "data":{"left":"...", "middle":"...", "right":"..."}}
+#+end_src
+
+v0.4：三段都是純文字。將來可能支援 face / 格式化欄位（如時間、icon）。
+
 ** 六、事件參考
 
 Frontend 主動推送，無 =id=。所有事件帶 =frame-id=（事件來源的 OS 視窗）。
@@ -374,6 +479,32 @@ Frontend 主動推送，無 =id=。所有事件帶 =frame-id=（事件來源的 
 {"event":"error", "cmd":"buffer/open", "message":"file not found"}
 #+end_src
 
+*** Minibuffer 事件
+
+Minibuffer 開啟時（=minibuffer/open= 之後），使用者輸入的處理規則：
+
+- **printable 字元** → frontend 內部把字元 append 到 minibuffer 文字，
+  推 =minibuffer-input= 事件帶當前完整文字；**不**推 =key= 事件。
+- **RET** → 推 =minibuffer-submit= 事件帶最終文字；**不**推 =key= 事件。
+- **ESC** → 推 =minibuffer-cancel= 事件；**不**推 =key= 事件。
+- **其他鍵**（modifier combos、function key、方向鍵）→ 推一般 =key=
+  事件。這樣 backend 仍能透過 minibuffer-mode keymap 或 global keymap
+  處理（例如 =C-g= 取消、=Up/Down= 歷史導覽）。
+
+#+begin_src json
+// 每打一個 printable 字元
+{"event":"minibuffer-input",
+ "frame-id":"f1", "text":"hel"}
+
+// RET 送出
+{"event":"minibuffer-submit",
+ "frame-id":"f1", "text":"hello"}
+
+// ESC 取消
+{"event":"minibuffer-cancel",
+ "frame-id":"f1"}
+#+end_src
+
 ** 七、Engine Interface Spec
 
 任何人都可以為 Limn 寫 engine。以下是合法 Limn engine 的介面規格。
@@ -386,6 +517,8 @@ buffer/close     釋放資源
 view/set         更新視埠（至少支援 page、zoom、offset-y）
 view/get         回傳目前視埠狀態（含 engine-params）
 view/overlays    在視埠上繪製疊加層（rect、line、text，支援 opacity）
+                 真實 GUI 模式下 *必須實際繪製* 到 widget；
+                 headless / test 模式可只追蹤 layer 數量供 test/snapshot 用
 #+end_src
 
 *** 7.2 SHOULD 實作
@@ -426,8 +559,24 @@ error           任何內部錯誤
 
 *** 7.5 Engine 命名慣例
 
-engine 名稱：小寫字母加連字號，如 =mupdf=、=web=、=plain-text=、=sgf=。
+engine 名稱：小寫字母加連字號，如 =mupdf=、=web=、=text=、=sgf=。
 對應的 Lisp 封裝使用 CL package，如 =limn/mupdf=、=limn/web=。
+
+*** 7.6 Bundled Engines（frontend 必須 bundle）
+
+任何 Limn frontend 至少 bundle 以下 engine，提供 chrome primitives 與
+PDF 基本能力：
+
+- **=text=**：純文字 buffer。最小實作即可（QPlainTextEdit-style）。
+  支援 =buffer/text=、=buffer/render=（可選），主要透過 =minibuffer/*=、
+  =message/*=、=modeline/*= 三個命名空間間接驅動。**所有 chrome
+  primitives**（minibuffer、echo area、modeline、=*Messages*=）都是
+  text-engine buffer——這個對稱讓 framework 不必特別處理「框架內部」
+  vs「使用者內容」的區別。
+
+- **=mupdf=**：PDF / EPUB 等基於頁的文件。實作完整 §7.1 + §7.2。
+
+=bridge/capabilities= 回應的 =engines= 欄位必須包含這兩個。
 
 ** 八、測試協議（Testing Protocol）
 
@@ -521,7 +670,92 @@ limn --headless --test-mode --socket /tmp/limn-test
 {"cmd":"test/flush-caches"} → {"ok":true}
 #+end_src
 
-** 九、實作路線圖
+** 九、Backend Conventions
+
+本節描述 Backend（SBCL）端的軟性慣例，**不屬於線協議**。線協議完整定義
+在 §四到 §七。這裡的東西讓不同的 Limn user code 看起來一致、互通；
+若換成別的 backend 語言（理論上可以）也該照樣實作這些慣例。
+
+*** 9.1 Mode 系統
+
+Mode 是 Backend 端的物件，包含：
+
+- 名稱（字串；慣例小寫加 =-mode= 後綴，例如 =pdf-mode=、=search-mode=）
+- type：=:major= 或 =:minor=
+- keymap（可指向 parent keymap，繼承綁定）
+- 可選 =:on-enter= / =:on-exit= hook
+- 可選 =:modeline-name=（modeline 顯示用，預設取 mode 名）
+
+每個 buffer 有：
+- 恰好一個 major mode
+- 一個有序的 minor mode list（由近期啟用到最早啟用）
+
+按鍵查詢順序：
+1. buffer 的 minor modes（依啟用順序由新到舊）
+2. buffer 的 major mode
+3. global keymap
+
+啟用 / 切換 mode 時 backend 應：
+1. 觸發舊 mode 的 =:on-exit= hook（若是替換 major mode）
+2. 啟動新 mode 的 keymap
+3. 觸發新 mode 的 =:on-enter= hook
+4. 呼叫 =modeline/set= 更新 modeline 顯示
+
+Mode 與 engine 不同：engine 決定 buffer **裝什麼內容**（PDF、HTML、純
+文字），mode 決定 buffer **使用者怎麼互動**。同一個 PDF buffer 可以套
+=pdf-mode= 或 =presentation-mode=，內容不變、互動規則換了。
+
+*** 9.2 Interactive 規範
+
+每個 command 應宣告它需要的輸入。Framework 自動從 minibuffer 拿輸入
+填進 command 的參數，command body 不直接碰 minibuffer：
+
+#+begin_src lisp
+(defcommand my-search
+  (:interactive "sSearch: "     ; s = 從 minibuffer 讀字串，prompt 為 "Search: "
+   :mode pdf-mode)              ; 限定在 pdf-mode 才生效
+  (lambda (query)
+    (search-and-jump query)))
+#+end_src
+
+Interactive spec 字元（沿用 Emacs）：
+
+| 字元 | 意義                                          |
+|------+-----------------------------------------------|
+| =s=  | 從 minibuffer 讀一行字串                      |
+| =f=  | 讀 file path（未來：minibuffer + completion） |
+| =p=  | 接收 prefix arg（如 =5g= 的 5）                |
+| =r=  | region（未來）                                |
+
+Command 可以無 interactive spec（不需要外部輸入時）。
+
+*** 9.3 Init file
+
+啟動時 backend 依序嘗試載入：
+
+1. 環境變數 =$LIMN_INIT= 指定的檔案
+2. =~/.limn/init.lisp=
+3. =~/.config/limn/init.lisp=（XDG）
+
+擇先存在者載入；都沒有則跳過、不視為錯誤。
+
+Init file 用來定義 mode、綁鍵、加 hook、自訂行為。對應 Emacs 的
+=~/.emacs= / =~/.emacs.d/init.el=。
+
+*** 9.4 Introspection
+
+Backend 必須提供下列查詢，讓使用者「即時問系統」：
+
+| 函式                              | 對應 Emacs |
+|-----------------------------------+------------|
+| =(describe-key spec)=             | =C-h k=    |
+| =(describe-command name)=         | =C-h f=    |
+| =(where-is-command name)=         | =C-h w=    |
+| =(list-modes &optional buffer)=   | =describe-mode= |
+
+這層讓 Limn 變得可學習——任何 key、任何 command 都能即時問它「你是什麼」。
+
+** 十、實作路線圖
 
 開發方式：**先寫規格（本文件），再寫測試，再寫程式碼。**
 每個 v 版本的 tests 應在實作前完成。
@@ -548,10 +782,22 @@ limn --headless --test-mode --socket /tmp/limn-test
 - SBCL 寫 =limn-undo.lisp=、=limn-hooks.lisp=、=limn-session.lisp=
 - 純 Lisp，無需修改 C
 
+*** v0.7 Mode + Chrome primitives（讓 Limn 真的成為「Qt 版 Emacs」的最後一塊）
+- Backend：mode 系統（major / minor、keymap stack、:on-enter / :on-exit hook）
+- Backend：=defcommand= + interactive 規範（=:interactive "sSearch: "= 等）
+- Backend：init file 自動載入（=~/.limn/init.lisp=）
+- Backend：introspection (=describe-key=、=where-is-command= 等)
+- Frontend：text engine（QPlainTextEdit-based 最小實作；服務所有 chrome）
+- Frontend：minibuffer / echo area / modeline 三個 widget
+- Frontend：=view/overlays= 真接到 paintGL（不再只記計數）
+
+做完之後，vim binding、=/= 搜尋、=M-x=、各種使用者自訂都變成「init.lisp
+裡 30–100 行 Lisp」——framework 端不再為了 feature 加 C 程式碼。
+
 *** v1.0 完整 Lisp 控制層
 - Key macro、registers——全部 Lisp
 - Bridge 在 v0.4 之後幾乎不再動
-- 加第二個 engine（=web= 或 =plain-text=）
+- 加第二個 engine（=web=、=image=、=audio= 等）
 
 *** 長期（◇）
 - Frame 管理（多個 OS 視窗）
