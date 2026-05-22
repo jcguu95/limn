@@ -212,6 +212,34 @@
 
 ;;; ── start / stop ───────────────────────────────────────────────────────
 
+(defun %bootstrap-runtime ()
+  "One-time runtime config: declare engine→mode defaults + init chrome
+   mode-buffers. Idempotent — safe to call on every START.
+
+   Defined before START so the compiler doesn't warn about a forward
+   reference when compiling START."
+  (let ((rt   (find-package :limn/runtime))
+        (mode (find-package :limn/mode)))
+    (unless (and rt mode) (return-from %bootstrap-runtime nil))
+    (let ((reg-default (find-symbol "REGISTER-ENGINE-DEFAULT-MODE" rt))
+          (init-chrome (find-symbol "INIT-CHROME-BUFFERS"          rt))
+          (define-mode (find-symbol "DEFINE-MODE"                  mode))
+          (fund-sym    (find-symbol "FUNDAMENTAL-MODE"             rt))
+          (mini-sym    (find-symbol "MINIBUFFER-MODE"              rt)))
+      ;; Define the bare-bones default modes if user init.lisp hasn't
+      ;; already. They start with empty keymaps; user code or future
+      ;; engine code adds bindings.
+      (when (and define-mode fund-sym)
+        (funcall define-mode fund-sym :type :major :modeline "Fund"))
+      (when (and define-mode mini-sym)
+        (funcall define-mode mini-sym :type :major :modeline "Mini"))
+      ;; mupdf is the only engine right now; bind it to fundamental-mode
+      ;; for now (pdf-mode is a v0.9 user-init concept — adding bindings
+      ;; rather than a built-in mode keeps the runtime engine-agnostic).
+      (when (and reg-default fund-sym)
+        (funcall reg-default "mupdf" fund-sym))
+      (when init-chrome (funcall init-chrome)))))
+
 (defun start (socket-path)
   "Open a connection to SOCKET-PATH and create a session."
   (when *session* (stop))
@@ -255,31 +283,6 @@
     ;; with mock clients can call STOP-PUMP-THREAD if they don't want it.
     (%call :limn/dispatch '#:start-pump-thread s)
     *session*))
-
-(defun %bootstrap-runtime ()
-  "One-time runtime config: declare engine→mode defaults + init chrome
-   mode-buffers. Idempotent — safe to call on every START."
-  (let ((rt   (find-package :limn/runtime))
-        (mode (find-package :limn/mode)))
-    (unless (and rt mode) (return-from %bootstrap-runtime nil))
-    (let ((reg-default (find-symbol "REGISTER-ENGINE-DEFAULT-MODE" rt))
-          (init-chrome (find-symbol "INIT-CHROME-BUFFERS"          rt))
-          (define-mode (find-symbol "DEFINE-MODE"                  mode))
-          (fund-sym    (find-symbol "FUNDAMENTAL-MODE"             rt))
-          (mini-sym    (find-symbol "MINIBUFFER-MODE"              rt)))
-      ;; Define the bare-bones default modes if user init.lisp hasn't
-      ;; already. They start with empty keymaps; user code or future
-      ;; engine code adds bindings.
-      (when (and define-mode fund-sym)
-        (funcall define-mode fund-sym :type :major :modeline "Fund"))
-      (when (and define-mode mini-sym)
-        (funcall define-mode mini-sym :type :major :modeline "Mini"))
-      ;; mupdf is the only engine right now; bind it to fundamental-mode
-      ;; for now (pdf-mode is a v0.9 user-init concept — adding bindings
-      ;; rather than a built-in mode keeps the runtime engine-agnostic).
-      (when (and reg-default fund-sym)
-        (funcall reg-default "mupdf" fund-sym))
-      (when init-chrome (funcall init-chrome)))))
 
 (defun stop ()
   (when *session*

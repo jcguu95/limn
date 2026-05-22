@@ -1,0 +1,62 @@
+#+TITLE: Limn end-to-end tests
+#+OPTIONS: toc:nil
+
+* What these tests are
+
+The =backend/tests/= dir already has two test tiers:
+
+| tier        | drives                              | layer touched           |
+|-------------+-------------------------------------+-------------------------|
+| unit        | mock client (in-memory FIFO)        | pure Lisp logic         |
+| integration | real Limn binary + raw wire JSON    | C++ + bridge protocol   |
+
+Both deliberately *avoid* the real backend Lisp client (=limn.lisp= et al.).
+That's good for keeping the tests focused, but it leaves a third layer
+untested: the **Lisp client + framework runtime** acting like a real user.
+
+The =e2e/= dir fills that gap. Each test:
+
+1. Spawns the real =limn= binary
+2. Loads the *real* backend modules (=limn.lisp= and friends) in the test
+   process
+3. Calls =(limn:start …)= to set up the same way an end user would
+4. Drives a scenario through Lisp-level APIs + Qt-level input injection
+5. Verifies observable effects (response data, side effects, log files)
+
+* When to add an e2e test
+
+Add one when a feature spans multiple layers and would slip through if
+each layer is tested in isolation. Examples:
+
+- batch 8 (C-g): keypress → Qt filter → backend hook → keymap walk →
+  defcommand → reader → dynamic-bound canceller → cancel → handler-case.
+  *Every* unit/integration test mocked or sidestepped at least one link.
+- batch 9 (init.lisp): module load order + start sequence + actual file IO.
+
+Don't add one if a focused unit test would suffice.
+
+* Running
+
+#+begin_src bash
+# Run all e2e tests:
+backend/tests/e2e/run-e2e.sh
+
+# Run one:
+sbcl --no-userinit --no-sysinit --non-interactive \
+     --load backend/tests/e2e/batch8-cg-qt.lisp
+#+end_src
+
+Each script exits 0 on pass, non-zero on fail, prints a clear VERDICT
+line you can grep.
+
+* Limitations
+
+These tests use Qt-level key injection (=test/inject-qt-key=), which
+generates a real ~QKeyEvent~ via ~QApplication::sendEvent~. This covers
+the Qt event filter, dispatch chain, and everything backend-side — but
+*not* the macOS HID → AppKit → QApplication path.
+
+For real OS-level keystrokes we'd need =osascript= + macOS Accessibility
+permission for the parent process. That's gated by an interactive
+system grant, so we keep it out of the default suite. See =LIMN-SPEC=
+or =CONTRIBUTING= once we settle on a strategy (likely VM-based).
