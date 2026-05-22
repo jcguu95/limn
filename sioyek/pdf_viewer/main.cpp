@@ -1,4 +1,6 @@
 #include <csignal>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <qapplication.h>
 #include <qsurfaceformat.h>
@@ -30,6 +32,29 @@ int main(int argc, char* argv[]) {
     // terminate the process.
     std::signal(SIGPIPE, SIG_IGN);
 
+    // Pre-scan argv for --headless so we can install the offscreen Qt
+    // platform plugin BEFORE QApplication is constructed. The offscreen
+    // platform still runs the full paint pipeline (so QWidget::grab() and
+    // any paintEvent-driven invariants work) but never opens a visible
+    // window — exactly what autonomous GUI testing needs.
+    bool pre_headless = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--headless") == 0) { pre_headless = true; break; }
+    }
+    // For --headless: use offscreen by default (full paint pipeline runs,
+    // QWidget::grab() works). The minimal platform is also viable when you
+    // want even less surface area — set QT_QPA_PLATFORM=minimal manually.
+    if (pre_headless && std::getenv("QT_QPA_PLATFORM") == nullptr) {
+        setenv("QT_QPA_PLATFORM", "offscreen", 1);
+    }
+
+    // macOS: by default Qt swaps Ctrl/Cmd so that Qt::ControlModifier means
+    // the Cmd key. That makes our "C-d" Emacs-style bindings fire on Cmd+D,
+    // which is the OPPOSITE of what a user pressing literal "Ctrl-d"
+    // expects. Turn the swap off so ControlModifier is always the physical
+    // Ctrl key and MetaModifier is Cmd.
+    QCoreApplication::setAttribute(Qt::AA_MacDontSwapCtrlAndMeta);
+
     QSurfaceFormat format;
     format.setVersion(3, 2);
     format.setProfile(QSurfaceFormat::CoreProfile);
@@ -56,7 +81,11 @@ int main(int argc, char* argv[]) {
 
     MainWidget window;
     window.setWindowTitle("limn");
-    if (!opts.headless) window.show();
+    // Always show(): under --headless we've switched to QT_QPA_PLATFORM=offscreen
+    // so this paints into an offscreen surface (no visible window) but the full
+    // layout + paintEvent pipeline runs — required for QWidget::grab() tests.
+    window.resize(1200, 900);
+    window.show();
 
     // ── Limn protocol layer ────────────────────────────────────────────
     LimnBufferRegistry  registry;

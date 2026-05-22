@@ -51,6 +51,7 @@
                  "suites/integration.lisp"
                  "suites/stress.lisp"
                  "suites/visual.lisp"
+                 "suites/paint.lisp"
                  "suites/robust.lisp"
                  "suites/lifecycle.lisp"
                  "suites/i18n.lisp"

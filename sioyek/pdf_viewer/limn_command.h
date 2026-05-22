@@ -75,6 +75,9 @@ private:
     void cmd_test_emit_heartbeat    (const QString& id, const QJsonObject& msg);
     void cmd_test_snapshot          (const QString& id, const QJsonObject& msg);
     void cmd_test_flush_caches      (const QString& id, const QJsonObject& msg);
+    void cmd_test_grab_window       (const QString& id, const QJsonObject& msg);
+    void cmd_test_widget_tree       (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_qt_key     (const QString& id, const QJsonObject& msg);
 
     // Helpers
     QJsonObject build_open_data(const QString& buffer_id, Document* doc);

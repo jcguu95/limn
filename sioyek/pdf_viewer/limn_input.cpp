@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
+#include <QWindow>
 
 namespace {
 
@@ -12,6 +13,17 @@ QString key_to_string(QKeyEvent* ev) {
     // Prefer the printable text when available (covers letters & symbols).
     QString t = ev->text();
     if (!t.isEmpty() && t.at(0).isPrint() && !t.at(0).isSpace()) return t;
+
+    // Letter / digit keys with a modifier produce non-printable text:
+    // Ctrl-d gives ASCII 0x04, not "d". Without this fallback the bridge
+    // would report key="<key-68>" mods=["ctrl"] and the user's "C-d"
+    // binding could never match.
+    if (ev->key() >= Qt::Key_A && ev->key() <= Qt::Key_Z) {
+        return QString(QChar(ev->key())).toLower();
+    }
+    if (ev->key() >= Qt::Key_0 && ev->key() <= Qt::Key_9) {
+        return QString(QChar(ev->key()));
+    }
 
     switch (ev->key()) {
         case Qt::Key_Return:    return "RET";
@@ -35,10 +47,17 @@ QString key_to_string(QKeyEvent* ev) {
     }
 }
 
-QJsonArray modifiers_to_array(Qt::KeyboardModifiers mods) {
+QJsonArray modifiers_to_array(Qt::KeyboardModifiers mods, const QString& key) {
     QJsonArray a;
     if (mods & Qt::ControlModifier) a.append("ctrl");
-    if (mods & Qt::ShiftModifier)   a.append("shift");
+    // For single printable characters (letters, digits, punctuation), the
+    // character itself already encodes Shift — "G" vs "g", "?" vs "/", etc.
+    // Reporting Shift again would force users to bind "S-G" instead of "G",
+    // which doesn't match Emacs/Vim convention. We only emit "shift" when
+    // it's meaningful: combined with a named key like Tab, arrow, etc.
+    const bool case_encodes_shift =
+        (key.size() == 1 && key.at(0).isPrint() && !key.at(0).isSpace());
+    if ((mods & Qt::ShiftModifier) && !case_encodes_shift) a.append("shift");
     if (mods & Qt::AltModifier)     a.append("alt");
     if (mods & Qt::MetaModifier)    a.append("meta");
     return a;
@@ -68,13 +87,26 @@ LimnInputFilter::LimnInputFilter(LimnBridge* bridge, QObject* parent)
 bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
     if (!bridge) return false;
 
+    // Qt delivers each key event twice through the app-level filter: once
+    // when posted to the backing QWidgetWindow, once when forwarded to the
+    // focused QWidget. Skip the QWindow pass so each press fires our
+    // bindings exactly once.
+    if (qobject_cast<QWindow*>(obj)) return false;
+
     switch (ev->type()) {
         case QEvent::KeyPress: {
             auto* kev = static_cast<QKeyEvent*>(ev);
+            QString k = key_to_string(kev);
+            // Diagnostic: stderr-log every captured key. Lets us tell, from
+            // the log file alone, whether Qt is delivering events to the
+            // filter (vs. focus / OS swallowing them upstream).
+            fprintf(stderr, "[limn-input] KeyPress key=%s mods=0x%x obj=%s\n",
+                    qPrintable(k), (unsigned)kev->modifiers(),
+                    obj ? obj->metaObject()->className() : "(null)");
             QJsonObject e;
             e.insert("frame-id", "f1");
-            e.insert("key",  key_to_string(kev));
-            e.insert("mods", modifiers_to_array(kev->modifiers()));
+            e.insert("key",  k);
+            e.insert("mods", modifiers_to_array(kev->modifiers(), k));
             bridge->push_event("key", e);
             break;
         }

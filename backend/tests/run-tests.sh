@@ -15,7 +15,9 @@ set -u
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SOCKET="${LIMN_SOCKET:-/tmp/limn-test-$$}"
-LIMN_BIN="${LIMN_BIN:-$PROJECT_ROOT/sioyek/sioyek.app/Contents/MacOS/sioyek}"
+LIMN_BIN="${LIMN_BIN:-$PROJECT_ROOT/sioyek/limn.app/Contents/MacOS/limn}"
+# Fallback to old sioyek.app name if limn.app doesn't exist.
+[ -x "$LIMN_BIN" ] || LIMN_BIN="$PROJECT_ROOT/sioyek/sioyek.app/Contents/MacOS/sioyek"
 FIXTURE_DIR="$PROJECT_ROOT/backend/tests/fixtures"
 LOG="/tmp/limn-test.log"
 

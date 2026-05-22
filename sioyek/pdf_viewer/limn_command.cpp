@@ -12,6 +12,16 @@
 
 #include <QJsonArray>
 #include <QJsonValue>
+#include <QBuffer>
+#include <QByteArray>
+#include <QPixmap>
+#include <QImage>
+#include <QRgb>
+#include <QWidget>
+#include <QMetaObject>
+#include <QCoreApplication>
+#include <QKeyEvent>
+#include <QApplication>
 #include <cmath>
 #include <stdexcept>
 
@@ -96,6 +106,9 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
         if (cmd == "test/emit-heartbeat")     { cmd_test_emit_heartbeat    (id, msg); return; }
         if (cmd == "test/snapshot")           { cmd_test_snapshot          (id, msg); return; }
         if (cmd == "test/flush-caches")       { cmd_test_flush_caches      (id, msg); return; }
+        if (cmd == "test/grab-window")        { cmd_test_grab_window       (id, msg); return; }
+        if (cmd == "test/widget-tree")        { cmd_test_widget_tree       (id, msg); return; }
+        if (cmd == "test/inject-qt-key")      { cmd_test_inject_qt_key     (id, msg); return; }
         bridge->send_fail(id, QString("unknown test command: %1").arg(cmd));
         return;
     }
@@ -307,6 +320,18 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
     const QString live_buf  = registry->find_id(doc);
     const bool    is_active = (!win->buffer_id.isEmpty()
                                 && win->buffer_id == live_buf);
+
+    // Sync continuous fields (offset, zoom) before applying partial
+    // updates. Without this, a request that only sets :|offset-y| would
+    // write the stale win->offset_x into dv->set_offsets, wiping any
+    // user-side horizontal scroll. Same rationale as collect_view_state,
+    // and same reason for NOT touching `page` (it's discrete, intent-level,
+    // and dv->get_center_page_number is unreliable in offscreen tests).
+    if (is_active) {
+        win->zoom     = dv->get_zoom_level();
+        win->offset_x = dv->get_offset_x();
+        win->offset_y = dv->get_offset_y();
+    }
 
     // For validation we need num_pages — use the window's buffer doc if set.
     Document* val_doc = (!win->buffer_id.isEmpty())
@@ -601,6 +626,28 @@ QJsonObject LimnCommand::collect_view_state(const QString& win_id) {
     Document* doc = (!win->buffer_id.isEmpty())
                      ? registry->lookup(win->buffer_id) : nullptr;
 
+    // For the ACTIVE window, sync the *continuous* fields (offset, zoom)
+    // from the live DocumentView. These can drift from LimnWindow whenever
+    // the user scrolls in Qt directly: without this sync, a subsequent
+    // delta-based operation like vim/h would compute "new offset" against
+    // a stale 0 and teleport sioyek back to the top.
+    //
+    // We deliberately do NOT sync `page`. Page is a discrete, intent-level
+    // field: set by goto_page / view/set :page. dv->get_center_page_number()
+    // is computed from offset_y + viewport_height/2, which is ill-defined
+    // in headless/offscreen tests (viewport is degenerate) and would make
+    // view/get :page disagree with what the client just set.
+    DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
+    Document* live_doc = dv ? dv->get_document() : nullptr;
+    const QString live_buf = registry->find_id(live_doc);
+    const bool is_active = (!win->buffer_id.isEmpty()
+                            && win->buffer_id == live_buf);
+    if (is_active && dv) {
+        win->zoom     = dv->get_zoom_level();
+        win->offset_x = dv->get_offset_x();
+        win->offset_y = dv->get_offset_y();
+    }
+
     if (!win->buffer_id.isEmpty()) data.insert("buffer-id", win->buffer_id);
     if (doc) {
         data.insert("num-pages",  doc->num_pages());
@@ -834,6 +881,212 @@ void LimnCommand::cmd_test_flush_caches(const QString& id, const QJsonObject&) {
     // we don't expose a public flush. The test only verifies that the
     // command responds cleanly and the frontend stays usable.
     bridge->send_ok(id);
+}
+
+// ─── test/grab-window ───────────────────────────────────────────────────
+//
+// Grab the current rendered pixels of a widget into a PNG. With
+// QT_QPA_PLATFORM=offscreen this paints into a backing store and is fully
+// deterministic — exactly what GUI regression tests need.
+//
+// Returns: { png: base64, width, height, avg-luminance, opaque-pixels }
+// `win-id` is accepted for forward compat but currently always grabs the
+// MainWidget (we don't yet have one QWidget per logical Limn window).
+
+void LimnCommand::cmd_test_grab_window(const QString& id, const QJsonObject& msg) {
+    QWidget* target = main_widget;
+    if (!target) {
+        bridge->send_fail(id, "no widget to grab");
+        return;
+    }
+
+    // Make sure pending layout / paint events have run before we grab.
+    // Without this, freshly-mutated state (e.g. just after view/set) may
+    // not yet be reflected in the backing store.
+    QCoreApplication::processEvents();
+
+    QPixmap pm = target->grab();
+    QImage img = pm.toImage().convertToFormat(QImage::Format_ARGB32);
+
+    // Encode to base64-PNG.
+    QByteArray png_bytes;
+    {
+        QBuffer buf(&png_bytes);
+        buf.open(QIODevice::WriteOnly);
+        img.save(&buf, "PNG");
+    }
+    QString b64 = QString::fromLatin1(png_bytes.toBase64());
+
+    // Compute aggregate stats once, server-side — saves the Lisp side from
+    // needing a PNG decoder.
+    qint64 lum_sum = 0;
+    qint64 opaque  = 0;
+    const int w = img.width();
+    const int h = img.height();
+    for (int y = 0; y < h; ++y) {
+        const QRgb* row = reinterpret_cast<const QRgb*>(img.constScanLine(y));
+        for (int x = 0; x < w; ++x) {
+            const QRgb px = row[x];
+            const int a = qAlpha(px);
+            if (a > 0) {
+                ++opaque;
+                // Rec.601 luma
+                lum_sum += (299 * qRed(px) + 587 * qGreen(px) + 114 * qBlue(px))
+                           / 1000;
+            }
+        }
+    }
+    const double avg_lum = (opaque > 0)
+                           ? (double)lum_sum / (double)opaque
+                           : 0.0;
+
+    QJsonObject data;
+    data.insert("png",            b64);
+    data.insert("width",          w);
+    data.insert("height",         h);
+    data.insert("avg-luminance",  avg_lum);
+    data.insert("opaque-pixels",  static_cast<qint64>(opaque));
+    // Accept the win-id for echo even though we ignore it for routing.
+    if (msg.contains("win-id")) {
+        data.insert("win-id", msg.value("win-id").toString());
+    }
+    bridge->send_ok(id, data);
+}
+
+// ─── test/widget-tree ───────────────────────────────────────────────────
+//
+// Dump the QWidget tree under MainWidget as JSON. Lets tests verify
+// structural facts (split produced two viewports, floating window is at
+// the right geometry, focus is on the expected widget) without pixel maths.
+
+static QJsonObject widget_to_json(QWidget* w) {
+    QJsonObject o;
+    o.insert("class",   QString::fromUtf8(w->metaObject()->className()));
+    o.insert("name",    w->objectName());
+    o.insert("visible", w->isVisible());
+    o.insert("focus",   w->hasFocus());
+    QJsonArray geom;
+    geom.append(w->x()); geom.append(w->y());
+    geom.append(w->width()); geom.append(w->height());
+    o.insert("geometry", geom);
+
+    QJsonArray kids;
+    for (QObject* child : w->children()) {
+        if (auto* cw = qobject_cast<QWidget*>(child)) {
+            kids.append(widget_to_json(cw));
+        }
+    }
+    o.insert("children", kids);
+    return o;
+}
+
+// ─── test/inject-qt-key ────────────────────────────────────────────────
+//
+// Like test/inject-key, but instead of bypassing Qt and pushing a synthetic
+// bridge event directly, this dispatches a REAL QKeyEvent through
+// QApplication. Goes through the same code paths as a hardware keystroke:
+//   QApplication::sendEvent → installed event filters (LimnInputFilter) →
+//   focused widget's keyPressEvent.
+//
+// This is what we need to verify end-to-end "key → filter → bridge → SBCL"
+// without a human pressing a button.
+
+namespace {
+int parse_qt_key(const QString& k) {
+    if (k.size() == 1) {
+        QChar c = k.at(0);
+        return c.toUpper().unicode();
+    }
+    if (k == "RET") return Qt::Key_Return;
+    if (k == "ESC") return Qt::Key_Escape;
+    if (k == "TAB") return Qt::Key_Tab;
+    if (k == "SPC") return Qt::Key_Space;
+    if (k == "BS")  return Qt::Key_Backspace;
+    if (k == "DEL") return Qt::Key_Delete;
+    if (k == "<up>")       return Qt::Key_Up;
+    if (k == "<down>")     return Qt::Key_Down;
+    if (k == "<left>")     return Qt::Key_Left;
+    if (k == "<right>")    return Qt::Key_Right;
+    if (k == "<home>")     return Qt::Key_Home;
+    if (k == "<end>")      return Qt::Key_End;
+    if (k == "<pageup>")   return Qt::Key_PageUp;
+    if (k == "<pagedown>") return Qt::Key_PageDown;
+    return 0;
+}
+Qt::KeyboardModifiers parse_qt_mods(const QJsonArray& a) {
+    Qt::KeyboardModifiers m = Qt::NoModifier;
+    for (const auto& v : a) {
+        QString s = v.toString();
+        if (s == "ctrl")  m |= Qt::ControlModifier;
+        if (s == "shift") m |= Qt::ShiftModifier;
+        if (s == "alt")   m |= Qt::AltModifier;
+        if (s == "meta")  m |= Qt::MetaModifier;
+    }
+    return m;
+}
+}  // anonymous namespace
+
+void LimnCommand::cmd_test_inject_qt_key(const QString& id, const QJsonObject& msg) {
+    if (!main_widget) {
+        bridge->send_fail(id, "no main widget");
+        return;
+    }
+    const QString key_str = msg.value("key").toString();
+    const int qkey  = parse_qt_key(key_str);
+    const auto mods = parse_qt_mods(msg.value("mods").toArray());
+    if (qkey == 0) {
+        bridge->send_fail(id, QString("can't map key %1 to Qt::Key").arg(key_str));
+        return;
+    }
+
+    // Pick a target: prefer the focused widget; fall back to MainWidget.
+    QWidget* target = QApplication::focusWidget();
+    if (!target) target = main_widget;
+    // If MainWidget hasn't been activated (common on macOS for windows
+    // launched from a terminal), force activation so focus is real.
+    main_widget->activateWindow();
+    main_widget->setFocus();
+
+    // Real keyboards encode keys in the QKeyEvent's text field thus:
+    //   plain letter "a"        → text "a"
+    //   Shift+a                  → text "A"
+    //   Ctrl+a (or any non-Shift mod) → text "\x01" (non-printable) or ""
+    // We mirror that so the filter exercises the SAME code path as a real
+    // keystroke. Otherwise test/inject-qt-key would always feed printable
+    // text and miss bugs where key_to_string falls through to its key-
+    // code fallback (that's what hid the Ctrl-d binding regression).
+    QString text = key_str;
+    const auto non_shift_mods =
+        mods & ~Qt::KeyboardModifiers(Qt::ShiftModifier | Qt::KeypadModifier);
+    if (key_str.size() == 1 && (mods & Qt::ShiftModifier)) {
+        text = key_str.toUpper();
+    }
+    if (key_str.size() == 1 && non_shift_mods) {
+        // Ctrl / Alt / Meta + letter: empty text, just like macOS gives Qt.
+        text = QString();
+    }
+    QKeyEvent press(QEvent::KeyPress, qkey, mods, text);
+    QApplication::sendEvent(target, &press);
+    QKeyEvent release(QEvent::KeyRelease, qkey, mods, text);
+    QApplication::sendEvent(target, &release);
+
+    QJsonObject data;
+    data.insert("target", target->metaObject()->className());
+    data.insert("focus",  QApplication::focusWidget()
+                          ? QApplication::focusWidget()->metaObject()->className()
+                          : QString("(none)"));
+    bridge->send_ok(id, data);
+}
+
+void LimnCommand::cmd_test_widget_tree(const QString& id, const QJsonObject&) {
+    if (!main_widget) {
+        bridge->send_fail(id, "no main widget");
+        return;
+    }
+    QCoreApplication::processEvents();
+    QJsonObject data;
+    data.insert("tree", widget_to_json(main_widget));
+    bridge->send_ok(id, data);
 }
 
 void LimnCommand::cmd_buffer_render_region(const QString& id, const QJsonObject& msg) {
