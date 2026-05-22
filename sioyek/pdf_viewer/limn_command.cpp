@@ -120,10 +120,12 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
 
 void LimnCommand::cmd_bridge_capabilities(const QString& id, const QJsonObject&) {
     QJsonObject data;
-    QJsonArray engines;  engines.append("mupdf");
+    QJsonArray engines;
+    engines.append("text");    // §7.6 bundled — chrome primitives' backend
+    engines.append("mupdf");   // §7.6 bundled — PDF / EPUB
     data.insert("engines",  engines);
     data.insert("frontend", "qt");
-    data.insert("version",  "0.3");
+    data.insert("version",  "0.4");
     bridge->send_ok(id, data);
 }
 
@@ -132,10 +134,10 @@ void LimnCommand::cmd_bridge_capabilities(const QString& id, const QJsonObject&)
 void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& msg) {
     const QString win_id = msg.value("win-id").toString();
     const QString engine = msg.value("engine").toString();
-    const QString path   = msg.value("path").toString();
+    const QString path   = msg.value("path").toString();   // optional for text
 
-    if (win_id.isEmpty() || engine.isEmpty() || path.isEmpty()) {
-        bridge->send_fail(id, "missing required field: win-id, engine, and path are required");
+    if (win_id.isEmpty() || engine.isEmpty()) {
+        bridge->send_fail(id, "missing required field: win-id and engine are required");
         return;
     }
     LimnWindow* win = windows->get(win_id);
@@ -143,8 +145,44 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
+
+    // ─── text engine (SPEC §7.6) ───────────────────────────────────────
+    // path optional; empty → empty text buffer. Used by all chrome
+    // primitives (minibuffer / echo area / *Messages* / modeline).
+    if (engine == "text") {
+        const QString tid = QString("t%1").arg(next_text_seq++);
+        text_buffers.insert(tid, QString());
+        win->buffer_id     = tid;
+        win->page          = 0;
+        win->zoom          = 1.0f;
+        win->offset_x      = 0.0f;
+        win->offset_y      = 0.0f;
+        win->dark_mode     = false;
+        win->rotation      = 0;
+        win->overlay_count = 0;
+
+        QJsonObject data;
+        data.insert("buffer-id", tid);
+        QJsonArray supports;
+        supports.append("buffer/text");
+        data.insert("supports", supports);
+        bridge->send_ok(id, data);
+
+        QJsonObject ev;
+        ev.insert("frame-id",   "f1");
+        ev.insert("buffer-id",  tid);
+        ev.insert("page-count", 0);
+        bridge->push_event("buffer-opened", ev);
+        return;
+    }
+
+    // ─── mupdf engine ─────────────────────────────────────────────────
     if (engine != "mupdf") {
         bridge->send_fail(id, QString("unknown engine: %1").arg(engine));
+        return;
+    }
+    if (path.isEmpty()) {
+        bridge->send_fail(id, "mupdf engine requires a path");
         return;
     }
 
@@ -180,6 +218,14 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
 
     QJsonObject data;
     data.insert("buffer-id", buffer_id);
+    QJsonArray supports;
+    supports.append("buffer/text");
+    supports.append("buffer/toc");
+    supports.append("buffer/links");
+    supports.append("buffer/render");
+    supports.append("buffer/render-region");
+    supports.append("buffer/metadata");
+    data.insert("supports", supports);
     bridge->send_ok(id, data);
 
     emit_buffer_opened(buffer_id, doc);

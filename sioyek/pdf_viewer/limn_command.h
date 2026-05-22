@@ -14,6 +14,7 @@
 #include <QObject>
 #include <QJsonObject>
 #include <QString>
+#include <QHash>
 
 class LimnBridge;
 class LimnBufferRegistry;
@@ -90,4 +91,10 @@ private:
     LimnWindowRegistry* windows;
     MainWidget*         main_widget;
     bool                test_mode;
+
+    // ─── text engine state (SPEC §7.6) ─────────────────────────────
+    // Minimal "text" engine: a buffer-id → content map. IDs prefixed
+    // with 't' to distinguish from mupdf's 'b' prefix.
+    QHash<QString, QString> text_buffers;
+    int                     next_text_seq = 1;
 };
