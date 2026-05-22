@@ -1,24 +1,22 @@
-;;;; limn-mode — Mode system (skeleton, will be implemented in v0.7).
+;;;; limn-mode — Mode system (SPEC §1.1 + §9.1).
 ;;;;
-;;;; Mode 是 Backend 端的物件，per SPEC §1.1 + §9.1:
-;;;;   - 名稱 (symbol or string)
-;;;;   - type:  :major | :minor
-;;;;   - keymap (optional parent)
-;;;;   - :on-enter / :on-exit hooks
-;;;;   - :modeline-name
+;;;; A mode is a NAMED bundle of (keymap, optional :on-enter / :on-exit
+;;;; hooks, modeline-name). Each Limn buffer carries exactly one major
+;;;; mode and an ordered list of minor modes (newest first).
 ;;;;
-;;;; Buffers carry: one major mode, ordered list of minors.
-;;;; Keymap lookup walks minors (newest-first) → major → global.
+;;;; Key-lookup order, given a buffer: minor modes (newest first) → major
+;;;; → (global, future). limn/keys' keymap parent chains handle further
+;;;; fallback if a mode's keymap has a parent.
 ;;;;
-;;;; This file is presently a SKELETON: package + signatures exist so unit
-;;;; tests can load, but every function signals an "unimplemented" error.
-;;;; The tests in backend/tests/unit/mode.lisp pin the contract — they
-;;;; will all be red until each function gets a real body.
+;;;; NOTE: the "mode-buffer" type here is the pure-Lisp abstraction the
+;;;; mode system operates on. The wire-level Buffer (with buffer-id) will
+;;;; adopt it later via composition — we want this module testable in
+;;;; isolation, no bridge dependency.
 
 (defpackage #:limn/mode
   (:use #:cl)
-  (:export #:define-mode #:find-mode #:list-modes
-           #:make-mode-buffer
+  (:export #:define-mode #:find-mode #:list-modes #:clear-modes
+           #:make-mode-buffer #:mode-buffer-p
            #:major-mode #:minor-modes
            #:activate #:deactivate
            #:lookup-key
@@ -26,26 +24,134 @@
 
 (in-package #:limn/mode)
 
-(define-condition unimplemented (error)
-  ((symbol-name :initarg :symbol-name :reader unimplemented-symbol-name))
-  (:report (lambda (c s)
-             (format s "limn/mode:~a is not yet implemented (v0.7 work)"
-                     (unimplemented-symbol-name c)))))
+;;; ── mode object ────────────────────────────────────────────────────────
 
-(defun %todo (name) (error 'unimplemented :symbol-name name))
+(defstruct (mode (:conc-name mode-))
+  name
+  type            ; :major or :minor
+  keymap          ; limn/keys keymap; settable via (setf mode-keymap)
+  modeline-name
+  on-enter        ; thunk or nil
+  on-exit)        ; thunk or nil
 
-(defun define-mode      (name &key type parent modeline on-enter on-exit)
-  (declare (ignore name type parent modeline on-enter on-exit))
-  (%todo 'define-mode))
-(defun find-mode        (name) (declare (ignore name)) (%todo 'find-mode))
-(defun list-modes       ()                              (%todo 'list-modes))
-(defun make-mode-buffer ()                              (%todo 'make-mode-buffer))
-(defun major-mode       (buf) (declare (ignore buf))    (%todo 'major-mode))
-(defun minor-modes      (buf) (declare (ignore buf))    (%todo 'minor-modes))
-(defun activate         (buf mode) (declare (ignore buf mode)) (%todo 'activate))
-(defun deactivate       (buf mode) (declare (ignore buf mode)) (%todo 'deactivate))
-(defun lookup-key       (buf spec) (declare (ignore buf spec)) (%todo 'lookup-key))
-(defun mode-keymap        (m) (declare (ignore m)) (%todo 'mode-keymap))
-(defun mode-name          (m) (declare (ignore m)) (%todo 'mode-name))
-(defun mode-type          (m) (declare (ignore m)) (%todo 'mode-type))
-(defun mode-modeline-name (m) (declare (ignore m)) (%todo 'mode-modeline-name))
+(defvar *modes* (make-hash-table :test 'eq)
+  "Global registry: mode-name symbol → mode object.")
+
+(defun define-mode (name &key type parent modeline on-enter on-exit)
+  "Register or update a mode under NAME (a symbol).
+
+   If a mode of this NAME already exists, update its fields IN PLACE
+   so anyone holding a reference (e.g. buffers that have activated it)
+   sees the new behaviour.
+
+   :parent is reserved for keymap-parent linkage and currently not
+   wired here — callers can directly (setf (mode-keymap m) ...) with
+   a keymap whose parent is some other mode's keymap."
+  (declare (ignore parent))
+  (let ((existing (gethash name *modes*)))
+    (cond
+      (existing
+       (setf (mode-type existing)          type
+             (mode-modeline-name existing) modeline
+             (mode-on-enter existing)      on-enter
+             (mode-on-exit existing)       on-exit)
+       existing)
+      (t
+       (let ((m (make-mode :name name :type type
+                           :modeline-name modeline
+                           :on-enter on-enter
+                           :on-exit on-exit)))
+         (setf (gethash name *modes*) m)
+         m)))))
+
+(defun find-mode (name) (gethash name *modes*))
+
+(defun list-modes ()
+  (loop for m being the hash-values of *modes* collect m))
+
+(defun clear-modes ()
+  "Test helper: wipe the registry."
+  (clrhash *modes*))
+
+;;; ── mode-buffer ────────────────────────────────────────────────────────
+
+(defstruct (mode-buffer (:conc-name mode-buffer-) (:predicate mode-buffer-p))
+  (major  nil)    ; symbol naming the active major mode, or nil
+  (minors '()))   ; list of mode-name symbols, newest first
+
+;; defstruct gives us make-mode-buffer for free; we just re-export it.
+
+(defun major-mode  (buf) (mode-buffer-major  buf))
+(defun minor-modes (buf) (mode-buffer-minors buf))
+
+;;; ── hooks ──────────────────────────────────────────────────────────────
+
+(defun %fire-hook (mode which)
+  (let ((fn (ecase which
+              (:enter (mode-on-enter mode))
+              (:exit  (mode-on-exit mode)))))
+    (when (functionp fn) (funcall fn))))
+
+;;; ── activation ─────────────────────────────────────────────────────────
+
+(defun activate (buf name)
+  "Activate the mode named NAME on BUF.
+
+   :major → replaces the existing major mode (firing :on-exit on the
+            outgoing mode, then :on-enter on the new one).
+   :minor → pushed to the FRONT of minor-modes (newest first). No-op
+            if already active. Fires :on-enter."
+  (let ((m (find-mode name)))
+    (unless m
+      (error "limn/mode:activate: unknown mode ~s" name))
+    (ecase (mode-type m)
+      (:major
+       (let ((old-name (mode-buffer-major buf)))
+         (when old-name
+           (let ((old-m (find-mode old-name)))
+             (when old-m (%fire-hook old-m :exit))))
+         (setf (mode-buffer-major buf) name)
+         (%fire-hook m :enter)))
+      (:minor
+       (unless (member name (mode-buffer-minors buf))
+         (push name (mode-buffer-minors buf))
+         (%fire-hook m :enter))))
+    name))
+
+(defun deactivate (buf name)
+  "Remove a mode from BUF. For :minor, drops from minor-modes (firing
+   :on-exit). For :major, clears the major slot (rare; usually you'd
+   activate a different major instead)."
+  (let ((m (find-mode name)))
+    (unless m
+      (error "limn/mode:deactivate: unknown mode ~s" name))
+    (ecase (mode-type m)
+      (:minor
+       (when (member name (mode-buffer-minors buf))
+         (setf (mode-buffer-minors buf)
+               (remove name (mode-buffer-minors buf)))
+         (%fire-hook m :exit)))
+      (:major
+       (when (eq (mode-buffer-major buf) name)
+         (%fire-hook m :exit)
+         (setf (mode-buffer-major buf) nil))))
+    name))
+
+;;; ── key lookup ─────────────────────────────────────────────────────────
+
+(defun lookup-key (buf spec)
+  "Walk minors (newest first) → major. Returns the bound action, or
+   NIL if no mode handles SPEC. (Global fallback is the caller's job
+   for now — when a global keymap concept lands, layer it here.)"
+  (or
+   ;; Minors, newest first
+   (loop for minor-name in (mode-buffer-minors buf)
+         for m  = (find-mode minor-name)
+         for km = (and m (mode-keymap m))
+         for v  = (and km (limn/keys:lookup km spec))
+         when v return v)
+   ;; Major
+   (let* ((major-name (mode-buffer-major buf))
+          (m          (and major-name (find-mode major-name)))
+          (km         (and m (mode-keymap m))))
+     (and km (limn/keys:lookup km spec)))))
