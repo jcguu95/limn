@@ -22,6 +22,17 @@
             qt.qtdeclarative      # quickwidgets
             qt.qtspeech
 
+            # mupdf — PDF rendering. nixpkgs ships 1.27+ which has
+            # fz_page_label etc. — Debian bookworm's 1.20.3 doesn't.
+            pkgs.mupdf
+
+            # mupdf's third-party deps. nixpkgs builds mupdf with
+            # USE_SYSTEM_LIBS=yes, so the final binary links these
+            # dynamically rather than statically through a libmupdf-third
+            # like sioyek's vendored build does.
+            pkgs.openjpeg pkgs.jbig2dec pkgs.gumbo
+            pkgs.harfbuzz pkgs.freetype pkgs.libjpeg
+
             # build tools
             pkgs.gnumake
             pkgs.cmake

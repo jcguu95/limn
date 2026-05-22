@@ -86,3 +86,18 @@ mac {
     LIBS += -framework AppKit
     OBJECTIVE_SOURCES += pdf_viewer/macos_specific.mm
 }
+
+# Linux build path — used by the e2e container (Dockerfile, nix-based).
+# Uses nixpkgs mupdf (1.27+, same version as macOS dev shell). nix
+# shell sets NIX_CFLAGS_COMPILE / NIX_LDFLAGS so we don't need hardcoded
+# INCLUDEPATH or library search paths — just declare what to link.
+unix:!mac:!android {
+    QMAKE_CXXFLAGS += -std=c++17
+    # nix-built mupdf is a single libmupdf; third-party deps (harfbuzz /
+    # freetype / jpeg / openjp2 / jbig2dec / gumbo) are linked separately
+    # at the final binary, not bundled into libmupdf-third like sioyek's
+    # vendored build does.
+    LIBS += -lmupdf
+    LIBS += -lz -lm -ldl
+    LIBS += -lharfbuzz -lfreetype -ljpeg -lopenjp2 -ljbig2dec -lgumbo
+}

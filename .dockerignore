@@ -27,10 +27,10 @@ limn-repl.log
 .git/
 .gitignore
 
-# nix flake stuff (not used inside container)
+# direnv / build outputs (not needed inside container)
 .envrc
 result*
-flake.lock
+# flake.nix + flake.lock ARE needed (Dockerfile uses nix develop)
 
 # editor / OS junk
 .DS_Store

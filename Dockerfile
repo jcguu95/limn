@@ -1,55 +1,58 @@
-# Limn e2e container — Debian slim base, Qt6 + sbcl + mupdf + xdotool + Xvfb.
+# Limn e2e container — nix-based.
 #
-# Two-stage:
-#   builder  compiles Limn for Linux (qmake6 + make)
-#   runtime  copies the binary in, plus Xvfb + xdotool + sbcl for tests
+# We tried apt-managed Debian first (e518f02). Hit two walls:
+#   - Qt 6.4.2 on Debian bookworm is older than what sioyek expects
+#     (QTextToSpeech::sayingWord / engineCapabilities are 6.5+)
+#   - libmupdf 1.20.3 on Debian doesn't have fz_page_label etc.
 #
-# Build (from repo root):
-#   docker build -t limn-e2e .
+# nix gives us the same versions as the macOS dev shell (Qt 6.11,
+# mupdf 1.27+) — same flake on either platform. So the container is
+# nix-based.
 #
-# Run interactive:
-#   docker run --rm -it -p 5900:5900 limn-e2e bash
-#
-# Run e2e tests:
-#   docker run --rm limn-e2e backend/tests/e2e/run-os-e2e.sh
+# Build:    docker build -t limn-e2e .
+# Run e2e:  docker run --rm limn-e2e
+# Debug:    docker run --rm -it -p 5900:5900 -e X11VNC=1 limn-e2e bash
 
-# ── builder stage ─────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS builder
+# ── nix base ────────────────────────────────────────────────────────────
+FROM nixos/nix:latest
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    qt6-base-dev qt6-base-private-dev \
-    libmupdf-dev mupdf-tools \
-    libfreetype-dev libharfbuzz-dev libjpeg-dev \
-    build-essential pkg-config \
- && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-COPY sioyek/ ./sioyek/
-
-# Limn's qmake project file is sioyek/pdf_viewer/pdf_viewer_build_config.pri
-# referenced by sioyek/sioyek.pro. Linux build uses qmake6 → Makefile → make.
-WORKDIR /build/sioyek
-RUN qmake6 sioyek.pro \
- && make -j"$(nproc)"
-
-# ── runtime stage ─────────────────────────────────────────────────────
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    qt6-base \
-    libmupdf24 \
-    libfreetype6 libharfbuzz0b libjpeg62-turbo \
-    sbcl \
-    xvfb xdotool x11vnc xauth \
-    fontconfig fonts-dejavu-core \
-    bash coreutils procps \
- && rm -rf /var/lib/apt/lists/*
+# Enable flakes (needed for our flake.nix).
+RUN mkdir -p /etc/nix && \
+    echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
 
 WORKDIR /limn
-COPY --from=builder /build/sioyek/sioyek /limn/sioyek/limn
+
+# Copy just the flake first so the dep closure gets cached in its own
+# layer — code changes won't bust the nix-store closure.
+COPY flake.nix flake.lock /limn/
+
+# Materialise the dev shell so the closure is fetched once at build time.
+RUN nix develop --command true
+
+# Now copy the actual source.
+COPY sioyek/  /limn/sioyek/
 COPY backend/ /limn/backend/
 
-# Xvfb display number + size — match what tests expect (DISPLAY=:99).
+# Add the OS-level tools the e2e flow needs but the dev shell doesn't
+# (Xvfb / xdotool / x11vnc / sbcl / fonts). Done as a fresh nix-env install
+# rather than amending flake.nix because they aren't macOS dev needs.
+RUN nix-env -iA \
+      nixpkgs.xorg.xvfb \
+      nixpkgs.xdotool \
+      nixpkgs.x11vnc \
+      nixpkgs.xorg.xdpyinfo \
+      nixpkgs.sbcl \
+      nixpkgs.dejavu_fonts \
+      nixpkgs.bash \
+      nixpkgs.coreutils \
+      nixpkgs.fontconfig
+
+# Build Limn using the flake dev shell.
+RUN cd sioyek && \
+    nix develop /limn --command bash -c \
+      "qmake pdf_viewer_build_config.pro && make -j$(nproc)"
+
+# Runtime config — match what backend/tests/e2e/run-os-e2e.sh expects.
 ENV DISPLAY=:99
 ENV LIMN_BIN=/limn/sioyek/limn
 ENV LIMN_BACKEND_DIR=/limn/backend/
