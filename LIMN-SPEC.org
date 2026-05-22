@@ -1,4 +1,4 @@
-* Limn 規格書 v0.5
+* Limn 規格書 v0.6
 
 Limn 是一個由 Common Lisp（SBCL）控制的顯示框架。
 Backend（Lisp）透過 Bridge（Unix socket + JSON）驅動 Frontend（Qt）。
@@ -785,6 +785,35 @@ backend 端對應一個 mode-buffer 狀態。Backend runtime（=limn.lisp= 或
 這層映射是 backend convention、不在線協議內——frontend 對 mode 一無所
 知，只透過 =modeline/set= 等 chrome 命令間接看到 mode 名。
 
+**Keymap UX 約定**（使用者寫 init.lisp 時的 API surface）：
+
+對應 Emacs 的 =global-set-key= / =define-key MAP= / =local-set-key=，
+backend 必須提供：
+
+#+begin_src lisp
+;; 預設綁全域 (≈ Emacs global-set-key)
+(limn:bind "C-x C-f" 'find-file)
+
+;; 綁到特定 mode 的 keymap (≈ Emacs (define-key pdf-mode-map ...))
+(limn:bind "j" 'next-page :mode 'pdf-mode)
+(limn:bind "n" 'next-hit  :mode 'search-mode)
+
+;; 直接給 keymap object，不透過 mode 名查詢
+(limn:define-key SOME-KEYMAP "C-g" 'keyboard-quit)
+
+;; 對稱解除
+(limn:unbind "j" :mode 'pdf-mode)
+#+end_src
+
+action 可以是：
+- 一個 =(lambda (event) ...)= 直接綁進去
+- 一個 command-name symbol——=limn:bind= 自動 wrap 成 call-interactively
+  closure、並 register 到 introspection 的 reverse table 讓
+  =where-is-command= 找得到
+
+同 spec 在不同 mode 互不干擾、mode binding 覆寫 global、prefix（multi-key
+sequence）在 mode keymap 上正常工作。這些是必須測試釘住的 invariant。
+
 *** 9.2 Interactive 規範
 
 每個 command 應宣告它需要的輸入。Framework 自動從 minibuffer 拿輸入
@@ -835,7 +864,170 @@ Backend 必須提供下列查詢，讓使用者「即時問系統」：
 
 這層讓 Limn 變得可學習——任何 key、任何 command 都能即時問它「你是什麼」。
 
-** 十、實作路線圖
+** 十、Undo 模型
+
+*** 10.1 兩層
+
+Limn 的 buffer 比 Emacs 多樣（mupdf、未來 text / web / image / audio
+等），不同 engine 自然的 undo 形狀差很多。所以 Limn 採兩層模型，不是
+Emacs 的單層 primitive-level：
+
+**Universal command-level undo**（所有 engine 共用）
+
+  任何 =(defcommand foo (:undoable t))= 的命令、body 回傳的 thunk
+  被 push 到 session-level =*undo-stack*=。一個 entry = 一個
+  使用者按鍵造成的 user-visible 動作。
+
+**Buffer-primitive level undo**（per-engine、optional）
+
+  支援字串編輯的 buffer（text-engine、=*minibuffer*= 等）內部 insert /
+  delete / cursor-set 等 primitive 累積到 buffer-local 的 primitive
+  list。command 結束時自動摺合成一個 command-level entry——對應 Emacs
+  的 =undo-boundary=。
+
+對比：
+
+| Engine               | undoable surface                          | 適用層         |
+|----------------------+-------------------------------------------+----------------|
+| mupdf                | view state、annotation、bookmark          | command-level  |
+| text（未來）          | 字串 insert / delete、cursor              | 雙層           |
+| =*minibuffer*=       | 同上                                       | 雙層           |
+| web（未來）           | history、scroll；form input               | command + buffer (form) |
+| image（未來）         | filter / crop / adjust stack              | command-level  |
+| audio（未來）         | effect chain、playback position           | command-level  |
+
+*** 10.2 使用者面 API
+
+| 函式               | 預設綁定 | 行為                                           |
+|--------------------+----------+------------------------------------------------|
+| =(undo-command)=   | =C-/=    | 退一個 command-level entry                     |
+| =(redo-command)=   | =C-?=    | 前進一個                                       |
+| =(undo-buffer)=    | =M-/=    | 退一個 buffer primitive（text-like buffer 才有意義） |
+| =(redo-buffer)=    | =M-?=    | 前進一個                                       |
+
+非 text-like buffer 上呼叫 =undo-buffer= = no-op + echo "no buffer undo
+in <mode>-mode"。預設 binding 跟 =keyboard-quit= 一樣可被 =limn:bind=
+覆寫。
+
+*** 10.3 Redo 模型
+
+採 Emacs-style tree：undo 本身是一個 action、進 =*undo-stack*=、redo
+**不清空**。對應 =undo-tree.el= 的時間樹。**不是** Vim 早期那種「新動作
+清 redo」的線性 stack。
+
+*** 10.4 Scope
+
+cross-buffer：一個 session-level =*undo-stack*=。理由：
+
+- =bridge/win-split= 等改 frame state 不屬於任何單一 buffer
+- Emacs 的 =buffer-undo-list= 是「buffer = 一切」的假設下成立；Limn buffer
+  只是 engine 內容的容器，不是世界
+- 使用者真要 buffer-local 自己寫 macro 限制：=(with-buffer-undo BUF ...)=
+
+*** 10.5 Author 責任
+
+=(:undoable t)= 的 command body 必須回傳：
+
+#+begin_src lisp
+;; 一、回傳 thunk：被視作 undo（redo 等同重做 command）
+(defcommand goto-page (:interactive "p" :undoable t)
+  (lambda (n)
+    (let ((old (%current-page)))
+      (when (/= n old)
+        (%goto-page n)
+        (lambda () (%goto-page old))))))    ; ← undo
+
+;; 二、回傳 cons (undo . redo)：明確兩個方向
+(defcommand add-annotation (:undoable t)
+  (lambda (annot)
+    (let ((id (engine-add-annotation annot)))
+      (cons (lambda () (engine-delete-annotation id))    ; undo
+            (lambda () (engine-add-annotation annot))))))  ; redo
+
+;; 三、回傳 NIL：no-op、不進 undo stack
+(defcommand goto-page (:interactive "p" :undoable t)
+  (lambda (n) (when (/= n (%current-page)) ...)))
+#+end_src
+
+Framework **不替作者算 inverse、不替作者快照 state**。寫不出 inverse 就
+不該標 =:undoable=、應該寫成普通 =defcommand=。
+
+*** 10.6 Limits（未來）
+
+=*undo-stack*= 大小應有上限（避免無限累積）。預期 API：
+
+| =(undo-stack-size)=             | entry 數                |
+| =(undo-stack-bytes)=            | 近似記憶體              |
+| =(describe-undo-entry idx)=     | 看單 entry 細節          |
+
+視覺化（timeline / tree view）作為 Lisp application：special buffer
+=*undo-tree*= + =view/overlays= 畫節點 + minor mode 接鍵。詳細待 v0.10+。
+
+** 十一、Bridge Introspection
+
+對應 Emacs 的 =describe-function= 對 subr 的 introspection。Limn 的
+「subr-equivalent」是 bridge wire 指令——C++ 端定義、Lisp 端呼叫的
+底層原語。Backend 必須提供：
+
+*** 11.1 Primitive registry（C++ 端）
+
+每個 wire 指令在 C++ 端**用統一介面註冊**：
+
+#+begin_src c++
+LIMN_CMD("view/set", "Update view state (page/zoom/scroll/rotation).",
+         /*required=*/{"win-id"},
+         /*optional=*/{"page", "zoom", "offset-y", "rotation"},
+         /*since=*/"v0.2",
+         cmd_view_set);
+#+end_src
+
+C++ 端維護一個 =command_registry= QHash。dispatch 從這個 registry 查表、
+不是 if/else chain。
+
+*** 11.2 Introspection wire commands
+
+| =bridge/list-primitives=                         | 回所有 registered command 的 metadata list |
+| =bridge/describe-primitive :name STR=            | 回單一 command 的詳細 spec                  |
+| =bridge/trace-enable=                            | 開 trace：每次 dispatch emit bridge-trace event |
+| =bridge/trace-disable=                           |                                              |
+
+回傳 shape：
+
+#+begin_src json
+{"data":[
+   {"name":"view/set", "doc":"Update view state...",
+    "required":["win-id"], "optional":["page","zoom",...],
+    "since":"v0.2"},
+   ...]}
+#+end_src
+
+*** 11.3 Trace event
+
+開啟 trace 後每個 wire 指令 dispatch 觸發一個事件：
+
+#+begin_src json
+{"event":"bridge-trace",
+ "cmd":"view/set",
+ "args":{"win-id":"w1","page":3},
+ "duration-ms":12,
+ "ok":true}
+#+end_src
+
+backend 可以用 hook 接這個事件做 logging、profiling、debugging。
+
+*** 11.4 Lisp 端對應
+
+| =(limn/introspect:list-primitives)=               | 同 wire =bridge/list-primitives= 的 cache |
+| =(limn/introspect:describe-primitive name)=       | 同上                                       |
+| =(limn:trace-bridge t/nil)=                       | 包 enable/disable + 註冊 hook 印 trace      |
+
+*** 11.5 SPEC vs code drift detector
+
+整合測試應該斷言：=bridge/list-primitives= 回傳的 cmd 名稱集合 ⊇ SPEC
+§5/§6/§7 文件記錄的指令名稱集合。SPEC 漏寫或 C++ 漏實作會被自動抓到。
+這是兩件事保持同步的硬性機制——人類靠記憶不可靠。
+
+** 十二、實作路線圖
 
 開發方式：**先寫規格（本文件），再寫測試，再寫程式碼。**
 每個 v 版本的 tests 應在實作前完成。
