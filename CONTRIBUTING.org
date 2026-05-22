@@ -133,9 +133,32 @@ nix develop --command sbcl --script backend/tests/unit/run-unit.lisp
 
 # integration (跑 limn binary，30 秒級)
 nix develop --command bash backend/tests/run-tests.sh
+
+# e2e (跑 limn binary + 真實 backend Lisp client，分鐘級)
+bash backend/tests/e2e/run-e2e.sh
 #+end_src
 
-兩個都該綠才 commit。
+三個都該綠才 commit。
+
+**三層各自負責什麼**：
+
+| 層       | 驅動                         | 覆蓋                                       |
+|----------+------------------------------+--------------------------------------------|
+| unit     | mock client（in-memory FIFO） | 純 Lisp 邏輯、各 module 隔離               |
+| integration | 真 limn binary、raw JSON wire | C++ 端 + bridge 協議                       |
+| e2e      | 真 limn binary、真 backend Lisp client | 使用者實際走的鏈條（key → command → ...） |
+
+unit + integration 都刻意避開 =limn.lisp / limn/cmd / limn/runtime=。
+e2e 補這個缺口。**新加跨模組功能時**寫一個 e2e driver，存到
+=backend/tests/e2e/batch*.lisp=（細節見該目錄 README）。
+
+**已知限制 + v0.9 計畫**：當前 e2e 用 =test/inject-qt-key= 走 Qt-level
+注入，覆蓋 Qt event filter 以下整條 Lisp 鏈，但 macOS HID → AppKit
+→ QApplication 那段沒測。v0.9 第一件事是建 Linux VM-based e2e
+infrastructure（Ubuntu/Alpine + Xvfb + =xdotool=）解鎖真 OS-level
+keyboard / mouse / hover 注入，因為 Linux input 不需要 macOS 那種
+Accessibility 系統授權——「全自動」的前提條件。詳見 LIMN-SPEC v0.9
+roadmap。
 
 *** 3.3 自驗 GUI 改動
 

@@ -900,6 +900,33 @@ Backend Lisp infrastructure：
 完成之後，「Qt 版 Emacs」骨架算成立——使用者能透過 init.lisp 自訂行為、
 不再需要改 framework code。
 
+*** v0.9 Linux VM e2e + per-pane DocumentView + Frame 系統
+
+開發前置（第一件事，獨立 milestone）：
+
+- **Linux VM-based e2e test infrastructure**：v0.8 的 e2e tier 用 Qt-level
+  =test/inject-qt-key= 走 =QApplication::sendEvent=，覆蓋了 input filter
+  以下整條 Lisp 鏈，但 macOS HID → AppKit → QApplication 那段沒測。
+  macOS 用 osascript 要 Accessibility 授權；Linux 沒這擋。所以 v0.9 起
+  端到端 OS-level 測試走 Linux VM：
+  - Ubuntu/Alpine minimal + Qt platform =xcb= + Xvfb
+  - =xdotool= 注入 keyboard / mouse click / mouse move (hover) / drag /
+    scroll / window focus，全部 zero permission
+  - port =backend/tests/e2e/= 的 driver 跑出兩個變體：
+    =batch*-qt.lisp=（既有 Qt-level，跨平台）
+    =batch*-os.lisp=（OS-level，VM 內跑）
+  - CI 友善——Linux runner 免費、self-host 容易
+  - 已知 caveat：Qt 在 Linux ≠ macOS（IME / 字型 / Cmd vs Super）。
+    input 行為 99% 一致，rendering 不對等——pixel-level 還是 macOS 為準
+
+新功能：
+
+- Per-pane independent =DocumentView=（v0.8 split 後 panes 共享 DV、
+  滾一個另一個跟）
+- Frame 系統（多 OS 視窗，§3.2 / §7.2 frame/）
+- Engine-specific default mode（=mupdf= engine → =pdf-mode= 內建鍵綁，
+  v0.8 暫時用 fundamental-mode placeholder）
+
 *** v1.0 完整 Lisp 控制層
 - Key macro、registers——全部 Lisp
 - Bridge 在 v0.4 之後幾乎不再動
