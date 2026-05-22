@@ -152,13 +152,26 @@ unit + integration 都刻意避開 =limn.lisp / limn/cmd / limn/runtime=。
 e2e 補這個缺口。**新加跨模組功能時**寫一個 e2e driver，存到
 =backend/tests/e2e/batch*.lisp=（細節見該目錄 README）。
 
-**已知限制 + v0.9 計畫**：當前 e2e 用 =test/inject-qt-key= 走 Qt-level
+**已知限制 + 下一步**：當前 e2e 用 =test/inject-qt-key= 走 Qt-level
 注入，覆蓋 Qt event filter 以下整條 Lisp 鏈，但 macOS HID → AppKit
-→ QApplication 那段沒測。v0.9 第一件事是建 Linux VM-based e2e
-infrastructure（Ubuntu/Alpine + Xvfb + =xdotool=）解鎖真 OS-level
-keyboard / mouse / hover 注入，因為 Linux input 不需要 macOS 那種
-Accessibility 系統授權——「全自動」的前提條件。詳見 LIMN-SPEC v0.9
-roadmap。
+→ QApplication 那段沒測。macOS 上 OS-level 鍵盤注入需要 Accessibility
+授權（=osascript=、=cliclick=），不適合 default suite。
+
+下一個 implementation milestone（v0.9）整個焦點放在這層補完：
+
+- Debian slim container（最小、Qt6 兼容性穩）
+- Xvfb 虛擬 X server
+- =xdotool= 提供 zero-permission OS-level keyboard / mouse / hover /
+  scroll / window-focus 注入
+- 每個既有 =batch*-qt.lisp= 寫一個 =batch*-os.lisp= 對等版
+- =backend/tests/run-all-tiers.sh= 一鍵跑三層
+
+container 化的好處：dev local + 任何 Linux runner 用同一個 image、
+bit-exact 可重現。Local debug 可用 x11vnc 從 macOS Screen Sharing 連
+=localhost:5900= 看 container 內 Limn 視窗真的被 xdotool 按。
+
+注意：testing 基礎建設不在 LIMN-SPEC 範圍——SPEC 是產品合約（wire 協議、
+runtime 行為），這層是開發過程。兩件事分家。
 
 *** 3.3 自驗 GUI 改動
 
