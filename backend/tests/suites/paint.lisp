@@ -124,17 +124,30 @@
                      "children: ~a" (length (getf tree :|children|)))))
 
 (deftest test-paint-pdf-viewport-present
-  "There's exactly one OpenGL widget — sioyek's PdfViewOpenGLWidget.
-   When window-splitting goes from logical-only → real Qt split, this
-   test should be UPDATED to assert >=2 after a bridge/win-split."
+  "At least one OpenGL viewport widget present after startup."
   (let* ((tree (widget-tree))
-         ;; sioyek's PdfViewOpenGLWidget is a QOpenGLWidget subclass; the
-         ;; class name we see may be either depending on moc.
          (gls (or (find-widgets-by-class tree "PdfViewOpenGLWidget")
                   (find-widgets-by-class tree "QOpenGLWidget"))))
     (check-assertion (>= (length gls) 1)
                      "at least one OpenGL viewport widget"
                      "got ~a" (length gls))))
+
+(deftest test-paint-win-split-produces-second-viewport
+  "Per SPEC v0.5 §5.1, bridge/win-split in GUI mode MUST produce an
+   actually-visible second viewport widget — not just a logical id."
+  (let* ((tree-before (widget-tree))
+         (before-count (length
+                        (or (find-widgets-by-class tree-before "PdfViewOpenGLWidget")
+                            (find-widgets-by-class tree-before "QOpenGLWidget")))))
+    (send! "bridge/win-split" :|win-id| "w1" :|dir| "h")
+    (sleep 0.1)   ;; let Qt re-layout
+    (let* ((tree-after (widget-tree))
+           (after-count (length
+                         (or (find-widgets-by-class tree-after "PdfViewOpenGLWidget")
+                             (find-widgets-by-class tree-after "QOpenGLWidget")))))
+      (check-assertion (= after-count (1+ before-count))
+                       "split adds exactly one viewport widget"
+                       "before=~a after=~a" before-count after-count))))
 
 (deftest test-paint-load-buffer-changes-pixels
   "Loading a PDF SHOULD change the rendered pixels. Currently informational:
