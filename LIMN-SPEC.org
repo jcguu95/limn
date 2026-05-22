@@ -47,19 +47,35 @@ Mode 的定義跟切換邏輯都在 backend；frontend 只透過 =modeline/set= 
 *** 1.2 Chrome primitives
 
 「Chrome」指 framework 本身的視覺零件，跟 buffer 內容區分。任何 Limn
-frontend 必須提供三個：
+frontend 必須提供四個 chrome 元素，**前三個是 text-engine buffer，第
+四個是 window 的顯示屬性、不是 buffer**——這個區別跟 Emacs 一致。
+
+**Buffer-backed chrome（三個）**：
 
 - **Minibuffer**：universal input prompt。=M-x=、=/=、=C-x C-f=、=M-:=
-  等所有從使用者讀字串的場景共用同一個 widget。本身是一個 text-engine
-  buffer，有自己的 keymap（=minibuffer-mode=）。指令見 §5.4。
+  等所有從使用者讀字串的場景共用同一個 buffer，有保留 ID
+  =*minibuffer*=，有自己的 keymap（=minibuffer-mode=）。指令見 §5.4。
 - **Echo area**：minibuffer 閒置時的同一條畫面區域，印 message / error /
-  hint。同時累積成 =*Messages*= text-engine buffer。指令見 §5.5。
-- **Modeline**：每個 window 底部一條 status line，顯示目前 mode 名、
-  buffer 名、scroll 位置等。指令見 §5.6。
+  hint。是 buffer，保留 ID =*echo-area*=；內容是「目前要顯示的單行」，
+  =message/echo= 寫進去同時也 append 到 =*messages*=。對應 Emacs 的
+  =\ *Echo Area 0*= / =\ *Echo Area 1*=（前綴空格的 hidden buffer，且
+  做 double-buffering——後續優化）。
+- ***Messages***：累積所有 message 的 buffer，保留 ID =*messages*=。可
+  以用 =buffer/text :|buffer-id| "*messages*"= 直接拿歷史。
 
-三者底層都是 text-engine buffer——好處是同一套 =buffer/*= 指令、同一個
-渲染路徑、同一份 SPEC 對待，frontend 不必特別處理「框架內部」vs「使用者
-內容」的區別。Text engine 是 bundled engine 之一，見 §7.6。
+三者統一好處：使用者跟 framework 都用同一套 =buffer/*= 指令訪問，未來可
+以套 mode（=messages-mode=、=minibuffer-mode=）、可以用 =view/overlays=
+高亮、可以無痛 redirect 到任何其他 text-engine 用例。
+
+**Window decoration（不是 buffer）**：
+
+- **Modeline**：每個 window 底部一條 status line，顯示**關於 buffer**
+  的資訊（mode 名、buffer 名、scroll 位置等）。**不**是 buffer——是
+  per-window 的 format string，與 Emacs 的 =mode-line-format= 對應；
+  同個 buffer 在不同 window 可有不同 modeline。指令見 §5.6。
+
+Text engine 是 bundled engine 之一，所以以上三個 buffer 一律存在、可
+透過 =buffer/text= 訪問。詳見 §7.6。
 
 ** 二、架構
 

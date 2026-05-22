@@ -120,22 +120,27 @@ private:
     bool                test_mode;
 
     // ─── text engine state (SPEC §7.6) ─────────────────────────────
-    // Minimal "text" engine: a buffer-id → content map. IDs prefixed
-    // with 't' to distinguish from mupdf's 'b' prefix.
+    // The "text" engine's content store. Two kinds of buffer-id live
+    // here:
+    //   - User-allocated buffers from bridge/engine-load (engine=text):
+    //     IDs like t1, t2, ... — see next_text_seq.
+    //   - Reserved chrome buffers, bootstrapped in the LimnCommand
+    //     constructor and never deleted:
+    //         "*minibuffer*"   current minibuffer typed text
+    //         "*echo-area*"    single-line "what to show in the echo
+    //                          area when minibuffer is closed"
+    //         "*messages*"     accumulated message log (Emacs *Messages*)
+    //
+    // §1.2 says all chrome text surfaces are text-engine buffers; this
+    // is where that promise materialises. ChromeBar (Qt widget) just
+    // reads the strings via the helpers below.
     QHash<QString, QString> text_buffers;
     int                     next_text_seq = 1;
 
-    // ─── chrome text state (SPEC §5.5) ─────────────────────────────
-    // Accumulated *Messages* log, plus current echo-area content.
-    // v0.7 state-only; the widget that displays these lands later.
-    QString  messages_log;
-    QString  echo_area_text;
-
-    // ─── minibuffer state (SPEC §5.4) ──────────────────────────────
-    // Single-instance widget state. open=false → closed (and the
-    // filter routes keys normally). open=true → filter intercepts
-    // printable / RET / ESC, emits minibuffer-* events instead.
+    // ─── minibuffer meta-state (SPEC §5.4) ─────────────────────────
+    // The text content lives in text_buffers["*minibuffer*"]. These
+    // two are the "frame around" the content: is the minibuffer
+    // currently shown? what's the prompt prefix?
     bool     minibuffer_open = false;
     QString  minibuffer_prompt;
-    QString  minibuffer_text;
 };

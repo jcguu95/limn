@@ -50,7 +50,15 @@ LimnCommand::LimnCommand(LimnBridge*         bridge,
       registry(registry),
       windows(windows),
       main_widget(main_widget),
-      test_mode(options.test_mode) {}
+      test_mode(options.test_mode) {
+    // SPEC §1.2: bootstrap the three reserved text-engine buffers that
+    // back the chrome text surfaces. These IDs are intentionally
+    // bracketed with asterisks so they never collide with the auto-
+    // allocated t1 / t2 / ... ids for user-opened text buffers.
+    text_buffers.insert("*minibuffer*", QString());
+    text_buffers.insert("*echo-area*",  QString());
+    text_buffers.insert("*messages*",   QString());
+}
 
 // ─── Dispatch ──────────────────────────────────────────────────────────
 
@@ -489,9 +497,9 @@ inline LimnChromeBar* chrome_of(MainWidget* mw) {
 void LimnCommand::cmd_minibuffer_open(const QString& id, const QJsonObject& msg) {
     minibuffer_open   = true;
     minibuffer_prompt = msg.value("prompt").toString();   // empty = no prompt
-    minibuffer_text.clear();                              // fresh each open
+    text_buffers["*minibuffer*"].clear();                 // fresh each open
     if (auto* c = chrome_of(main_widget))
-        c->set_minibuffer(true, minibuffer_prompt, minibuffer_text);
+        c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
     bridge->send_ok(id);
 }
 
@@ -509,7 +517,7 @@ void LimnCommand::cmd_minibuffer_set_prompt(const QString& id, const QJsonObject
     }
     minibuffer_prompt = msg.value("prompt").toString();
     if (auto* c = chrome_of(main_widget))
-        c->set_minibuffer(true, minibuffer_prompt, minibuffer_text);
+        c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
     bridge->send_ok(id);
 }
 
@@ -518,9 +526,9 @@ void LimnCommand::cmd_minibuffer_set_text(const QString& id, const QJsonObject& 
         bridge->send_fail(id, "minibuffer/set-text: minibuffer is not open");
         return;
     }
-    minibuffer_text = msg.value("text").toString();
+    text_buffers["*minibuffer*"] = msg.value("text").toString();
     if (auto* c = chrome_of(main_widget))
-        c->set_minibuffer(true, minibuffer_prompt, minibuffer_text);
+        c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
     bridge->send_ok(id);
 }
 
@@ -528,7 +536,7 @@ void LimnCommand::cmd_minibuffer_get(const QString& id, const QJsonObject&) {
     QJsonObject data;
     data.insert("open",   minibuffer_open);
     data.insert("prompt", minibuffer_prompt);
-    data.insert("text",   minibuffer_text);
+    data.insert("text",   text_buffers["*minibuffer*"]);
     bridge->send_ok(id, data);
 }
 
@@ -550,7 +558,7 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     ev.insert("frame-id", "f1");
 
     if (key == "RET") {
-        ev.insert("text", minibuffer_text);
+        ev.insert("text", text_buffers["*minibuffer*"]);
         bridge->push_event("minibuffer-submit", ev);
         return true;
     }
@@ -560,10 +568,10 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     }
     // Printable single-character key → accumulate into text.
     if (key.size() == 1 && key.at(0).isPrint() && !key.at(0).isSpace()) {
-        minibuffer_text.append(key);
+        text_buffers["*minibuffer*"].append(key);
         if (auto* c = chrome_of(main_widget))
-            c->set_minibuffer(true, minibuffer_prompt, minibuffer_text);
-        ev.insert("text", minibuffer_text);
+            c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
+        ev.insert("text", text_buffers["*minibuffer*"]);
         bridge->push_event("minibuffer-input", ev);
         return true;
     }
@@ -584,15 +592,21 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
 // holds what would be shown in the bottom status line. Widget rendering
 // lands in a later batch.
 
+// message/* writes to the reserved chrome buffers. Following Emacs:
+//   echo → append to *messages* (the log) AND replace *echo-area* (display)
+//   log  → only append to *messages* (silent / background)
+//   clear→ wipe *echo-area* only; *messages* history untouched
+
 void LimnCommand::cmd_message_echo(const QString& id, const QJsonObject& msg) {
     const QString text = msg.value("text").toString();
     if (text.isEmpty()) {
         bridge->send_fail(id, "message/echo: text must be non-empty");
         return;
     }
-    if (!messages_log.isEmpty()) messages_log.append('\n');
-    messages_log.append(text);
-    echo_area_text = text;
+    QString& log = text_buffers["*messages*"];
+    if (!log.isEmpty()) log.append('\n');
+    log.append(text);
+    text_buffers["*echo-area*"] = text;
     if (auto* c = chrome_of(main_widget)) c->set_echo(text);
     bridge->send_ok(id);
 }
@@ -603,13 +617,14 @@ void LimnCommand::cmd_message_log(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, "message/log: text must be non-empty");
         return;
     }
-    if (!messages_log.isEmpty()) messages_log.append('\n');
-    messages_log.append(text);
+    QString& log = text_buffers["*messages*"];
+    if (!log.isEmpty()) log.append('\n');
+    log.append(text);
     bridge->send_ok(id);
 }
 
 void LimnCommand::cmd_message_clear(const QString& id, const QJsonObject&) {
-    echo_area_text.clear();
+    text_buffers["*echo-area*"].clear();
     if (auto* c = chrome_of(main_widget)) c->set_echo(QString());
     bridge->send_ok(id);
 }
