@@ -58,6 +58,9 @@ LimnCommand::LimnCommand(LimnBridge*         bridge,
     text_buffers.insert("*minibuffer*", QString());
     text_buffers.insert("*echo-area*",  QString());
     text_buffers.insert("*messages*",   QString());
+    text_cursors.insert("*minibuffer*", 0);
+    text_cursors.insert("*echo-area*",  0);
+    text_cursors.insert("*messages*",   0);
 }
 
 // ─── Dispatch ──────────────────────────────────────────────────────────
@@ -112,6 +115,10 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "buffer/metadata")      { cmd_buffer_metadata     (id, msg); return; }
     if (cmd == "buffer/render")        { cmd_buffer_render       (id, msg); return; }
     if (cmd == "buffer/render-region") { cmd_buffer_render_region(id, msg); return; }
+    if (cmd == "buffer/cursor-get")    { cmd_buffer_cursor_get   (id, msg); return; }
+    if (cmd == "buffer/cursor-set")    { cmd_buffer_cursor_set   (id, msg); return; }
+    if (cmd == "buffer/insert")        { cmd_buffer_insert       (id, msg); return; }
+    if (cmd == "buffer/delete")        { cmd_buffer_delete       (id, msg); return; }
 
     // test/* — only available when --test-mode was set on startup
     if (cmd.startsWith("test/")) {
@@ -177,6 +184,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     if (engine == "text") {
         const QString tid = QString("t%1").arg(next_text_seq++);
         text_buffers.insert(tid, QString());
+        text_cursors.insert(tid, 0);
         win->buffer_id     = tid;
         win->page          = 0;
         win->zoom          = 1.0f;
@@ -861,18 +869,147 @@ void LimnCommand::cmd_buffer_close(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, "missing 'buffer-id'");
         return;
     }
+
+    // Text-engine buffer? Refuse to close reserved chrome ones (they're
+    // bootstrapped at startup and must always exist). Allow tN closes.
+    if (text_buffers.contains(buffer_id)) {
+        if (buffer_id.startsWith('*')) {
+            bridge->send_fail(id, QString("can't close reserved chrome buffer: %1")
+                                  .arg(buffer_id));
+            return;
+        }
+        text_buffers.remove(buffer_id);
+        text_cursors.remove(buffer_id);
+        for (const QString& wid : windows->all_ids()) {
+            LimnWindow* w = windows->get(wid);
+            if (w && w->buffer_id == buffer_id) w->buffer_id.clear();
+        }
+        bridge->send_ok(id);
+        emit_buffer_closed(buffer_id);
+        return;
+    }
+
+    // mupdf path
     if (!registry->lookup(buffer_id)) {
         bridge->send_fail(id, QString("unknown buffer-id: %1").arg(buffer_id));
         return;
     }
     registry->unregister(buffer_id);
-    // Detach from any window that pointed at this buffer.
     for (const QString& wid : windows->all_ids()) {
         LimnWindow* w = windows->get(wid);
         if (w && w->buffer_id == buffer_id) w->buffer_id.clear();
     }
     bridge->send_ok(id);
     emit_buffer_closed(buffer_id);
+}
+
+// ─── SPEC v0.5 §5.3 後段 — text-engine 編輯 primitives ─────────────────
+//
+// 共通約定：
+//   - 只對 text engine（buffer-id 在 text_buffers）生效；mupdf 等 read
+//     only engine 一律回 "not supported"。
+//   - cursor 是 buffer-local 的 int offset (0 .. text.length())。
+//   - insert 預設在 cursor 處插入並推進 cursor。
+//   - delete [from, to) 半開區間；cursor 落在被刪範圍內 → 移到 from；
+//     落在範圍之後 → 跟著左移；之前不變。
+
+namespace {
+// Validate "this buffer-id is a text-engine buffer in our registry".
+// Returns true and outputs buffer-id; false and sends fail otherwise.
+bool resolve_text_buffer(LimnBridge* bridge,
+                         const QHash<QString, QString>& text_buffers,
+                         const QString& id, const QJsonObject& msg,
+                         QString& out_buf) {
+    const QString buf = msg.value("buffer-id").toString();
+    if (buf.isEmpty()) {
+        bridge->send_fail(id, "missing 'buffer-id'");
+        return false;
+    }
+    if (!text_buffers.contains(buf)) {
+        bridge->send_fail(id, "not supported (buffer is not a text-engine buffer)");
+        return false;
+    }
+    out_buf = buf;
+    return true;
+}
+}  // anonymous
+
+void LimnCommand::cmd_buffer_cursor_get(const QString& id, const QJsonObject& msg) {
+    QString buf;
+    if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
+    QJsonObject data;
+    data.insert("offset", text_cursors.value(buf, 0));
+    bridge->send_ok(id, data);
+}
+
+void LimnCommand::cmd_buffer_cursor_set(const QString& id, const QJsonObject& msg) {
+    QString buf;
+    if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
+    if (!msg.contains("offset") || !msg.value("offset").isDouble()) {
+        bridge->send_fail(id, "missing or invalid 'offset'");
+        return;
+    }
+    const int offset = msg.value("offset").toInt();
+    const int len    = text_buffers.value(buf).length();
+    if (offset < 0 || offset > len) {
+        bridge->send_fail(id, QString("offset %1 out of range [0, %2]")
+                              .arg(offset).arg(len));
+        return;
+    }
+    text_cursors[buf] = offset;
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_buffer_insert(const QString& id, const QJsonObject& msg) {
+    QString buf;
+    if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
+    const QString text = msg.value("text").toString();
+    if (text.isEmpty()) {
+        bridge->send_fail(id, "missing or empty 'text'");
+        return;
+    }
+    QString& content = text_buffers[buf];
+    int& cursor      = text_cursors[buf];
+
+    int at;
+    if (msg.contains("at") && msg.value("at").isDouble()) {
+        at = msg.value("at").toInt();
+        if (at < 0 || at > content.length()) {
+            bridge->send_fail(id, QString("'at' offset %1 out of range").arg(at));
+            return;
+        }
+    } else {
+        at = cursor;
+    }
+    content.insert(at, text);
+    // Cursor shifts: AT-or-BEFORE-cursor insertion pushes cursor right;
+    // AFTER-cursor insertion leaves cursor in place.
+    if (at <= cursor) cursor += text.length();
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_buffer_delete(const QString& id, const QJsonObject& msg) {
+    QString buf;
+    if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
+    if (!msg.contains("from") || !msg.value("from").isDouble() ||
+        !msg.contains("to")   || !msg.value("to").isDouble()) {
+        bridge->send_fail(id, "missing or invalid 'from' / 'to'");
+        return;
+    }
+    const int from = msg.value("from").toInt();
+    const int to   = msg.value("to").toInt();
+    QString& content = text_buffers[buf];
+    if (from < 0 || to > content.length() || from > to) {
+        bridge->send_fail(id, QString("range [%1, %2) out of buffer (len=%3)")
+                              .arg(from).arg(to).arg(content.length()));
+        return;
+    }
+    content.remove(from, to - from);
+    // Adjust cursor based on its position vs deleted range:
+    int& cursor = text_cursors[buf];
+    if (cursor >= to)   cursor -= (to - from);     // shifted left by removed chars
+    else if (cursor > from) cursor = from;         // was inside, snap to start
+    bridge->send_ok(id);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────

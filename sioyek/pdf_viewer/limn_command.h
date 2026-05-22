@@ -62,6 +62,11 @@ private:
     void cmd_buffer_metadata     (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render       (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render_region(const QString& id, const QJsonObject& msg);
+    // SPEC v0.5 §5.3 後段 — text engine 編輯 primitives
+    void cmd_buffer_cursor_get   (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_cursor_set   (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_insert       (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_delete       (const QString& id, const QJsonObject& msg);
 
     // ─── test/* (enabled only when --test-mode is set) ────────────────
     void cmd_test_inject_key        (const QString& id, const QJsonObject& msg);
@@ -135,6 +140,7 @@ private:
     // is where that promise materialises. ChromeBar (Qt widget) just
     // reads the strings via the helpers below.
     QHash<QString, QString> text_buffers;
+    QHash<QString, int>     text_cursors;     // per-buffer cursor (offset)
     int                     next_text_seq = 1;
 
     // ─── minibuffer meta-state (SPEC §5.4) ─────────────────────────
