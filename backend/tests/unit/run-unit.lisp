@@ -48,7 +48,8 @@
                 "dispatch.lisp"
                 "mode.lisp"
                 "defcommand.lisp"
-                "runtime.lisp"))
+                "runtime.lisp"
+                "minibuffer-read.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

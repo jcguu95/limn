@@ -226,6 +226,14 @@
     ;; for the three chrome buffer-ids so they have keymap stacks from
     ;; the moment the session is up. User init.lisp can override either.
     (%bootstrap-runtime)
+    ;; Install the real minibuffer reader so defcommand "s" specs do a
+    ;; live bridge round-trip instead of erroring. Bound to THIS session.
+    (let ((mk (and (find-package :limn/runtime)
+                   (find-symbol "MAKE-MINIBUFFER-READER" :limn/runtime)))
+          (slot (and (find-package :limn/cmd)
+                     (find-symbol "*MINIBUFFER-READ*" :limn/cmd))))
+      (when (and mk slot)
+        (setf (symbol-value slot) (funcall mk s))))
     ;; Spawn a background pump thread so events the user generates in the
     ;; Qt window fire their bindings while the REPL is at the prompt. Tests
     ;; with mock clients can call STOP-PUMP-THREAD if they don't want it.

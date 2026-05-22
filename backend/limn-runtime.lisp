@@ -32,7 +32,10 @@
            ;; limn/mode keys modes by `eq` on symbol, so the package the
            ;; symbol lives in matters. Anyone customising chrome modes
            ;; should call define-mode on these exact symbols.
-           #:minibuffer-mode #:fundamental-mode))
+           #:minibuffer-mode #:fundamental-mode
+           ;; Minibuffer round-trip: builds the limn/cmd:*minibuffer-read*
+           ;; thunk that the framework installs at session start.
+           #:make-minibuffer-reader #:minibuffer-cancelled))
 
 (in-package #:limn/runtime)
 
@@ -129,3 +132,56 @@
       ;; custom modes).
       (when (limn/mode:find-mode mode-name)
         (limn/mode:activate mb mode-name)))))
+
+;;; ── minibuffer round-trip ──────────────────────────────────────────────
+;;;
+;;; defcommand with an "s" interactive spec gathers its string argument
+;;; via limn/cmd:*minibuffer-read*. Until batch 7, that was a stub that
+;;; errored. Now we ship a real reader:
+;;;
+;;;   1. send minibuffer/open with prompt
+;;;   2. block on wait-for-event until minibuffer-submit or
+;;;      minibuffer-cancel fires
+;;;   3. send minibuffer/close (always, per SPEC §5.4)
+;;;   4. return the submitted text, or signal MINIBUFFER-CANCELLED
+;;;
+;;; Returned as a closure over SESSION so tests can use mock sessions
+;;; without depending on limn:*session*.
+
+(define-condition minibuffer-cancelled (error)
+  ()
+  (:report (lambda (c s) (declare (ignore c))
+             (format s "minibuffer input cancelled"))))
+
+(defun make-minibuffer-reader (session)
+  "Build a (function (prompt) → text) bound to SESSION. Install it as
+   limn/cmd:*minibuffer-read* so interactive commands can prompt."
+  (lambda (prompt)
+    (let ((submitted nil)   ; :submit / :cancel / nil
+          (text      nil))
+      (labels ((on-submit (ev)
+                 (setf text (getf ev :|text|) submitted :submit))
+               (on-cancel (ev)
+                 (declare (ignore ev))
+                 (setf submitted :cancel)))
+        (let ((sub-hook (limn/dispatch:event-hook-name "minibuffer-submit"))
+              (can-hook (limn/dispatch:event-hook-name "minibuffer-cancel")))
+          (unwind-protect
+               (progn
+                 (limn/hooks:add-hook sub-hook #'on-submit)
+                 (limn/hooks:add-hook can-hook #'on-cancel)
+                 (limn/dispatch:call session "minibuffer/open"
+                                     :|prompt| prompt)
+                 (limn/dispatch:wait-for-event
+                  session (lambda () submitted)
+                  ;; Generous default: 5 min lets a user pause to think.
+                  :timeout 300.0))
+            (limn/hooks:remove-hook sub-hook #'on-submit)
+            (limn/hooks:remove-hook can-hook #'on-cancel)
+            ;; Always close — frontend keeps the widget open otherwise.
+            (handler-case (limn/dispatch:call session "minibuffer/close")
+              (error () nil)))
+          (case submitted
+            (:submit text)
+            (:cancel (error 'minibuffer-cancelled))
+            (t       (error "minibuffer-read: wait returned without flag"))))))))
