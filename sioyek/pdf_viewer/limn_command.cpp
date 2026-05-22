@@ -2,6 +2,7 @@
 
 #include "limn_bridge.h"
 #include "limn_buffer_registry.h"
+#include "limn_chrome_bar.h"
 #include "limn_engine_mupdf.h"
 #include "limn_options.h"
 #include "limn_window_registry.h"
@@ -476,15 +477,28 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
 // widget lands in a later batch; here we just track open/prompt/text
 // and route keystrokes via minibuffer_handle_key.
 
+// Mirror minibuffer state to the chrome widget (if MainWidget has one).
+// Called after every minibuffer state mutation. Safe in headless / unit-
+// test mode where chrome_bar() may be null.
+namespace {
+inline LimnChromeBar* chrome_of(MainWidget* mw) {
+    return mw ? mw->chrome_bar() : nullptr;
+}
+}
+
 void LimnCommand::cmd_minibuffer_open(const QString& id, const QJsonObject& msg) {
     minibuffer_open   = true;
     minibuffer_prompt = msg.value("prompt").toString();   // empty = no prompt
     minibuffer_text.clear();                              // fresh each open
+    if (auto* c = chrome_of(main_widget))
+        c->set_minibuffer(true, minibuffer_prompt, minibuffer_text);
     bridge->send_ok(id);
 }
 
 void LimnCommand::cmd_minibuffer_close(const QString& id, const QJsonObject&) {
     minibuffer_open = false;
+    if (auto* c = chrome_of(main_widget))
+        c->set_minibuffer(false, QString(), QString());
     bridge->send_ok(id);
 }
 
@@ -494,6 +508,8 @@ void LimnCommand::cmd_minibuffer_set_prompt(const QString& id, const QJsonObject
         return;
     }
     minibuffer_prompt = msg.value("prompt").toString();
+    if (auto* c = chrome_of(main_widget))
+        c->set_minibuffer(true, minibuffer_prompt, minibuffer_text);
     bridge->send_ok(id);
 }
 
@@ -503,6 +519,8 @@ void LimnCommand::cmd_minibuffer_set_text(const QString& id, const QJsonObject& 
         return;
     }
     minibuffer_text = msg.value("text").toString();
+    if (auto* c = chrome_of(main_widget))
+        c->set_minibuffer(true, minibuffer_prompt, minibuffer_text);
     bridge->send_ok(id);
 }
 
@@ -543,6 +561,8 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     // Printable single-character key → accumulate into text.
     if (key.size() == 1 && key.at(0).isPrint() && !key.at(0).isSpace()) {
         minibuffer_text.append(key);
+        if (auto* c = chrome_of(main_widget))
+            c->set_minibuffer(true, minibuffer_prompt, minibuffer_text);
         ev.insert("text", minibuffer_text);
         bridge->push_event("minibuffer-input", ev);
         return true;
@@ -573,6 +593,7 @@ void LimnCommand::cmd_message_echo(const QString& id, const QJsonObject& msg) {
     if (!messages_log.isEmpty()) messages_log.append('\n');
     messages_log.append(text);
     echo_area_text = text;
+    if (auto* c = chrome_of(main_widget)) c->set_echo(text);
     bridge->send_ok(id);
 }
 
@@ -589,6 +610,7 @@ void LimnCommand::cmd_message_log(const QString& id, const QJsonObject& msg) {
 
 void LimnCommand::cmd_message_clear(const QString& id, const QJsonObject&) {
     echo_area_text.clear();
+    if (auto* c = chrome_of(main_widget)) c->set_echo(QString());
     bridge->send_ok(id);
 }
 
@@ -615,6 +637,9 @@ void LimnCommand::cmd_modeline_set(const QString& id, const QJsonObject& msg) {
     if (msg.contains("left"))   win->modeline_left   = msg.value("left").toString();
     if (msg.contains("middle")) win->modeline_middle = msg.value("middle").toString();
     if (msg.contains("right"))  win->modeline_right  = msg.value("right").toString();
+    if (auto* c = chrome_of(main_widget)) {
+        c->set_modeline(win->modeline_left, win->modeline_middle, win->modeline_right);
+    }
     bridge->send_ok(id);
 }
 

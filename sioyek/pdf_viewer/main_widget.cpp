@@ -10,6 +10,7 @@
 #include "pdf_view_opengl_widget.h"
 #include "database.h"
 #include "checksum.h"
+#include "limn_chrome_bar.h"
 #include "config.h"
 #include "path.h"
 
@@ -44,7 +45,19 @@ MainWidget::MainWidget(QWidget* parent) : QMainWindow(parent) {
 
     connect(pdf_renderer_, &PdfRenderer::render_advance,
             opengl_widget_, QOverload<>::of(&QWidget::update));
-    setCentralWidget(opengl_widget_);
+
+    // ── Limn chrome (SPEC §1.2 / §5.4–§5.6) ──────────────────────────
+    // Stack the OpenGL viewport on top of a fixed-height chrome bar that
+    // hosts modeline + echo / minibuffer rows. The two share the same
+    // QMainWindow centralWidget via a vertical layout.
+    chrome_bar_ = new LimnChromeBar(this);
+    auto* central  = new QWidget(this);
+    auto* layout   = new QVBoxLayout(central);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(opengl_widget_, 1);   // stretch=1, gets all remaining height
+    layout->addWidget(chrome_bar_, 0);      // takes its natural fixed height
+    setCentralWidget(central);
     resize(1200, 900);
 }
 

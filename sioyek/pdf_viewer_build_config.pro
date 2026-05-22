@@ -48,6 +48,7 @@ HEADERS += \
     pdf_viewer/limn_engine_mupdf.h \
     pdf_viewer/limn_input.h \
     pdf_viewer/limn_window_registry.h \
+    pdf_viewer/limn_chrome_bar.h \
     fzf/fzf.h
 
 SOURCES += \
@@ -72,6 +73,7 @@ SOURCES += \
     pdf_viewer/limn_engine_mupdf.cpp \
     pdf_viewer/limn_input.cpp \
     pdf_viewer/limn_window_registry.cpp \
+    pdf_viewer/limn_chrome_bar.cpp \
     fzf/fzf.c
 
 mac {

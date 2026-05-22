@@ -7,6 +7,7 @@ class PdfViewOpenGLWidget;
 class DatabaseManager;
 class DocumentManager;
 class CachedChecksummer;
+class LimnChromeBar;
 
 // MainWidget hosts the PDF view. Bridge / dispatch / events live in
 // separate files (limn_bridge.*, limn_command.*). MainWidget exposes
@@ -24,6 +25,7 @@ public:
     DocumentView*        document_view()    { return document_view_; }
     PdfViewOpenGLWidget* opengl_widget()    { return opengl_widget_; }
     DocumentManager*     document_manager() { return document_manager_; }
+    LimnChromeBar*       chrome_bar()       { return chrome_bar_; }
 
 private:
     PdfViewOpenGLWidget* opengl_widget_    = nullptr;
@@ -32,4 +34,5 @@ private:
     DatabaseManager*     db_manager_       = nullptr;
     DocumentManager*     document_manager_ = nullptr;
     CachedChecksummer*   checksummer_      = nullptr;
+    LimnChromeBar*       chrome_bar_       = nullptr;
 };
