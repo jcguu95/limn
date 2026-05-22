@@ -34,6 +34,7 @@
                 "limn-mode.lisp"
                 "limn-cmd.lisp"
                 "limn-runtime.lisp"
+                "limn-introspect.lisp"
                 "limn.lisp"))
   (load (b/ file)))
 

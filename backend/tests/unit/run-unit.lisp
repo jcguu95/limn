@@ -35,7 +35,8 @@
                 "limn-dispatch.lisp"
                 "limn-mode.lisp"
                 "limn-cmd.lisp"
-                "limn-runtime.lisp"))
+                "limn-runtime.lisp"
+                "limn-introspect.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -55,7 +56,8 @@
                 "runtime.lisp"
                 "minibuffer-read.lisp"
                 "keyboard-quit.lisp"
-                "init-load.lisp"))
+                "init-load.lisp"
+                "introspect.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

@@ -343,11 +343,51 @@
 ;;; ── keymap helpers ─────────────────────────────────────────────────────
 
 (defun bind (spec action)
-  "Bind a key sequence (e.g. \"C-x C-f\") to ACTION (a function of one
-   argument: the originating key event plist)."
+  "Bind a key sequence (e.g. \"C-x C-f\") to ACTION.
+
+   ACTION can be:
+     - a function of one argument (the originating key-event plist),
+       bound directly
+     - a command-name SYMBOL — wrapped in a call-interactively closure
+       AND registered in limn/introspect's reverse table so
+       (where-is-command sym) can find this binding. The command must
+       already be defined (defcommand) — error otherwise.
+
+   Lambda bindings are invisible to where-is-command (same limit as
+   Emacs). Bind a symbol when you want discoverability."
   (unless *global-keymap*
     (setf *global-keymap* (%call :limn/keys '#:make-keymap)))
-  (%call :limn/keys '#:define-key *global-keymap* spec action))
+  (let ((final-action
+          (cond
+            ((symbolp action)
+             (let* ((cmd-pkg (find-package :limn/cmd))
+                    (find-cmd (and cmd-pkg (find-symbol "FIND-COMMAND" cmd-pkg)))
+                    (call-int (and cmd-pkg (find-symbol "CALL-INTERACTIVELY"
+                                                          cmd-pkg))))
+               (unless (and find-cmd (funcall find-cmd action))
+                 (error "limn:bind: ~s is not a defined command" action))
+               ;; Register the binding for where-is-command.
+               (let* ((isp-pkg (find-package :limn/introspect))
+                      (register (and isp-pkg
+                                     (find-symbol "REGISTER-BINDING"
+                                                  isp-pkg))))
+                 (when register
+                   (funcall register action *global-keymap* spec)))
+               ;; Wrap so the key-event signature still matches.
+               (lambda (ev) (declare (ignore ev))
+                 (handler-case (funcall call-int action)
+                   ;; minibuffer-cancelled is the intended outcome of a
+                   ;; user-pressed C-g — don't let it propagate out of
+                   ;; the binding and pollute *error-output*.
+                   (error (e)
+                     (let ((mc (and (find-package :limn/runtime)
+                                    (find-symbol "MINIBUFFER-CANCELLED"
+                                                 :limn/runtime))))
+                       (if (and mc (typep e mc))
+                           nil
+                           (signal e))))))))
+            (t action))))
+    (%call :limn/keys '#:define-key *global-keymap* spec final-action)))
 
 (defun unbind (spec)
   (when *global-keymap*
