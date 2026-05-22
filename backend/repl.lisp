@@ -98,9 +98,7 @@
 (limn:start *limn-socket-path*)
 
 (load (b/ "repl-helpers.lisp"))
-(load (b/ "keybinds-vim.lisp"))
 (banner)
-(format t "  vim bindings available: (vim/install) / (vim/uninstall)~%~%")
 
 ;;; Ensure cleanup if the user just hits Ctrl-D instead of (q)
 (push (lambda ()
