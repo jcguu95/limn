@@ -991,6 +991,20 @@ void LimnCommand::cmd_buffer_toc(const QString& id, const QJsonObject& msg) {
 }
 
 void LimnCommand::cmd_buffer_text(const QString& id, const QJsonObject& msg) {
+    const QString buffer_id = msg.value("buffer-id").toString();
+
+    // Text-engine buffer (chrome or user-opened) — return {text: "..."} as
+    // a single string. SPEC §5.3 lets each engine pick its response shape
+    // for buffer/text; for text engines there's no spatial layout so we
+    // skip the words+rect form mupdf uses.
+    if (text_buffers.contains(buffer_id)) {
+        QJsonObject data;
+        data.insert("text", text_buffers.value(buffer_id));
+        bridge->send_ok(id, data);
+        return;
+    }
+
+    // Otherwise: mupdf path (per-page text extraction with rects).
     Document* doc = resolve_buffer(bridge, registry, id, msg);
     if (!doc) return;
     if (!msg.contains("page") || !msg.value("page").isDouble()) {
