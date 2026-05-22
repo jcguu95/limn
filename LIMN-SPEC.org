@@ -1,4 +1,4 @@
-* Limn 規格書 v0.4
+* Limn 規格書 v0.5
 
 Limn 是一個由 Common Lisp（SBCL）控制的顯示框架。
 Backend（Lisp）透過 Bridge（Unix socket + JSON）驅動 Frontend（Qt）。
@@ -228,6 +228,9 @@ limn/
 {"id":"r3", "cmd":"bridge/win-split",  "win-id":"w1", "dir":"h"}
 → {"id":"r3", "ok":true, "data":{"win-a":"w1", "win-b":"w2"}}
 
+// 在真實 GUI 模式下，=bridge/win-split= 必須產生實際可見的視窗分割
+// （例如 QSplitter）；headless / test 模式可只追蹤 logical state。
+
 {"id":"r4", "cmd":"bridge/win-close",  "win-id":"w2"}
 {"id":"r5", "cmd":"bridge/win-focus",  "win-id":"w1"}
 {"id":"r6", "cmd":"bridge/win-list"}
@@ -353,6 +356,37 @@ engine 依能力實作。=buffer/open= 回應中的 =supports= 欄位
    "data":{"title":"...","author":"...","page-count":42,"format":"pdf"}}
 #+end_src
 
+**Buffer 編輯**（text engine 適用；非文字 engine 一律回 =not supported=）：
+
+文字類 buffer 有一個 cursor (offset，0-based 字元位置)。編輯指令以
+cursor 跟 range 為核心、跟所有 text-engine buffer 通用——=*minibuffer*=、
+=*messages*= 之類的 chrome buffer 跟使用者透過 =engine=text= 開的 buffer
+共用同一套協議。
+
+#+begin_src json
+// Cursor 查 / 設
+{"id":"r50", "cmd":"buffer/cursor-get", "buffer-id":"*minibuffer*"}
+→ {"id":"r50", "ok":true, "data":{"offset":3}}
+
+{"id":"r51", "cmd":"buffer/cursor-set",
+            "buffer-id":"*minibuffer*", "offset":0}
+
+// 在 cursor 處插入文字並推進 cursor
+{"id":"r52", "cmd":"buffer/insert",
+            "buffer-id":"*minibuffer*", "text":"foo"}
+
+// 在指定 offset 插入（cursor 在該 offset 之前的話不動，之後的話跟著推）
+{"id":"r53", "cmd":"buffer/insert",
+            "buffer-id":"*minibuffer*", "at":0, "text":"prefix:"}
+
+// 刪除 [from, to) 範圍
+{"id":"r54", "cmd":"buffer/delete",
+            "buffer-id":"*minibuffer*", "from":3, "to":5}
+#+end_src
+
+這些指令是 text engine 的 SHOULD 實作（§7.2）。對 mupdf 之類非編輯型
+engine 一律回 =ok:false= + =error: "not supported"=。
+
 *** 5.4 minibuffer/ ── universal input prompt
 
 Minibuffer 是 framework 的單行輸入區（chrome primitive，見 §1.2）。所有
@@ -444,6 +478,9 @@ Frontend 主動推送，無 =id=。所有事件帶 =frame-id=（事件來源的 
  "frame-id":"f1", "text":"scroll down to page five"}
 
 // 滑鼠點擊（附文件座標）
+// page 在真實 GUI 模式 MUST 由 widget 座標反推實際所在頁碼；
+// x / y 為該頁內 0.0–1.0 的歸一化座標。
+// test/inject-mouse-click 是測試專用、page 由 caller 直接提供、不強制吻合。
 {"event":"mouse-click",
  "frame-id":"f1", "win-id":"w1",
  "page":4, "x":0.3, "y":0.7, "button":1}
@@ -546,10 +583,17 @@ buffer/links         頁面連結
 buffer/render        整頁 PNG 渲染
 buffer/render-region 矩形 PNG 渲染
 buffer/metadata      title、author 等
+
+# 編輯類（text engine 適用，§5.3 後段）
+buffer/cursor-get    取得當前 cursor offset
+buffer/cursor-set    設定 cursor offset
+buffer/insert        在 cursor 或指定 offset 插入文字
+buffer/delete        刪除指定 range
 #+end_src
 
 =buffer/text= 不適用於 audio、video、image 等非文字 engine。
-engine 可回傳 ={"ok":false,"error":"not supported"}=。
+編輯類指令僅適用於 text engine（如 =mupdf= 即為唯讀）。
+engine 對不支援的指令一律回傳 ={"ok":false,"error":"not supported"}=。
 
 *** 7.3 能力宣告
 
@@ -721,6 +765,26 @@ Mode 與 engine 不同：engine 決定 buffer **裝什麼內容**（PDF、HTML�
 文字），mode 決定 buffer **使用者怎麼互動**。同一個 PDF buffer 可以套
 =pdf-mode= 或 =presentation-mode=，內容不變、互動規則換了。
 
+**Mode-buffer 與 wire buffer-id 的對應**：
+
+每個 wire-level buffer（=bridge/engine-load= 或 chrome 自動建立的）在
+backend 端對應一個 mode-buffer 狀態。Backend runtime（=limn.lisp= 或
+等價物）維護 =buffer-id (string) → mode-buffer (object)= 的映射：
+
+- =bridge/engine-load= 成功 → runtime 建一個 mode-buffer、啟用 engine
+  預設的 major mode（如 =mupdf= engine 預設 =pdf-mode=、=text= engine
+  預設 =fundamental-mode=）
+- =buffer/close= → runtime 移除對應 mode-buffer
+- chrome buffer (=*minibuffer*=、=*messages*=、=*echo-area*=) 在
+  runtime 啟動時自動建立、各自啟用預設 mode（如 =*minibuffer*= →
+  =minibuffer-mode=）
+
+按鍵分派：=key= 事件帶 =win-id= → runtime 查 window 的 active buffer-id
+→ 對應的 mode-buffer → 走 §9.1 的 minor → major → global keymap stack。
+
+這層映射是 backend convention、不在線協議內——frontend 對 mode 一無所
+知，只透過 =modeline/set= 等 chrome 命令間接看到 mode 名。
+
 *** 9.2 Interactive 規範
 
 每個 command 應宣告它需要的輸入。Framework 自動從 minibuffer 拿輸入
@@ -798,17 +862,70 @@ Backend 必須提供下列查詢，讓使用者「即時問系統」：
 - SBCL 寫 =limn-undo.lisp=、=limn-hooks.lisp=、=limn-session.lisp=
 - 純 Lisp，無需修改 C
 
-*** v0.7 Mode + Chrome primitives（讓 Limn 真的成為「Qt 版 Emacs」的最後一塊）
+*** v0.7 Mode + Chrome primitives ✅ shipped
 - Backend：mode 系統（major / minor、keymap stack、:on-enter / :on-exit hook）
 - Backend：=defcommand= + interactive 規範（=:interactive "sSearch: "= 等）
-- Backend：init file 自動載入（=~/.limn/init.lisp=）
-- Backend：introspection (=describe-key=、=where-is-command= 等)
 - Frontend：text engine（QPlainTextEdit-based 最小實作；服務所有 chrome）
-- Frontend：minibuffer / echo area / modeline 三個 widget
-- Frontend：=view/overlays= 真接到 paintGL（不再只記計數）
+- Frontend：minibuffer / echo area / modeline widget + 三個保留 chrome buffer
 
-做完之後，vim binding、=/= 搜尋、=M-x=、各種使用者自訂都變成「init.lisp
-裡 30–100 行 Lisp」——framework 端不再為了 feature 加 C 程式碼。
+刻意還沒做（留給 v0.8）：=view/overlays= 真接 paintGL、init file 載入、
+introspection、defcommand 的 ='s'= 真接 minibuffer round-trip。
+
+*** v0.8 底層補完 + 第一個使用者 demo
+
+底層 (C++)：
+- Generic buffer editing primitives (§5.3 後段)：cursor / insert / delete。
+  minibuffer 是首個 consumer；=*scratch*= 等之後沿用同一套協議。
+- 真實 Qt window split (§5.1) — 不再 logical-only、視覺上看得到分割。
+- Mouse coord → page mapping (§6) — mouse-click event 的 page 由實際
+  座標計算、不再寫死 0。
+- =buffer/text= 對 chrome buffer (=*minibuffer*=、=*messages*= 等) 回得
+  了內容。
+
+Backend Lisp infrastructure：
+- Mode runtime：buffer-id ↔ mode-buffer 映射 (§9.1)。
+- =%dispatch-key= 走 mode keymap stack、不只 =*global-keymap*=。
+- =defcommand= 的 ='s'= spec 真實接 minibuffer round-trip（透過 bridge
+  =minibuffer/open= + 等 =minibuffer-submit= 事件）。
+- =keyboard-quit= command + global / minibuffer-mode keymap 綁 C-g
+  （純 Lisp，filter 不認識 C-g 的特殊性）。
+- Init file 自動載入 (§9.3)。
+- Introspection (§9.4)：=describe-key= / =describe-command= /
+  =where-is-command= / =list-modes=。
+
+使用者 demo：
+- 第一份 =~/.limn/init.lisp=：vim-style 翻頁 binding + minibuffer-driven
+  =/= 搜尋。
+
+完成之後，「Qt 版 Emacs」骨架算成立——使用者能透過 init.lisp 自訂行為、
+不再需要改 framework code。
+
+*** v0.9 Linux VM e2e + per-pane DocumentView + Frame 系統
+
+開發前置（第一件事，獨立 milestone）：
+
+- **Linux VM-based e2e test infrastructure**：v0.8 的 e2e tier 用 Qt-level
+  =test/inject-qt-key= 走 =QApplication::sendEvent=，覆蓋了 input filter
+  以下整條 Lisp 鏈，但 macOS HID → AppKit → QApplication 那段沒測。
+  macOS 用 osascript 要 Accessibility 授權；Linux 沒這擋。所以 v0.9 起
+  端到端 OS-level 測試走 Linux VM：
+  - Ubuntu/Alpine minimal + Qt platform =xcb= + Xvfb
+  - =xdotool= 注入 keyboard / mouse click / mouse move (hover) / drag /
+    scroll / window focus，全部 zero permission
+  - port =backend/tests/e2e/= 的 driver 跑出兩個變體：
+    =batch*-qt.lisp=（既有 Qt-level，跨平台）
+    =batch*-os.lisp=（OS-level，VM 內跑）
+  - CI 友善——Linux runner 免費、self-host 容易
+  - 已知 caveat：Qt 在 Linux ≠ macOS（IME / 字型 / Cmd vs Super）。
+    input 行為 99% 一致，rendering 不對等——pixel-level 還是 macOS 為準
+
+新功能：
+
+- Per-pane independent =DocumentView=（v0.8 split 後 panes 共享 DV、
+  滾一個另一個跟）
+- Frame 系統（多 OS 視窗，§3.2 / §7.2 frame/）
+- Engine-specific default mode（=mupdf= engine → =pdf-mode= 內建鍵綁，
+  v0.8 暫時用 fundamental-mode placeholder）
 
 *** v1.0 完整 Lisp 控制層
 - Key macro、registers——全部 Lisp

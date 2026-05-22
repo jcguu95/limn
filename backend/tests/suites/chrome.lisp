@@ -56,3 +56,37 @@
 (deftest test-modeline-unknown-window-fails
   (let ((r (send! "modeline/set" :|win-id| "no-such-w" :|left| "x")))
     (assert-false (eq t (getf r :|ok|)))))
+
+;;; ── buffer/text on chrome buffers (SPEC v0.5 §1.2) ────────────────────
+
+(deftest test-buffer-text-on-messages
+  "*messages* is a text-engine buffer; buffer/text on it returns the log."
+  (send! "message/log" :|text| "first")
+  (send! "message/log" :|text| "second")
+  (let ((r (send! "buffer/text" :|buffer-id| "*messages*")))
+    (assert-ok r "buffer/text on *messages* works")
+    ;; v0.8 implementation picks shape (text vs words); test just checks
+    ;; the message strings appear somewhere in the response.
+    (let* ((d   (getf r :|data|))
+           (str (or (getf d :|text|)
+                    (apply #'concatenate 'string
+                           (mapcar (lambda (w) (getf w :|text|))
+                                   (getf d :|words|))))))
+      (assert-true (and (search "first"  str)
+                        (search "second" str))
+                   "both messages appear in *messages*"))))
+
+(deftest test-buffer-text-on-minibuffer
+  "*minibuffer* is a text-engine buffer; buffer/text returns current text."
+  (send! "minibuffer/open" :|prompt| "/")
+  (send! "minibuffer/set-text" :|text| "hello query")
+  (let ((r (send! "buffer/text" :|buffer-id| "*minibuffer*")))
+    (assert-ok r)
+    (let* ((d (getf r :|data|))
+           (str (or (getf d :|text|)
+                    (apply #'concatenate 'string
+                           (mapcar (lambda (w) (getf w :|text|))
+                                   (getf d :|words|))))))
+      (assert-true (search "hello query" str)
+                   "minibuffer content readable via buffer/text")))
+  (send! "minibuffer/close"))

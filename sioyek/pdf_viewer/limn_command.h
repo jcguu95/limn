@@ -62,6 +62,11 @@ private:
     void cmd_buffer_metadata     (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render       (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render_region(const QString& id, const QJsonObject& msg);
+    // SPEC v0.5 §5.3 後段 — text engine 編輯 primitives
+    void cmd_buffer_cursor_get   (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_cursor_set   (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_insert       (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_delete       (const QString& id, const QJsonObject& msg);
 
     // ─── test/* (enabled only when --test-mode is set) ────────────────
     void cmd_test_inject_key        (const QString& id, const QJsonObject& msg);
@@ -79,6 +84,7 @@ private:
     void cmd_test_grab_window       (const QString& id, const QJsonObject& msg);
     void cmd_test_widget_tree       (const QString& id, const QJsonObject& msg);
     void cmd_test_inject_qt_key     (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_qt_mouse_click(const QString& id, const QJsonObject& msg);
 
     // ─── modeline/* (SPEC §5.6) ─────────────────────────────────────
     void cmd_modeline_set           (const QString& id, const QJsonObject& msg);
@@ -105,6 +111,14 @@ public:
     //   ESC       → minibuffer-cancel
     //   anything else → not consumed, filter pushes normal `key`
     bool minibuffer_handle_key(const QString& key, const QJsonArray& mods);
+
+    // Map a widget-local pixel click (relative to the OpenGL viewport)
+    // to a document position. Per SPEC v0.5 §6:
+    //   page : real page under cursor; -1 if outside any page / no doc
+    //   x, y : 0.0–1.0 normalized to the page's bounding rect
+    // Used by LimnInputFilter's MouseButtonPress branch.
+    bool widget_to_page_norm(int widget_x, int widget_y,
+                              int* out_page, double* out_nx, double* out_ny);
 private:
 
     // Helpers
@@ -135,6 +149,7 @@ private:
     // is where that promise materialises. ChromeBar (Qt widget) just
     // reads the strings via the helpers below.
     QHash<QString, QString> text_buffers;
+    QHash<QString, int>     text_cursors;     // per-buffer cursor (offset)
     int                     next_text_seq = 1;
 
     // ─── minibuffer meta-state (SPEC §5.4) ─────────────────────────

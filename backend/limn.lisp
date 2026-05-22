@@ -75,13 +75,35 @@
                  (mapcar #'%mod-letter mods) key)))))
 
 (defun %dispatch-key (ev)
-  "Hook handler: receive a key event, walk the keymap, invoke when matched."
-  (let* ((spec (%event-key-spec ev))
-         (km   *global-keymap*)
-         (lookup-seq (%sym :limn/keys '#:lookup-sequence)))
-    (unless (and km lookup-seq) (return-from %dispatch-key nil))
-    (let* ((sequence (append *key-prefix* (list spec)))
-           (result (funcall lookup-seq km sequence)))
+  "Hook handler: receive a key event, walk the active mode-buffer's keymap
+   stack (minor → major) then fall back to *global-keymap*, invoke action
+   when matched.
+
+   v0.8 batch 6: previously consulted *global-keymap* only. Now resolves
+   the focused mode-buffer via limn/runtime (win-id → buffer-id →
+   mode-buffer) so per-buffer modes get a chance to handle the key
+   first. Prefix-key state (multi-step sequences like C-x C-f) is still
+   global — making it per-buffer is v0.9 territory.
+
+   Multi-key sequences are walked via lookup-sequence on EACH level
+   independently: if the active buffer's keymap has a partial match
+   (`:prefix`), we commit to that level for the duration of the prefix.
+   This matches Emacs (you don't \"fall through\" mid-sequence)."
+  (let* ((spec       (%event-key-spec ev))
+         (sequence   (append *key-prefix* (list spec)))
+         (km         *global-keymap*)
+         (lookup-seq (%sym :limn/keys '#:lookup-sequence))
+         (rt         (find-package :limn/runtime)))
+    (unless lookup-seq (return-from %dispatch-key nil))
+    (let* ((win-id  (or (getf ev :|win-id|) "w1"))
+           (mb-fn   (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW" rt)))
+           (mb      (and mb-fn (funcall mb-fn win-id)))
+           ;; Try the mode-stack lookup first (returns leaf action,
+           ;; :prefix mid-sequence, or NIL).
+           (mode-result (%mode-stack-lookup mb sequence lookup-seq))
+           ;; Then global (only if mode stack didn't claim it).
+           (global-result (and km (funcall lookup-seq km sequence)))
+           (result        (or mode-result global-result)))
       (cond
         ((eq result :prefix)
          (setf *key-prefix* sequence))
@@ -94,6 +116,25 @@
         (t
          (setf *key-prefix* '()))))))
 
+(defun %mode-stack-lookup (mode-buffer sequence lookup-seq)
+  "Walk SEQUENCE through MODE-BUFFER's keymap stack (minor newest first →
+   major). Returns the same kinds of result as limn/keys:lookup-sequence
+   (action / :prefix / nil). NIL mode-buffer → NIL."
+  (unless mode-buffer (return-from %mode-stack-lookup nil))
+  (let* ((mode-pkg (find-package :limn/mode)))
+    (unless mode-pkg (return-from %mode-stack-lookup nil))
+    (let* ((minors (funcall (find-symbol "MINOR-MODES" mode-pkg) mode-buffer))
+           (major  (funcall (find-symbol "MAJOR-MODE" mode-pkg) mode-buffer))
+           (find-m (find-symbol "FIND-MODE" mode-pkg))
+           (m-km   (find-symbol "MODE-KEYMAP" mode-pkg)))
+      (flet ((try (mode-name)
+               (let* ((m  (and mode-name (funcall find-m mode-name)))
+                      (km (and m (funcall m-km m))))
+                 (and km (funcall lookup-seq km sequence)))))
+        ;; Minors newest first, then major. First non-nil wins.
+        (or (some (lambda (mn) (try mn)) minors)
+            (try major))))))
+
 (defun %install-key-handler ()
   "Register %dispatch-key on the 'event/key' hook (idempotent)."
   (let ((add    (%sym :limn/hooks '#:add-hook))
@@ -105,7 +146,99 @@
         (funcall remove name #'%dispatch-key)
         (funcall add name #'%dispatch-key)))))
 
+;;; ── buffer ↔ mode-buffer wiring ────────────────────────────────────────
+;;;
+;;; The frontend doesn't know about modes. Backend convention (SPEC §9.1):
+;;; when a wire-level buffer comes into existence (engine-load response,
+;;; or chrome bootstrap), we create a mode-buffer for it. When it goes
+;;; away (buffer/close response), we drop the mapping.
+;;;
+;;; We listen on `buffer-opened` and `buffer-closed` events. The frontend
+;;; emits these from bridge/engine-load + buffer/close — already
+;;; established in v0.6.
+
+(defun %on-buffer-opened (ev)
+  "Create a mode-buffer for the newly-opened wire buffer and activate the
+   engine-default major mode (e.g. mupdf → pdf-mode). Also marks the
+   buffer as the active one for its window so the next key event routes
+   to it."
+  (let* ((rt    (find-package :limn/runtime))
+         (mode  (find-package :limn/mode))
+         (bid   (getf ev :|buffer-id|))
+         (wid   (or (getf ev :|win-id|) "w1"))
+         (engine (getf ev :|engine|)))
+    (when (and rt mode bid)
+      (let* ((find-mb     (find-symbol "FIND-MODE-BUFFER"     rt))
+             (reg-mb      (find-symbol "REGISTER-MODE-BUFFER" rt))
+             (set-active  (find-symbol "SET-WINDOW-ACTIVE-BUFFER" rt))
+             (default-of  (find-symbol "ENGINE-DEFAULT-MODE"  rt))
+             (make-mb     (find-symbol "MAKE-MODE-BUFFER"     mode))
+             (activate    (find-symbol "ACTIVATE"             mode))
+             (find-mode   (find-symbol "FIND-MODE"            mode))
+             (existing    (and find-mb (funcall find-mb bid)))
+             (mb          (or existing
+                              (let ((new (funcall make-mb)))
+                                (funcall reg-mb bid new)
+                                new)))
+             (mode-name   (and engine default-of
+                               (funcall default-of engine))))
+        (when (and activate find-mode mode-name
+                   (funcall find-mode mode-name))
+          (handler-case (funcall activate mb mode-name)
+            (error (e) (format *error-output*
+                               "limn: activate ~a on ~a errored: ~a~%"
+                               mode-name bid e))))
+        (when set-active
+          (funcall set-active wid bid))))))
+
+(defun %on-buffer-closed (ev)
+  (let ((rt  (find-package :limn/runtime))
+        (bid (getf ev :|buffer-id|)))
+    (when (and rt bid)
+      (let ((un (find-symbol "UNREGISTER-MODE-BUFFER" rt)))
+        (when un (funcall un bid))))))
+
+(defun %install-buffer-handlers ()
+  (let ((add    (%sym :limn/hooks '#:add-hook))
+        (remove (%sym :limn/hooks '#:remove-hook))
+        (hook-of (%sym :limn/dispatch '#:event-hook-name)))
+    (when (and add remove hook-of)
+      (let ((open  (funcall hook-of "buffer-opened"))
+            (close (funcall hook-of "buffer-closed")))
+        (funcall remove open  #'%on-buffer-opened)
+        (funcall add    open  #'%on-buffer-opened)
+        (funcall remove close #'%on-buffer-closed)
+        (funcall add    close #'%on-buffer-closed)))))
+
 ;;; ── start / stop ───────────────────────────────────────────────────────
+
+(defun %bootstrap-runtime ()
+  "One-time runtime config: declare engine→mode defaults + init chrome
+   mode-buffers. Idempotent — safe to call on every START.
+
+   Defined before START so the compiler doesn't warn about a forward
+   reference when compiling START."
+  (let ((rt   (find-package :limn/runtime))
+        (mode (find-package :limn/mode)))
+    (unless (and rt mode) (return-from %bootstrap-runtime nil))
+    (let ((reg-default (find-symbol "REGISTER-ENGINE-DEFAULT-MODE" rt))
+          (init-chrome (find-symbol "INIT-CHROME-BUFFERS"          rt))
+          (define-mode (find-symbol "DEFINE-MODE"                  mode))
+          (fund-sym    (find-symbol "FUNDAMENTAL-MODE"             rt))
+          (mini-sym    (find-symbol "MINIBUFFER-MODE"              rt)))
+      ;; Define the bare-bones default modes if user init.lisp hasn't
+      ;; already. They start with empty keymaps; user code or future
+      ;; engine code adds bindings.
+      (when (and define-mode fund-sym)
+        (funcall define-mode fund-sym :type :major :modeline "Fund"))
+      (when (and define-mode mini-sym)
+        (funcall define-mode mini-sym :type :major :modeline "Mini"))
+      ;; mupdf is the only engine right now; bind it to fundamental-mode
+      ;; for now (pdf-mode is a v0.9 user-init concept — adding bindings
+      ;; rather than a built-in mode keeps the runtime engine-agnostic).
+      (when (and reg-default fund-sym)
+        (funcall reg-default "mupdf" fund-sym))
+      (when init-chrome (funcall init-chrome)))))
 
 (defun start (socket-path)
   "Open a connection to SOCKET-PATH and create a session."
@@ -115,7 +248,36 @@
     (setf *session* s)
     (unless *global-keymap*
       (setf *global-keymap* (%call :limn/keys '#:make-keymap)))
+    ;; Install default global bindings (C-g → keyboard-quit). User
+    ;; init.lisp running later can override any of them with limn:bind.
+    (let ((install (and (find-package :limn/runtime)
+                        (find-symbol "INSTALL-DEFAULT-BINDINGS"
+                                     :limn/runtime))))
+      (when install (funcall install *global-keymap*)))
     (%install-key-handler)
+    (%install-buffer-handlers)
+    ;; Register the default engine→mode mapping and bootstrap mode-buffers
+    ;; for the three chrome buffer-ids so they have keymap stacks from
+    ;; the moment the session is up. User init.lisp can override either.
+    (%bootstrap-runtime)
+    ;; Install the real minibuffer reader so defcommand "s" specs do a
+    ;; live bridge round-trip instead of erroring. Bound to THIS session.
+    (let ((mk (and (find-package :limn/runtime)
+                   (find-symbol "MAKE-MINIBUFFER-READER" :limn/runtime)))
+          (slot (and (find-package :limn/cmd)
+                     (find-symbol "*MINIBUFFER-READ*" :limn/cmd))))
+      (when (and mk slot)
+        (setf (symbol-value slot) (funcall mk s))))
+    ;; Load user init.lisp (SPEC §9.3) AFTER the framework's defaults
+    ;; are in place — so user bindings / commands override, rather than
+    ;; being clobbered by them. Errors propagate: a broken init.lisp
+    ;; should not silently leave the user with a half-configured session.
+    (let ((load-init (and (find-package :limn/runtime)
+                          (find-symbol "LOAD-INIT-FILE" :limn/runtime))))
+      (when load-init
+        (let ((loaded (funcall load-init)))
+          (when loaded
+            (format t "~&;; loaded init: ~a~%" loaded)))))
     ;; Spawn a background pump thread so events the user generates in the
     ;; Qt window fire their bindings while the REPL is at the prompt. Tests
     ;; with mock clients can call STOP-PUMP-THREAD if they don't want it.
@@ -181,11 +343,51 @@
 ;;; ── keymap helpers ─────────────────────────────────────────────────────
 
 (defun bind (spec action)
-  "Bind a key sequence (e.g. \"C-x C-f\") to ACTION (a function of one
-   argument: the originating key event plist)."
+  "Bind a key sequence (e.g. \"C-x C-f\") to ACTION.
+
+   ACTION can be:
+     - a function of one argument (the originating key-event plist),
+       bound directly
+     - a command-name SYMBOL — wrapped in a call-interactively closure
+       AND registered in limn/introspect's reverse table so
+       (where-is-command sym) can find this binding. The command must
+       already be defined (defcommand) — error otherwise.
+
+   Lambda bindings are invisible to where-is-command (same limit as
+   Emacs). Bind a symbol when you want discoverability."
   (unless *global-keymap*
     (setf *global-keymap* (%call :limn/keys '#:make-keymap)))
-  (%call :limn/keys '#:define-key *global-keymap* spec action))
+  (let ((final-action
+          (cond
+            ((symbolp action)
+             (let* ((cmd-pkg (find-package :limn/cmd))
+                    (find-cmd (and cmd-pkg (find-symbol "FIND-COMMAND" cmd-pkg)))
+                    (call-int (and cmd-pkg (find-symbol "CALL-INTERACTIVELY"
+                                                          cmd-pkg))))
+               (unless (and find-cmd (funcall find-cmd action))
+                 (error "limn:bind: ~s is not a defined command" action))
+               ;; Register the binding for where-is-command.
+               (let* ((isp-pkg (find-package :limn/introspect))
+                      (register (and isp-pkg
+                                     (find-symbol "REGISTER-BINDING"
+                                                  isp-pkg))))
+                 (when register
+                   (funcall register action *global-keymap* spec)))
+               ;; Wrap so the key-event signature still matches.
+               (lambda (ev) (declare (ignore ev))
+                 (handler-case (funcall call-int action)
+                   ;; minibuffer-cancelled is the intended outcome of a
+                   ;; user-pressed C-g — don't let it propagate out of
+                   ;; the binding and pollute *error-output*.
+                   (error (e)
+                     (let ((mc (and (find-package :limn/runtime)
+                                    (find-symbol "MINIBUFFER-CANCELLED"
+                                                 :limn/runtime))))
+                       (if (and mc (typep e mc))
+                           nil
+                           (signal e))))))))
+            (t action))))
+    (%call :limn/keys '#:define-key *global-keymap* spec final-action)))
 
 (defun unbind (spec)
   (when *global-keymap*

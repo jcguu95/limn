@@ -18,7 +18,7 @@
   (:use #:cl)
   (:export #:make-session #:make-session-for
            #:session-p #:session-client
-           #:pump #:call #:notify
+           #:pump #:call #:notify #:wait-for-event
            #:event-hook-name
            #:install-fd-handler #:remove-fd-handler
            #:start-pump-thread #:stop-pump-thread
@@ -280,6 +280,56 @@
       (when (sb-thread:thread-alive-p th)
         (handler-case (sb-thread:terminate-thread th) (error () nil)))
       (handler-case (sb-thread:join-thread th :timeout 0.5) (error () nil)))))
+
+;;; ── wait-for-event: block until a predicate goes true ─────────────────
+;;;
+;;; Pump-thread aware, mirrors CALL's three-branch logic:
+;;;   - background pump thread alive, we're a different thread → sleep,
+;;;     it'll fire the hook that flips our predicate.
+;;;   - we ARE the pump thread (hook handler waiting on another event) →
+;;;     inline-pump the socket ourselves.
+;;;   - no pump thread (unit tests with mock client) → drain everything
+;;;     available, then blocking-read one more line if predicate still NIL.
+
+(defun wait-for-event (sess predicate &key (timeout *request-timeout*))
+  "Block until PREDICATE returns non-NIL or TIMEOUT seconds elapse.
+
+   PREDICATE is a thunk of zero args, expected to be flipped by some
+   event hook the caller has registered. We never call PREDICATE more
+   than necessary — once per loop iteration.
+
+   Returns whatever PREDICATE returned. Signals on timeout."
+  (let ((deadline (+ (get-internal-real-time)
+                     (* timeout internal-time-units-per-second)))
+        (pump-thread (session-pump-thread sess))
+        (i-am-pump   (and (session-pump-thread sess)
+                          (eq sb-thread:*current-thread*
+                              (session-pump-thread sess)))))
+    (loop
+      (let ((v (funcall predicate)))
+        (when v (return v)))
+      (when (> (get-internal-real-time) deadline)
+        (error "limn/dispatch: wait-for-event timed out after ~as" timeout))
+      (cond
+        ((and pump-thread (not i-am-pump))
+         (sleep 0.01))
+        (i-am-pump
+         (let ((line (client-blocking sess)))
+           (cond
+             ((eq line :eof)
+              (error "limn/dispatch: peer closed during wait-for-event"))
+             (t (classify sess
+                          (handler-case (%decode line) (error () nil)))))))
+        (t
+         (pump sess)
+         (let ((v (funcall predicate)))
+           (when v (return v)))
+         (let ((line (client-blocking sess)))
+           (cond
+             ((eq line :eof)
+              (error "limn/dispatch: peer closed during wait-for-event"))
+             (t (classify sess
+                          (handler-case (%decode line) (error () nil)))))))))))
 
 ;;; ── notify: fire-and-forget (no response expected) ─────────────────────
 

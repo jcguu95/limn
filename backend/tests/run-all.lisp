@@ -55,6 +55,8 @@
                  "suites/text-engine.lisp"
                  "suites/chrome.lisp"
                  "suites/minibuffer.lisp"
+                 "suites/buffer-edit.lisp"
+                 "suites/mouse-coord.lisp"
                  "suites/robust.lisp"
                  "suites/lifecycle.lisp"
                  "suites/i18n.lisp"

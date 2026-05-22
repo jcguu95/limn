@@ -127,10 +127,26 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             QJsonObject e;
             e.insert("frame-id", "f1");
             e.insert("win-id",   "w1");
-            e.insert("page",     0);                            // ← TODO: map widget pos to page
-            e.insert("x",        mev->position().x());
-            e.insert("y",        mev->position().y());
-            e.insert("button",   button_id(mev->button()));
+
+            // SPEC v0.5 §6 — compute real page + normalized x/y. If we
+            // can't (no doc loaded, click outside any page), report
+            // page = -1 + raw pixel coords as a fallback.
+            int    page = -1;
+            double nx = 0.0, ny = 0.0;
+            if (command &&
+                command->widget_to_page_norm(
+                    static_cast<int>(mev->position().x()),
+                    static_cast<int>(mev->position().y()),
+                    &page, &nx, &ny)) {
+                e.insert("page", page);
+                e.insert("x",    nx);
+                e.insert("y",    ny);
+            } else {
+                e.insert("page", -1);
+                e.insert("x",    mev->position().x());
+                e.insert("y",    mev->position().y());
+            }
+            e.insert("button", button_id(mev->button()));
             bridge->push_event("mouse-click", e);
             break;
         }

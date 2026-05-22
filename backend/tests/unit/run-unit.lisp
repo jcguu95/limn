@@ -9,6 +9,10 @@
 
 (in-package #:cl-user)
 
+;; limn-runtime uses sb-posix:getenv for init-file lookup; load before
+;; importing it. (The integration runner gets this via repl.lisp.)
+(require :sb-posix)
+
 (defparameter *unit-dir*
   (make-pathname :defaults (or *load-pathname* *default-pathname-defaults*)
                  :name nil :type nil))
@@ -30,7 +34,9 @@
                 "limn-client.lisp"
                 "limn-dispatch.lisp"
                 "limn-mode.lisp"
-                "limn-cmd.lisp"))
+                "limn-cmd.lisp"
+                "limn-runtime.lisp"
+                "limn-introspect.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -46,7 +52,12 @@
                 "search.lisp"
                 "dispatch.lisp"
                 "mode.lisp"
-                "defcommand.lisp"))
+                "defcommand.lisp"
+                "runtime.lisp"
+                "minibuffer-read.lisp"
+                "keyboard-quit.lisp"
+                "init-load.lisp"
+                "introspect.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
