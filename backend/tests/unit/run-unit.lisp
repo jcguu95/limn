@@ -19,6 +19,20 @@
 ;; Framework
 (load (rel "unit-framework.lisp"))
 
+;; Backend implementation modules (loaded BEFORE tests so the unit-test
+;; package-stubs are replaced by real packages).
+(dolist (impl '("limn-hooks.lisp"
+                "limn-buffer.lisp"
+                "limn-bridge.lisp"
+                "limn-undo.lisp"
+                "limn-keys.lisp"
+                "limn-search.lisp"))
+  (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
+                                         *unit-dir*))))
+    (format t "[loading impl] ~a~%" impl)
+    (handler-case (load p)
+      (error (e) (format t "  !! ~a: ~a~%" impl e)))))
+
 ;; All unit-test files
 (dolist (file '("bridge-client.lisp"
                 "keymap.lisp"

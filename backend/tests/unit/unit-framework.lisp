@@ -12,7 +12,8 @@
            #:assert-equal #:assert-true #:assert-false
            #:assert-eq #:assert-eql #:assert-type
            #:assert-error #:assert-no-error
-           #:check
+           #:assert-contains #:assert-numeric
+           #:check #:check-assertion
            #:*pass* #:*fail*))
 
 (in-package #:limn/unit-test)
@@ -82,6 +83,24 @@
   `(check (handler-case (progn ,form t)
             (error (e) (format t "      → unexpected error: ~a~%" e) nil))
           (or ,msg (format nil "~s does not signal" ',form))))
+
+(defmacro assert-contains (item collection &optional msg)
+  (let ((i (gensym)) (c (gensym)))
+    `(let ((,i ,item) (,c ,collection))
+       (check (find ,i ,c :test #'equal)
+              (or ,msg (format nil "~s contains ~s" ',collection ,i))
+              "~s not found in ~s" ,i ,c))))
+
+(defmacro assert-numeric (value &optional msg)
+  (let ((v (gensym)))
+    `(let ((,v ,value))
+       (check (numberp ,v)
+              (or ,msg (format nil "~s is numeric" ',value))
+              "value was ~s (~s)" ,v (type-of ,v)))))
+
+;; check-assertion is an alias for check (some tests use the longer name)
+(defun check-assertion (ok msg &optional fmt &rest args)
+  (apply #'check ok msg fmt args))
 
 (defmacro deftest (name &body body)
   `(progn
