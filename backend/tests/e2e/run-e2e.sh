@@ -26,6 +26,11 @@ fail=0
 fails=()
 
 for driver in "$E2E_DIR"/batch*.lisp; do
+  # Skip OS-level drivers — they require Xvfb + xdotool inside the
+  # Linux container. Run via run-os-e2e.sh instead.
+  case "$driver" in
+    *batch-os-*.lisp) continue ;;
+  esac
   name="$(basename "$driver" .lisp)"
   echo "── $name ─────────────────────────────────────"
   if sbcl --no-userinit --no-sysinit --non-interactive \
