@@ -40,6 +40,12 @@ struct LimnWindow {
     int      rotation      = 0;          // 0/90/180/270
     int      overlay_count = 0;
 
+    // Modeline content (SPEC §5.6). Three text segments displayed at the
+    // window's bottom status line. v0.7 stores only — no widget yet.
+    QString  modeline_left;
+    QString  modeline_middle;
+    QString  modeline_right;
+
     QJsonObject to_json() const;
 };
 

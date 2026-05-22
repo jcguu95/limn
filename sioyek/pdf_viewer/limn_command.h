@@ -80,6 +80,10 @@ private:
     void cmd_test_widget_tree       (const QString& id, const QJsonObject& msg);
     void cmd_test_inject_qt_key     (const QString& id, const QJsonObject& msg);
 
+    // ─── modeline/* (SPEC §5.6) ─────────────────────────────────────
+    void cmd_modeline_set           (const QString& id, const QJsonObject& msg);
+    void cmd_modeline_get           (const QString& id, const QJsonObject& msg);
+
     // Helpers
     QJsonObject build_open_data(const QString& buffer_id, Document* doc);
     QJsonObject collect_view_state(const QString& win_id);

@@ -78,6 +78,10 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "view/get")      { cmd_view_get     (id, msg); return; }
     if (cmd == "view/overlays") { cmd_view_overlays(id, msg); return; }
 
+    // modeline/* (SPEC §5.6)
+    if (cmd == "modeline/set")  { cmd_modeline_set (id, msg); return; }
+    if (cmd == "modeline/get")  { cmd_modeline_get (id, msg); return; }
+
     // buffer/*
     if (cmd == "buffer/open")          { cmd_buffer_open         (id, msg); return; }
     if (cmd == "buffer/close")         { cmd_buffer_close        (id, msg); return; }
@@ -452,6 +456,50 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
 
     if (is_active) main_widget->opengl_widget()->update();
     bridge->send_ok(id);
+}
+
+// ─── modeline/* (SPEC §5.6) ───────────────────────────────────────────
+//
+// v0.7: state-only storage — set / get round-trip through LimnWindow
+// fields. The actual widget that renders this on screen lands in a
+// later batch (Qt widgets for chrome). Tests assert state behaviour;
+// implementing that first means we can validate the wire protocol
+// independently of rendering.
+
+void LimnCommand::cmd_modeline_set(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    if (win_id.isEmpty()) {
+        bridge->send_fail(id, "modeline/set requires win-id");
+        return;
+    }
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    // Partial update: only fields actually present are touched.
+    if (msg.contains("left"))   win->modeline_left   = msg.value("left").toString();
+    if (msg.contains("middle")) win->modeline_middle = msg.value("middle").toString();
+    if (msg.contains("right"))  win->modeline_right  = msg.value("right").toString();
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_modeline_get(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    if (win_id.isEmpty()) {
+        bridge->send_fail(id, "modeline/get requires win-id");
+        return;
+    }
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    QJsonObject data;
+    data.insert("left",   win->modeline_left);
+    data.insert("middle", win->modeline_middle);
+    data.insert("right",  win->modeline_right);
+    bridge->send_ok(id, data);
 }
 
 // ─── view/overlays ────────────────────────────────────────────────────
