@@ -1,6 +1,7 @@
 #include "limn_input.h"
 
 #include "limn_bridge.h"
+#include "limn_command.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -81,8 +82,10 @@ int button_id(Qt::MouseButton b) {
 
 }  // anonymous namespace
 
-LimnInputFilter::LimnInputFilter(LimnBridge* bridge, QObject* parent)
-    : QObject(parent), bridge(bridge) {}
+LimnInputFilter::LimnInputFilter(LimnBridge* bridge,
+                                 LimnCommand* command,
+                                 QObject* parent)
+    : QObject(parent), bridge(bridge), command(command) {}
 
 bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
     if (!bridge) return false;
@@ -97,16 +100,25 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
         case QEvent::KeyPress: {
             auto* kev = static_cast<QKeyEvent*>(ev);
             QString k = key_to_string(kev);
+            QJsonArray mods = modifiers_to_array(kev->modifiers(), k);
             // Diagnostic: stderr-log every captured key. Lets us tell, from
             // the log file alone, whether Qt is delivering events to the
             // filter (vs. focus / OS swallowing them upstream).
             fprintf(stderr, "[limn-input] KeyPress key=%s mods=0x%x obj=%s\n",
                     qPrintable(k), (unsigned)kev->modifiers(),
                     obj ? obj->metaObject()->className() : "(null)");
+
+            // Minibuffer interception (SPEC §6). When open, printable
+            // chars / RET / ESC become minibuffer-input/submit/cancel
+            // events instead of `key`.
+            if (command && command->minibuffer_handle_key(k, mods)) {
+                break;  // consumed; no normal `key` event for this press
+            }
+
             QJsonObject e;
             e.insert("frame-id", "f1");
             e.insert("key",  k);
-            e.insert("mods", modifiers_to_array(kev->modifiers(), k));
+            e.insert("mods", mods);
             bridge->push_event("key", e);
             break;
         }

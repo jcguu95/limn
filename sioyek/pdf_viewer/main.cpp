@@ -95,7 +95,9 @@ int main(int argc, char* argv[]) {
     bridge.set_command_handler(&command);
 
     // ── Input event capture (forwards Qt events as Limn events) ────────
-    LimnInputFilter input_filter(&bridge);
+    // Filter holds a back-pointer to LimnCommand so it can route printable
+    // keystrokes through the minibuffer when one is open (SPEC §6).
+    LimnInputFilter input_filter(&bridge, &command);
     app.installEventFilter(&input_filter);
 
     if (!opts.initial_path.isEmpty()) {

@@ -87,6 +87,13 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "message/log")   { cmd_message_log  (id, msg); return; }
     if (cmd == "message/clear") { cmd_message_clear(id, msg); return; }
 
+    // minibuffer/* (SPEC §5.4)
+    if (cmd == "minibuffer/open")       { cmd_minibuffer_open       (id, msg); return; }
+    if (cmd == "minibuffer/close")      { cmd_minibuffer_close      (id, msg); return; }
+    if (cmd == "minibuffer/set-prompt") { cmd_minibuffer_set_prompt (id, msg); return; }
+    if (cmd == "minibuffer/set-text")   { cmd_minibuffer_set_text   (id, msg); return; }
+    if (cmd == "minibuffer/get")        { cmd_minibuffer_get        (id, msg); return; }
+
     // buffer/*
     if (cmd == "buffer/open")          { cmd_buffer_open         (id, msg); return; }
     if (cmd == "buffer/close")         { cmd_buffer_close        (id, msg); return; }
@@ -461,6 +468,90 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
 
     if (is_active) main_widget->opengl_widget()->update();
     bridge->send_ok(id);
+}
+
+// ─── minibuffer/* (SPEC §5.4) ─────────────────────────────────────────
+//
+// Single-instance widget state in LimnCommand. The actual visible
+// widget lands in a later batch; here we just track open/prompt/text
+// and route keystrokes via minibuffer_handle_key.
+
+void LimnCommand::cmd_minibuffer_open(const QString& id, const QJsonObject& msg) {
+    minibuffer_open   = true;
+    minibuffer_prompt = msg.value("prompt").toString();   // empty = no prompt
+    minibuffer_text.clear();                              // fresh each open
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_minibuffer_close(const QString& id, const QJsonObject&) {
+    minibuffer_open = false;
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_minibuffer_set_prompt(const QString& id, const QJsonObject& msg) {
+    if (!minibuffer_open) {
+        bridge->send_fail(id, "minibuffer/set-prompt: minibuffer is not open");
+        return;
+    }
+    minibuffer_prompt = msg.value("prompt").toString();
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_minibuffer_set_text(const QString& id, const QJsonObject& msg) {
+    if (!minibuffer_open) {
+        bridge->send_fail(id, "minibuffer/set-text: minibuffer is not open");
+        return;
+    }
+    minibuffer_text = msg.value("text").toString();
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_minibuffer_get(const QString& id, const QJsonObject&) {
+    QJsonObject data;
+    data.insert("open",   minibuffer_open);
+    data.insert("prompt", minibuffer_prompt);
+    data.insert("text",   minibuffer_text);
+    bridge->send_ok(id, data);
+}
+
+// Called by LimnInputFilter on every KeyPress. Returns TRUE iff this
+// keystroke was consumed by the minibuffer (so the filter should not
+// also push a normal `key` event). See SPEC §6 Minibuffer 事件.
+bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mods) {
+    if (!minibuffer_open) return false;
+
+    // Modifier combos other than Shift fall through to a normal key
+    // event — keeps C-g / M-x / Up / Down / etc reachable through
+    // global keymap.
+    for (const auto& m : mods) {
+        const QString s = m.toString();
+        if (s != "shift") return false;
+    }
+
+    QJsonObject ev;
+    ev.insert("frame-id", "f1");
+
+    if (key == "RET") {
+        ev.insert("text", minibuffer_text);
+        bridge->push_event("minibuffer-submit", ev);
+        return true;
+    }
+    if (key == "ESC") {
+        bridge->push_event("minibuffer-cancel", ev);
+        return true;
+    }
+    // Printable single-character key → accumulate into text.
+    if (key.size() == 1 && key.at(0).isPrint() && !key.at(0).isSpace()) {
+        minibuffer_text.append(key);
+        ev.insert("text", minibuffer_text);
+        bridge->push_event("minibuffer-input", ev);
+        return true;
+    }
+    // Anything else (TAB / BS / arrow keys / etc) is currently NOT
+    // consumed. Future: BS deletes a char, Up/Down browse history,
+    // TAB completes — for now they fall through and the user can
+    // still hit ESC to cancel.
+    return false;
 }
 
 // ─── message/* (SPEC §5.5) ────────────────────────────────────────────

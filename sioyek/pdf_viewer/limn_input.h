@@ -20,15 +20,23 @@
 #include <QResizeEvent>
 
 class LimnBridge;
+class LimnCommand;
 
 class LimnInputFilter : public QObject {
     Q_OBJECT
 public:
-    LimnInputFilter(LimnBridge* bridge, QObject* parent = nullptr);
+    // `command` is optional (nullable). When set, the filter gives it a
+    // chance to intercept key events that should go through the minibuffer
+    // routing rules (SPEC §6 Minibuffer events) instead of as normal `key`
+    // events.
+    LimnInputFilter(LimnBridge* bridge,
+                     LimnCommand* command = nullptr,
+                     QObject* parent = nullptr);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
-    LimnBridge* bridge;
+    LimnBridge*  bridge;
+    LimnCommand* command;
 };

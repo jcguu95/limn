@@ -89,6 +89,24 @@ private:
     void cmd_message_log            (const QString& id, const QJsonObject& msg);
     void cmd_message_clear          (const QString& id, const QJsonObject& msg);
 
+    // ─── minibuffer/* (SPEC §5.4) ───────────────────────────────────
+    void cmd_minibuffer_open        (const QString& id, const QJsonObject& msg);
+    void cmd_minibuffer_close       (const QString& id, const QJsonObject& msg);
+    void cmd_minibuffer_set_prompt  (const QString& id, const QJsonObject& msg);
+    void cmd_minibuffer_set_text    (const QString& id, const QJsonObject& msg);
+    void cmd_minibuffer_get         (const QString& id, const QJsonObject& msg);
+
+public:
+    // Called by LimnInputFilter on every KeyPress. Returns TRUE if the
+    // minibuffer consumed the keystroke (so the filter should NOT push a
+    // normal `key` event for it). See SPEC §6 Minibuffer 事件:
+    //   printable → minibuffer-input
+    //   RET       → minibuffer-submit
+    //   ESC       → minibuffer-cancel
+    //   anything else → not consumed, filter pushes normal `key`
+    bool minibuffer_handle_key(const QString& key, const QJsonArray& mods);
+private:
+
     // Helpers
     QJsonObject build_open_data(const QString& buffer_id, Document* doc);
     QJsonObject collect_view_state(const QString& win_id);
@@ -112,4 +130,12 @@ private:
     // v0.7 state-only; the widget that displays these lands later.
     QString  messages_log;
     QString  echo_area_text;
+
+    // ─── minibuffer state (SPEC §5.4) ──────────────────────────────
+    // Single-instance widget state. open=false → closed (and the
+    // filter routes keys normally). open=true → filter intercepts
+    // printable / RET / ESC, emits minibuffer-* events instead.
+    bool     minibuffer_open = false;
+    QString  minibuffer_prompt;
+    QString  minibuffer_text;
 };
