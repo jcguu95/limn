@@ -30,7 +30,8 @@
                 "limn-client.lisp"
                 "limn-dispatch.lisp"
                 "limn-mode.lisp"
-                "limn-cmd.lisp"))
+                "limn-cmd.lisp"
+                "limn-runtime.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -46,7 +47,8 @@
                 "search.lisp"
                 "dispatch.lisp"
                 "mode.lisp"
-                "defcommand.lisp"))
+                "defcommand.lisp"
+                "runtime.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

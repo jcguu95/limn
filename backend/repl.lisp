@@ -31,6 +31,9 @@
                 "limn-search.lisp"
                 "limn-client.lisp"
                 "limn-dispatch.lisp"
+                "limn-mode.lisp"
+                "limn-cmd.lisp"
+                "limn-runtime.lisp"
                 "limn.lisp"))
   (load (b/ file)))
 
