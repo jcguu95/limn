@@ -22,6 +22,8 @@
 #include <QMetaObject>
 #include <QCoreApplication>
 #include <QKeyEvent>
+#include <QMouseEvent>
+#include <QPointF>
 #include <QApplication>
 #include <cmath>
 #include <stdexcept>
@@ -141,6 +143,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
         if (cmd == "test/grab-window")        { cmd_test_grab_window       (id, msg); return; }
         if (cmd == "test/widget-tree")        { cmd_test_widget_tree       (id, msg); return; }
         if (cmd == "test/inject-qt-key")      { cmd_test_inject_qt_key     (id, msg); return; }
+        if (cmd == "test/inject-qt-mouse-click") { cmd_test_inject_qt_mouse_click(id, msg); return; }
         bridge->send_fail(id, QString("unknown test command: %1").arg(cmd));
         return;
     }
@@ -1495,6 +1498,68 @@ void LimnCommand::cmd_test_inject_qt_key(const QString& id, const QJsonObject& m
                           ? QApplication::focusWidget()->metaObject()->className()
                           : QString("(none)"));
     bridge->send_ok(id, data);
+}
+
+// SPEC v0.5 §6 — map a widget-local pixel click on the OpenGL viewport to
+// (page, normalized-x, normalized-y). Returns false if no document is
+// loaded; clamps to the valid range otherwise (negative widget coords
+// also handled — we still get a page, just at edges of doc).
+bool LimnCommand::widget_to_page_norm(int widget_x, int widget_y,
+                                       int* out_page,
+                                       double* out_nx, double* out_ny) {
+    if (!main_widget) return false;
+    DocumentView* dv = main_widget->document_view();
+    Document* doc    = dv ? dv->get_document() : nullptr;
+    if (!dv || !doc) return false;
+
+    DocumentPos dp = dv->window_to_document_pos(WindowPos(widget_x, widget_y));
+    if (dp.page < 0) return false;
+
+    const float pw = doc->get_page_width(dp.page);
+    const float ph = doc->get_page_height(dp.page);
+    if (pw <= 0 || ph <= 0) return false;
+
+    *out_page = dp.page;
+    // DocumentPos x/y are in page-local doc units; normalize by page rect.
+    *out_nx = static_cast<double>(dp.x) / static_cast<double>(pw);
+    *out_ny = static_cast<double>(dp.y) / static_cast<double>(ph);
+    return true;
+}
+
+// SPEC §8 — test/inject-qt-mouse-click. Posts a real QMouseEvent through
+// QApplication::sendEvent onto the OpenGL viewport. Goes through the
+// LimnInputFilter the same way a hardware mouse would, so the test
+// exercises the full filter → bridge → SBCL path including the page
+// computation added in v0.8.
+void LimnCommand::cmd_test_inject_qt_mouse_click(const QString& id,
+                                                 const QJsonObject& msg) {
+    if (!main_widget) {
+        bridge->send_fail(id, "no main widget");
+        return;
+    }
+    QWidget* target = main_widget->opengl_widget();
+    if (!target) {
+        bridge->send_fail(id, "no opengl widget");
+        return;
+    }
+    const int    x      = msg.value("x").toInt();
+    const int    y      = msg.value("y").toInt();
+    const int    button = msg.value("button").toInt();      // 1=L, 2=M, 3=R
+    Qt::MouseButton qb =
+        (button == 1) ? Qt::LeftButton  :
+        (button == 2) ? Qt::MiddleButton :
+        (button == 3) ? Qt::RightButton  : Qt::LeftButton;
+
+    const QPointF local(x, y);
+    const QPointF global = target->mapToGlobal(local);
+    QMouseEvent press(QEvent::MouseButtonPress, local, global,
+                      qb, qb, Qt::NoModifier);
+    QApplication::sendEvent(target, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, local, global,
+                        qb, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(target, &release);
+
+    bridge->send_ok(id);
 }
 
 void LimnCommand::cmd_test_widget_tree(const QString& id, const QJsonObject&) {

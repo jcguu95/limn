@@ -84,6 +84,7 @@ private:
     void cmd_test_grab_window       (const QString& id, const QJsonObject& msg);
     void cmd_test_widget_tree       (const QString& id, const QJsonObject& msg);
     void cmd_test_inject_qt_key     (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_qt_mouse_click(const QString& id, const QJsonObject& msg);
 
     // ─── modeline/* (SPEC §5.6) ─────────────────────────────────────
     void cmd_modeline_set           (const QString& id, const QJsonObject& msg);
@@ -110,6 +111,14 @@ public:
     //   ESC       → minibuffer-cancel
     //   anything else → not consumed, filter pushes normal `key`
     bool minibuffer_handle_key(const QString& key, const QJsonArray& mods);
+
+    // Map a widget-local pixel click (relative to the OpenGL viewport)
+    // to a document position. Per SPEC v0.5 §6:
+    //   page : real page under cursor; -1 if outside any page / no doc
+    //   x, y : 0.0–1.0 normalized to the page's bounding rect
+    // Used by LimnInputFilter's MouseButtonPress branch.
+    bool widget_to_page_norm(int widget_x, int widget_y,
+                              int* out_page, double* out_nx, double* out_ny);
 private:
 
     // Helpers
