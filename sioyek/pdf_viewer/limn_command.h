@@ -84,6 +84,11 @@ private:
     void cmd_modeline_set           (const QString& id, const QJsonObject& msg);
     void cmd_modeline_get           (const QString& id, const QJsonObject& msg);
 
+    // ─── message/* (SPEC §5.5) ──────────────────────────────────────
+    void cmd_message_echo           (const QString& id, const QJsonObject& msg);
+    void cmd_message_log            (const QString& id, const QJsonObject& msg);
+    void cmd_message_clear          (const QString& id, const QJsonObject& msg);
+
     // Helpers
     QJsonObject build_open_data(const QString& buffer_id, Document* doc);
     QJsonObject collect_view_state(const QString& win_id);
@@ -101,4 +106,10 @@ private:
     // with 't' to distinguish from mupdf's 'b' prefix.
     QHash<QString, QString> text_buffers;
     int                     next_text_seq = 1;
+
+    // ─── chrome text state (SPEC §5.5) ─────────────────────────────
+    // Accumulated *Messages* log, plus current echo-area content.
+    // v0.7 state-only; the widget that displays these lands later.
+    QString  messages_log;
+    QString  echo_area_text;
 };

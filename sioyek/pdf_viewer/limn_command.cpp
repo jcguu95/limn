@@ -82,6 +82,11 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "modeline/set")  { cmd_modeline_set (id, msg); return; }
     if (cmd == "modeline/get")  { cmd_modeline_get (id, msg); return; }
 
+    // message/* (SPEC §5.5)
+    if (cmd == "message/echo")  { cmd_message_echo (id, msg); return; }
+    if (cmd == "message/log")   { cmd_message_log  (id, msg); return; }
+    if (cmd == "message/clear") { cmd_message_clear(id, msg); return; }
+
     // buffer/*
     if (cmd == "buffer/open")          { cmd_buffer_open         (id, msg); return; }
     if (cmd == "buffer/close")         { cmd_buffer_close        (id, msg); return; }
@@ -455,6 +460,44 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
     }
 
     if (is_active) main_widget->opengl_widget()->update();
+    bridge->send_ok(id);
+}
+
+// ─── message/* (SPEC §5.5) ────────────────────────────────────────────
+//
+// echo  → echo area + *Messages*
+// log   → only *Messages* (silent, for background notifications)
+// clear → empty echo area, leave *Messages* alone
+//
+// v0.7 state-only: messages_log accumulates everything, echo_area_text
+// holds what would be shown in the bottom status line. Widget rendering
+// lands in a later batch.
+
+void LimnCommand::cmd_message_echo(const QString& id, const QJsonObject& msg) {
+    const QString text = msg.value("text").toString();
+    if (text.isEmpty()) {
+        bridge->send_fail(id, "message/echo: text must be non-empty");
+        return;
+    }
+    if (!messages_log.isEmpty()) messages_log.append('\n');
+    messages_log.append(text);
+    echo_area_text = text;
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_message_log(const QString& id, const QJsonObject& msg) {
+    const QString text = msg.value("text").toString();
+    if (text.isEmpty()) {
+        bridge->send_fail(id, "message/log: text must be non-empty");
+        return;
+    }
+    if (!messages_log.isEmpty()) messages_log.append('\n');
+    messages_log.append(text);
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_message_clear(const QString& id, const QJsonObject&) {
+    echo_area_text.clear();
     bridge->send_ok(id);
 }
 
