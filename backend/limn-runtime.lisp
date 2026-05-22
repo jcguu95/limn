@@ -43,7 +43,11 @@
            ;; canceller* is bound dynamically by make-minibuffer-reader
            ;; while it blocks, so keyboard-quit can abort the wait.
            #:keyboard-quit #:*active-minibuffer-canceller*
-           #:install-default-commands #:install-default-bindings))
+           #:install-default-commands #:install-default-bindings
+           ;; Init file (SPEC §9.3): four candidate paths, first existing
+           ;; wins, missing files are silently skipped. Framework never
+           ;; CREATES init files — strictly read-only path probing.
+           #:load-init-file #:resolve-init-path #:init-candidate-paths))
 
 (in-package #:limn/runtime)
 
@@ -254,3 +258,55 @@
 ;; session start (limn.lisp:start calls install-default-bindings on the
 ;; lazy-created global keymap).
 (install-default-commands)
+
+;;; ── init file loading (SPEC §9.3) ──────────────────────────────────────
+;;;
+;;; Search order, first existing wins:
+;;;   1. $LIMN_INIT                 explicit override
+;;;   2. ~/.limn/init.lisp          per SPEC §9.3
+;;;   3. ~/.config/limn/init.lisp   per SPEC §9.3 (XDG)
+;;;   4. /tmp/.limn/init.lisp       dev fallback — lets contributors play
+;;;                                 with init scripts without touching
+;;;                                 $HOME. NOT documented as a stable
+;;;                                 path; if you want persistent config
+;;;                                 use one of the first three.
+;;;
+;;; The framework strictly READS — it never creates any of these
+;;; directories or files itself.
+
+(defun %home ()
+  (or (sb-posix:getenv "HOME") ""))
+
+(defun %nonempty (s) (and s (not (zerop (length s))) s))
+
+(defun init-candidate-paths ()
+  "Return the candidate init-file paths in priority order. Includes the
+   $LIMN_INIT entry only when the env var is set and non-empty."
+  (let ((env  (%nonempty (sb-posix:getenv "LIMN_INIT")))
+        (home (%home)))
+    (remove-if #'null
+               (list env
+                     (when (plusp (length home))
+                       (concatenate 'string home "/.limn/init.lisp"))
+                     (when (plusp (length home))
+                       (concatenate 'string home "/.config/limn/init.lisp"))
+                     "/tmp/.limn/init.lisp"))))
+
+(defun %file-exists-p (path)
+  (and path (probe-file path) t))
+
+(defun resolve-init-path ()
+  "Return the first candidate path that exists, or NIL."
+  (find-if #'%file-exists-p (init-candidate-paths)))
+
+(defun load-init-file ()
+  "Locate and load the user's init file per SPEC §9.3. Returns the path
+   loaded (string) or NIL if none was found.
+
+   Errors raised inside the init file propagate — failing to load init
+   should be loud, not silent. If you want a tolerant load, wrap the
+   call site in handler-case."
+  (let ((path (resolve-init-path)))
+    (when path
+      (load path)
+      path)))

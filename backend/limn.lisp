@@ -240,6 +240,16 @@
                      (find-symbol "*MINIBUFFER-READ*" :limn/cmd))))
       (when (and mk slot)
         (setf (symbol-value slot) (funcall mk s))))
+    ;; Load user init.lisp (SPEC §9.3) AFTER the framework's defaults
+    ;; are in place — so user bindings / commands override, rather than
+    ;; being clobbered by them. Errors propagate: a broken init.lisp
+    ;; should not silently leave the user with a half-configured session.
+    (let ((load-init (and (find-package :limn/runtime)
+                          (find-symbol "LOAD-INIT-FILE" :limn/runtime))))
+      (when load-init
+        (let ((loaded (funcall load-init)))
+          (when loaded
+            (format t "~&;; loaded init: ~a~%" loaded)))))
     ;; Spawn a background pump thread so events the user generates in the
     ;; Qt window fire their bindings while the REPL is at the prompt. Tests
     ;; with mock clients can call STOP-PUMP-THREAD if they don't want it.
