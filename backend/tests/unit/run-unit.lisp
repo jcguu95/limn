@@ -49,7 +49,8 @@
                 "mode.lisp"
                 "defcommand.lisp"
                 "runtime.lisp"
-                "minibuffer-read.lisp"))
+                "minibuffer-read.lisp"
+                "keyboard-quit.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

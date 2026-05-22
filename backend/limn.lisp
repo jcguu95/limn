@@ -220,6 +220,12 @@
     (setf *session* s)
     (unless *global-keymap*
       (setf *global-keymap* (%call :limn/keys '#:make-keymap)))
+    ;; Install default global bindings (C-g → keyboard-quit). User
+    ;; init.lisp running later can override any of them with limn:bind.
+    (let ((install (and (find-package :limn/runtime)
+                        (find-symbol "INSTALL-DEFAULT-BINDINGS"
+                                     :limn/runtime))))
+      (when install (funcall install *global-keymap*)))
     (%install-key-handler)
     (%install-buffer-handlers)
     ;; Register the default engine→mode mapping and bootstrap mode-buffers

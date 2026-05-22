@@ -35,7 +35,15 @@
            #:minibuffer-mode #:fundamental-mode
            ;; Minibuffer round-trip: builds the limn/cmd:*minibuffer-read*
            ;; thunk that the framework installs at session start.
-           #:make-minibuffer-reader #:minibuffer-cancelled))
+           #:make-minibuffer-reader #:minibuffer-cancelled
+           ;; C-g / keyboard-quit. keyboard-quit is a defcommand bound
+           ;; into the global keymap by install-default-bindings — it's
+           ;; deliberately a regular binding (NOT hardcoded in
+           ;; %dispatch-key) so users can rebind. *active-minibuffer-
+           ;; canceller* is bound dynamically by make-minibuffer-reader
+           ;; while it blocks, so keyboard-quit can abort the wait.
+           #:keyboard-quit #:*active-minibuffer-canceller*
+           #:install-default-commands #:install-default-bindings))
 
 (in-package #:limn/runtime)
 
@@ -153,9 +161,21 @@
   (:report (lambda (c s) (declare (ignore c))
              (format s "minibuffer input cancelled"))))
 
+(defvar *active-minibuffer-canceller* nil
+  "Dynamic var: while make-minibuffer-reader is blocked in wait-for-event,
+   bound to a zero-arg thunk that flips the wait's predicate to :cancel.
+
+   keyboard-quit (the C-g command) consults this — if non-NIL, it calls
+   it, aborting the read as if the user had hit ESC. NIL outside a read,
+   so C-g is a harmless no-op when nothing is waiting.")
+
 (defun make-minibuffer-reader (session)
   "Build a (function (prompt) → text) bound to SESSION. Install it as
-   limn/cmd:*minibuffer-read* so interactive commands can prompt."
+   limn/cmd:*minibuffer-read* so interactive commands can prompt.
+
+   While blocked, dynamically binds *active-minibuffer-canceller* so a
+   C-g binding (keyboard-quit) can abort the wait without the reader
+   knowing anything about key dispatch."
   (lambda (prompt)
     (let ((submitted nil)   ; :submit / :cancel / nil
           (text      nil))
@@ -165,7 +185,13 @@
                  (declare (ignore ev))
                  (setf submitted :cancel)))
         (let ((sub-hook (limn/dispatch:event-hook-name "minibuffer-submit"))
-              (can-hook (limn/dispatch:event-hook-name "minibuffer-cancel")))
+              (can-hook (limn/dispatch:event-hook-name "minibuffer-cancel"))
+              ;; Expose a canceller for keyboard-quit. Reading from the
+              ;; same dynamic scope is safe — the pump thread runs hook
+              ;; handlers (including keyboard-quit) inside this thread
+              ;; while wait-for-event drains the socket.
+              (*active-minibuffer-canceller*
+                (lambda () (setf submitted :cancel))))
           (unwind-protect
                (progn
                  (limn/hooks:add-hook sub-hook #'on-submit)
@@ -185,3 +211,46 @@
             (:submit text)
             (:cancel (error 'minibuffer-cancelled))
             (t       (error "minibuffer-read: wait returned without flag"))))))))
+
+;;; ── keyboard-quit + default C-g binding ────────────────────────────────
+;;;
+;;; Design (per discussion): C-g is deliberately NOT a hardcoded case in
+;;; %dispatch-key. We register keyboard-quit as a regular defcommand and
+;;; bind C-g to it in the default global keymap. User init.lisp can
+;;; replace either side — define-command, or rebind C-g to something
+;;; else entirely. Mirrors Emacs: keyboard-quit is interactive (callable
+;;; via M-x), C-g is the default convenience binding.
+
+(defun install-default-commands ()
+  "Register the framework's built-in commands. Idempotent — defcommand
+   re-registration just replaces the existing entry."
+  (limn/cmd:defcommand keyboard-quit ()
+    (lambda ()
+      ;; Abort any blocked minibuffer-read. The reader has bound the
+      ;; canceller dynamically, so we're modifying its local state.
+      (when *active-minibuffer-canceller*
+        (funcall *active-minibuffer-canceller*))
+      ;; Note: clearing the global key-prefix accumulator (limn::*key-prefix*)
+      ;; isn't visible here — the wire glue does it from the binding
+      ;; lambda installed by install-default-bindings. Keeps this module
+      ;; free of an upward dep on limn::.
+      nil)))
+
+(defun install-default-bindings (keymap)
+  "Install the default global bindings on KEYMAP. Currently:
+     C-g  → keyboard-quit (via call-interactively)
+
+   This is a regular binding — `(limn/keys:define-key keymap \"C-g\" …)`
+   afterwards (or limn:bind) will replace it."
+  (limn/keys:define-key
+   keymap "C-g"
+   (lambda (ev)
+     (declare (ignore ev))
+     (handler-case (limn/cmd:call-interactively 'keyboard-quit)
+       (minibuffer-cancelled () nil))))   ; cancel is the intended outcome
+  keymap)
+
+;; Register commands at LOAD time. The C-g binding is installed at
+;; session start (limn.lisp:start calls install-default-bindings on the
+;; lazy-created global keymap).
+(install-default-commands)
