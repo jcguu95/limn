@@ -195,6 +195,72 @@ scroll / resize）、其餘 ~11 個沒問。
 
 預估：4–6 個 entry fail + 修、其餘綠。半天工作。
 
+*** Batch 1.7：再 recurse 一層 — error / shutdown / 跨 thread       ~半天 ✓ DONE
+
+**為什麼有這個 batch**：
+
+1.5 / 1.6 都在「happy path event 流」這個大 dimension 內探索（不同事件
+類型、不同 modifier 組合、不同 modality、minibuffer 開/關狀態）。但這
+些都假設「程式正常運作、沒人 throw 例外、沒人砍進程」。
+
+真實使用者跑 Limn 一週、會遇到：
+  - hook handler 寫錯丟 condition
+  - 進程被 OOM killer 砍
+  - 多 session 開關
+  - 大資料量（1000+ event 累積、長 minibuffer 字串）
+
+這些「異常 / 邊界 / 規模」dimension 1.5 / 1.6 完全沒問。1.7 補。
+
+**4 個新 dimension**：
+
+| 類 | 直譯名稱 | 從哪來 |
+|----+----------+--------|
+| μ  | hook handler 異常 robustness | 1.5/1.6 假設 hook 都好好 return |
+| ν  | wire command 錯誤路徑      | 假設 caller 都餵對 |
+| ξ  | 長尾規模 / 記憶體穩定       | 每測都 sequential、沒測累積後 |
+| π  | shutdown / cleanup / restart | 假設 session 永遠不停 |
+
+**entries**：
+
+- [X] μ1   hook handler 丟 condition → 同 event 其他 handler 還跑      ★★★
+- [X] μ2   hook handler 丟 condition → pump thread 仍存活                ★★★
+- [X] ν2   wire cmd 缺 required field → ok=false + error msg          ★★
+- [X] π1   kill limn process 中途 → call signals error 不 hang          ★★
+- [X] π2   limn:stop + limn:start clean restart、二次 start 還能 work   ★★
+- [X] ξ1   200 key inject 不漏 event、RSS 不爆漲（200 而非 1000、xdotool 慢） ★
+- [X] ξ2   minibuffer 累積 1000 chars 不 crash（1000 而非 10000、xdotool stdin 限制） ★
+
+順手抓 + 修的 bug：
+
+- 【π1 修】limn/dispatch:call 不知 pump thread 死活：peer 砍掉後
+  pump thread 退、call 還傻等 *request-timeout* (10s)。修：每次
+  sleep loop iter 檢查 pump thread alive、死了直接 error。
+
+意外綠的、釘住既有 robustness：
+
+- μ1/μ2: limn-hooks run-hook 已有 per-handler handler-case (error () nil)
+  → 任一 hook throw 不污染其他 + pump thread 存活。design 早做對。
+- ν2: C++ 端 wire cmd dispatcher 對缺欄位 send_fail、Lisp 端拿到
+  ok=false 不 crash。
+- π2: limn:stop 清乾淨 *session*、再 start 重建 pump thread 正常 work。
+- ξ1: 200 keys 後 RSS 只成長 64KB——SBCL GC 健康、hook captured-events
+  list 沒 leak。
+- ξ2: 1000-char minibuffer text 完整保留、不 truncate 不 crash。
+
+**預期會抓的 bug**（讀 code 預判）：
+
+- μ1 / μ2 大概率紅：limn-hooks.lisp 的 run-hook 是
+    =(dolist (fn ...) (apply fn args))= 沒 handler-case
+    第一個 throw 就 propagate 出去、後面的 hook 不跑、pump thread
+    死掉。這是 real bug。
+- π1 應該綠：limn/dispatch:call 有 timeout 機制。
+- π2 不確定：limn:stop 有沒清乾淨 *session* 全域、第二次 start 會不會
+    雙 pump thread。
+- ξ1 / ξ2 大概率綠（SBCL GC 不錯）、但值得釘 baseline。
+- ν2 大概率綠（C++ 端有 send_fail）、但釘住 contract。
+
+預估：2–3 entry fail + 修、其餘綠。半天工作。
+
 *** Batch 2：滑鼠完整 sweep                          ~半天
 
 - [ ] B1   right/middle click (button 2/3)
@@ -253,14 +319,15 @@ screenshot infra。infra 一次蓋完、F3/F4/F5（未來）都靠這套。
 |-------+---------+------|
 | 1     | 4       | ~0.5 天 ✓ |
 | 1.5   | 8       | ~0.5 天 部分（7/8、γ3 honest red） |
-| 1.6   | 9       | ~0.5 天 |
+| 1.6   | 9       | ~0.5 天 ✓ |
+| 1.7   | 7       | ~0.5 天 |
 | 2     | 4       | ~0.5 天 |
 | 3     | 7       | ~0.5 天 |
 | 4     | 4       | ~0.5 天 |
 | 5     | 3       | ~0.5 天 |
 | 6     | 2       | ~1 天 |
 | 7     | 3       | ~0.5 天 |
-| Total | 44      | ~6 天 |
+| Total | 51      | ~6.5 天 |
 
 最後 merge =feature/v0.10-coverage-backfill= → main (=--no-ff=)、tag
 =v0.10.0=。

@@ -177,6 +177,15 @@
           ;; Most common case: another thread is pumping the socket. Just
           ;; sleep briefly; it'll fill our pending entry.
           ((and pump-thread (not i-am-pump))
+           ;; Short-circuit if the pump thread has died (peer closed
+           ;; the socket → pump returned :eof → thread exited). Without
+           ;; this we'd loop sleeping until the full *request-timeout*
+           ;; (default 10s) which is bad latency on a dead peer.
+           ;; v0.10 batch 1.7 π1 caught it.
+           (unless (sb-thread:thread-alive-p pump-thread)
+             (remhash id (session-pending sess))
+             (error "limn/dispatch: pump thread exited (peer closed?) while waiting for ~a"
+                    cmd))
            (sleep 0.01))
           ;; We ARE the pump thread (a hook called us). The outer pump loop
           ;; is paused inside this stack frame, so nobody else is going to
