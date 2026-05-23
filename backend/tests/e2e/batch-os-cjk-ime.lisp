@@ -101,7 +101,7 @@
     (mb-open "test: ")
     (mb-set-text "")
     (sleep 0.2)
-    (xdotool "type" "--window" (write-to-string wid) "--delay" "30" "中文")
+    (xdotool "type" "--delay" "30" "中文")
     (sleep 0.4)
     (let ((txt (mb-text)) (cur (mb-cursor)))
       (check (format nil "Ω1a — minibuffer text == '中文' (got ~s)" txt)
@@ -110,34 +110,40 @@
              (eql cur 2)))
     (mb-close)
 
-;;; ── Ω2: xdotool type non-BMP emoji → cursor=1 codepoint ─────────
+;;; ── Ω2 SKIP: xdotool can't deliver non-BMP via X11 `type` ───────
 ;;;
-;;; RED until v0.16: pre-v0.16 cursor would be 2 (UTF-16 surrogate
-;;; pair counts as two QString indices).
+;;; In container X11 (Xvfb), `xdotool type "🌟"` accepts the input
+;;; but the surrogate pair doesn't survive the Xkeysym pipeline —
+;;; nothing reaches Qt. This is an xdotool / X11 limitation, not a
+;;; v0.16 regression.
+;;;
+;;; Non-BMP cursor coverage at the OS tier instead goes through
+;;; test/inject-ime/commit (Ω2'), which exercises the same codepoint
+;;; cursor logic without depending on Xkeysym non-BMP support.
 
-    (format t "~%── Ω2: xdotool type '🌟' → cursor=1 codepoint ──~%")
+    (format t "~%── Ω2': ime-commit '🌟' → cursor=1 codepoint ──~%")
     (mb-open "test: ")
     (mb-set-text "")
     (sleep 0.2)
-    (xdotool "type" "--window" (write-to-string wid) "--delay" "30" "🌟")
-    (sleep 0.4)
+    (limn:call "test/inject-ime/commit" :|text| "🌟" :|frame-id| "f1")
+    (sleep 0.3)
     (let ((txt (mb-text)) (cur (mb-cursor)))
-      (check (format nil "Ω2a — minibuffer text == '🌟' (got ~s)" txt)
+      (check (format nil "Ω2'a — minibuffer text == '🌟' (got ~s)" txt)
              (and (stringp txt) (string= txt "🌟")))
-      (check (format nil "Ω2b — cursor == 1 codepoint (got ~a; pre-v0.16 = 2)" cur)
+      (check (format nil "Ω2'b — cursor == 1 codepoint (got ~a; pre-v0.16 = 2)" cur)
              (eql cur 1)))
     (mb-close)
 
-;;; ── Ω3: mixed BMP + non-BMP cursor arithmetic ──────────────────
+;;; ── Ω3': mixed BMP + non-BMP via ime-commit ─────────────────────
 
-    (format t "~%── Ω3: xdotool type 'a🌟b' → cursor=3 codepoints ──~%")
+    (format t "~%── Ω3': ime-commit 'a🌟b' → cursor=3 codepoints ──~%")
     (mb-open "test: ")
     (mb-set-text "")
     (sleep 0.2)
-    (xdotool "type" "--window" (write-to-string wid) "--delay" "30" "a🌟b")
-    (sleep 0.4)
+    (limn:call "test/inject-ime/commit" :|text| "a🌟b" :|frame-id| "f1")
+    (sleep 0.3)
     (let ((cur (mb-cursor)))
-      (check (format nil "Ω3 — cursor == 3 codepoints (got ~a; pre-v0.16 = 4)" cur)
+      (check (format nil "Ω3' — cursor == 3 codepoints (got ~a; pre-v0.16 = 4)" cur)
              (eql cur 3)))
     (mb-close)
 
@@ -167,16 +173,16 @@
 ;;; exists.
 
     (format t "~%── Ω5: test/inject-ime/preedit pushes ime-preedit event ──~%")
-    (let ((r (limn:call "test/inject-ime/preedit"
-                         :|text| "にほん" :|frame-id| "f1")))
-      (check "Ω5a — test/inject-ime/preedit responds ok"
-             (eq (limn/bridge:response-ok r) t))
-      (sleep 0.2)
-      ;; Drain events from the client side; look for ime-preedit
-      (let* ((evs (limn/bridge:drain-events))
-             (pre (find "ime-preedit" evs
-                        :key (lambda (e) (getf e :|event|))
-                        :test #'string=)))
+    (let ((captured-preedit nil))
+      ;; Register a hook to capture the ime-preedit event.
+      (limn/hooks:add-hook "event/ime-preedit"
+                           (lambda (ev) (push ev captured-preedit)))
+      (let ((r (limn:call "test/inject-ime/preedit"
+                           :|text| "にほん" :|frame-id| "f1")))
+        (check "Ω5a — test/inject-ime/preedit responds ok"
+               (eq (getf r :|ok|) t)))
+      (sleep 0.3)
+      (let ((pre (car captured-preedit)))
         (check (format nil "Ω5b — ime-preedit event received (text=~s)"
                        (and pre (getf pre :|text|)))
                (and pre (string= "にほん" (getf pre :|text|))))))
@@ -217,10 +223,10 @@
     (mb-close) (sleep 0.1)
     (let ((r1 (limn:call "test/inject-ime/commit" :|text| "中文" :|frame-id| "f1")))
       (check "Ω7a — orphan ime-commit responds ok"
-             (eq (limn/bridge:response-ok r1) t)))
+             (eq (getf r1 :|ok|) t)))
     (let ((r2 (limn:call "bridge/capabilities")))
       (check "Ω7b — server still responding after orphan ime-commit"
-             (eq (limn/bridge:response-ok r2) t)))
+             (eq (getf r2 :|ok|) t)))
 
     ;; ── summary ─────────────────────────────────────────────────
     (format t "~%~%── cjk-ime e2e results ──~%")

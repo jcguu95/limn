@@ -144,6 +144,11 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
         if (cmd == "test/inject-scroll")      { cmd_test_inject_scroll     (id, msg); return; }
         if (cmd == "test/inject-gesture")     { cmd_test_inject_gesture    (id, msg); return; }
         if (cmd == "test/inject-drag-drop")   { cmd_test_inject_drag_drop  (id, msg); return; }
+        // v0.16: canonical names are test/inject-ime/{commit,preedit}.
+        // Old test/inject-ime-commit kept as alias (existing tests in
+        // i18n.lisp / test-mode.lisp / events.lisp still use the flat name).
+        if (cmd == "test/inject-ime/commit")  { cmd_test_inject_ime_commit (id, msg); return; }
+        if (cmd == "test/inject-ime/preedit") { cmd_test_inject_ime_preedit(id, msg); return; }
         if (cmd == "test/inject-ime-commit")  { cmd_test_inject_ime_commit (id, msg); return; }
         if (cmd == "test/inject-audio-input") { cmd_test_inject_audio_input(id, msg); return; }
         if (cmd == "test/inject-resize")      { cmd_test_inject_resize     (id, msg); return; }
@@ -642,6 +647,48 @@ namespace {
 inline LimnChromeBar* chrome_of(MainWidget* mw) {
     return mw ? mw->chrome_bar() : nullptr;
 }
+
+// v0.16: codepoint ↔ UTF-16 index helpers. Live here (rather than next
+// to the buffer/* handlers further down) so cmd_minibuffer_get can use
+// them too. See the comment block at the second declaration site for
+// rationale; THIS block is the canonical definition.
+int cp_count(const QString& s) {
+    int n = 0;
+    for (int i = 0; i < s.size(); ++i)
+        if (!s.at(i).isLowSurrogate()) ++n;
+    return n;
+}
+
+int cp_to_qsidx(const QString& s, int cp_idx) {
+    if (cp_idx < 0) return -1;
+    int cp = 0, i = 0;
+    while (i < s.size() && cp < cp_idx) {
+        if (i + 1 < s.size()
+            && s.at(i).isHighSurrogate()
+            && s.at(i + 1).isLowSurrogate()) i += 2;
+        else                                 i += 1;
+        ++cp;
+    }
+    if (cp != cp_idx) return -1;
+    return i;
+}
+
+int qsidx_to_cp(const QString& s, int qs_idx) {
+    if (qs_idx < 0 || qs_idx > s.size()) return -1;
+    int cp = 0, i = 0;
+    while (i < qs_idx) {
+        if (i + 1 < s.size()
+            && s.at(i).isHighSurrogate()
+            && s.at(i + 1).isLowSurrogate()) {
+            if (i + 1 == qs_idx) return -1;
+            i += 2;
+        } else {
+            i += 1;
+        }
+        ++cp;
+    }
+    return cp;
+}
 }
 
 void LimnCommand::cmd_minibuffer_open(const QString& id, const QJsonObject& msg) {
@@ -692,13 +739,18 @@ void LimnCommand::cmd_minibuffer_get(const QString& id, const QJsonObject&) {
     data.insert("open",   minibuffer_open);
     data.insert("prompt", minibuffer_prompt);
     data.insert("text",   text_buffers["*minibuffer*"]);
-    // SPEC §6: expose cursor (codepoint offset, not byte offset) so Lisp
-    // can introspect editing state — used by completion / point-aware
-    // commands and by tests that exercise BS / arrow / Home / End logic
-    // added in v0.12 batch 20. Returned value matches text_cursors which
-    // is QString-index (UTF-16 code units); for BMP chars including
-    // common CJK that equals codepoint count.
-    data.insert("cursor", text_cursors["*minibuffer*"]);
+    // v0.16: :cursor is codepoint count from start of buffer (matches
+    // buffer/cursor-get :offset). Internally text_cursors holds UTF-16
+    // index; convert at the wire boundary so non-BMP characters (emoji,
+    // CJK Ext-B) don't double-count.
+    {
+        const QString& s = text_buffers["*minibuffer*"];
+        int qs_idx = text_cursors["*minibuffer*"];
+        int cp = qsidx_to_cp(s, qs_idx);
+        if (cp < 0 && qs_idx > 0) cp = qsidx_to_cp(s, qs_idx - 1);
+        if (cp < 0) cp = 0;
+        data.insert("cursor", cp);
+    }
     bridge->send_ok(id, data);
 }
 
@@ -734,12 +786,19 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     if (key == "BS") {
         QString& buf = text_buffers["*minibuffer*"];
         if (buf.length() > 0) {
-            // Honour cursor position (set by buffer/cursor-set or by
-            // append-typing). Delete the char to the LEFT of cursor.
+            // v0.16: delete a WHOLE codepoint to the left of cursor — for
+            // BMP that's 1 UTF-16 unit, for non-BMP it's 2 (the surrogate
+            // pair). Otherwise we'd leave dangling surrogates.
             int cur = text_cursors["*minibuffer*"];
             if (cur > 0 && cur <= buf.length()) {
-                buf.remove(cur - 1, 1);
-                text_cursors["*minibuffer*"] = cur - 1;
+                int del_units = 1;
+                if (cur >= 2
+                    && buf.at(cur - 1).isLowSurrogate()
+                    && buf.at(cur - 2).isHighSurrogate()) {
+                    del_units = 2;
+                }
+                buf.remove(cur - del_units, del_units);
+                text_cursors["*minibuffer*"] = cur - del_units;
             }
             if (auto* c = chrome_of(main_widget))
                 c->set_minibuffer(true, minibuffer_prompt, buf);
@@ -748,16 +807,24 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
         }
         return true;   // consume even at empty (no key fallback)
     }
-    // Left / Right — move cursor without modifying text. Maps to A4
-    // TODO entry.
+    // Left / Right — move cursor without modifying text. v0.16: step by
+    // a whole codepoint (skip surrogate pair as one unit).
     if (key == "<left>" || key == "<right>") {
+        const QString& s = text_buffers["*minibuffer*"];
         int cur = text_cursors["*minibuffer*"];
-        const int len = text_buffers["*minibuffer*"].length();
-        if (key == "<left>"  && cur > 0)   text_cursors["*minibuffer*"] = cur - 1;
-        if (key == "<right>" && cur < len) text_cursors["*minibuffer*"] = cur + 1;
-        // No event push — cursor move is silent (caller can buffer/cursor-get
-        // if they want to observe). Matches Emacs convention: no minibuffer-
-        // input event because text didn't change.
+        const int len = s.length();
+        if (key == "<left>" && cur > 0) {
+            int step = 1;
+            if (cur >= 2 && s.at(cur - 1).isLowSurrogate()
+                && s.at(cur - 2).isHighSurrogate()) step = 2;
+            text_cursors["*minibuffer*"] = cur - step;
+        }
+        if (key == "<right>" && cur < len) {
+            int step = 1;
+            if (cur + 1 < len && s.at(cur).isHighSurrogate()
+                && s.at(cur + 1).isLowSurrogate()) step = 2;
+            text_cursors["*minibuffer*"] = cur + step;
+        }
         return true;
     }
     // Home / End — cursor to start / end.
@@ -1321,13 +1388,28 @@ bool resolve_text_buffer(LimnBridge* bridge,
     out_buf = buf;
     return true;
 }
+// v0.16 codepoint helpers (cp_count / cp_to_qsidx / qsidx_to_cp) are
+// defined in the earlier anonymous namespace near chrome_of(), so
+// cmd_minibuffer_get above this point can also use them.
 }  // anonymous
+
+// v0.16 cursor / edit handlers — all wire offsets are CODEPOINT indices.
+// Internally we still store QString (UTF-16); convert at every wire
+// boundary via the cp_count / cp_to_qsidx / qsidx_to_cp helpers above.
 
 void LimnCommand::cmd_buffer_cursor_get(const QString& id, const QJsonObject& msg) {
     QString buf;
     if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
+    const QString& s = text_buffers.value(buf);
+    int qs_idx = text_cursors.value(buf, 0);
+    int cp = qsidx_to_cp(s, qs_idx);
+    // If cursor somehow lands mid-surrogate (shouldn't with v0.16 setters,
+    // but defensive against pre-v0.16 leftovers): snap to the nearest
+    // valid codepoint boundary by clamping qs_idx down by 1.
+    if (cp < 0 && qs_idx > 0) cp = qsidx_to_cp(s, qs_idx - 1);
+    if (cp < 0) cp = 0;
     QJsonObject data;
-    data.insert("offset", text_cursors.value(buf, 0));
+    data.insert("offset", cp);
     bridge->send_ok(id, data);
 }
 
@@ -1338,14 +1420,15 @@ void LimnCommand::cmd_buffer_cursor_set(const QString& id, const QJsonObject& ms
         bridge->send_fail(id, "missing or invalid 'offset'");
         return;
     }
-    const int offset = msg.value("offset").toInt();
-    const int len    = text_buffers.value(buf).length();
-    if (offset < 0 || offset > len) {
+    const int cp_offset = msg.value("offset").toInt();
+    const QString& s = text_buffers.value(buf);
+    const int total_cp = cp_count(s);
+    if (cp_offset < 0 || cp_offset > total_cp) {
         bridge->send_fail(id, QString("offset %1 out of range [0, %2]")
-                              .arg(offset).arg(len));
+                              .arg(cp_offset).arg(total_cp));
         return;
     }
-    text_cursors[buf] = offset;
+    text_cursors[buf] = cp_to_qsidx(s, cp_offset);
     bridge->send_ok(id);
 }
 
@@ -1358,22 +1441,26 @@ void LimnCommand::cmd_buffer_insert(const QString& id, const QJsonObject& msg) {
         return;
     }
     QString& content = text_buffers[buf];
-    int& cursor      = text_cursors[buf];
+    int& cursor      = text_cursors[buf];           // UTF-16 index internally
 
-    int at;
+    int qs_at;
     if (msg.contains("at") && msg.value("at").isDouble()) {
-        at = msg.value("at").toInt();
-        if (at < 0 || at > content.length()) {
-            bridge->send_fail(id, QString("'at' offset %1 out of range").arg(at));
+        const int cp_at = msg.value("at").toInt();
+        const int total_cp = cp_count(content);
+        if (cp_at < 0 || cp_at > total_cp) {
+            bridge->send_fail(id, QString("'at' offset %1 out of range [0, %2]")
+                                  .arg(cp_at).arg(total_cp));
             return;
         }
+        qs_at = cp_to_qsidx(content, cp_at);
     } else {
-        at = cursor;
+        qs_at = cursor;
     }
-    content.insert(at, text);
-    // Cursor shifts: AT-or-BEFORE-cursor insertion pushes cursor right;
-    // AFTER-cursor insertion leaves cursor in place.
-    if (at <= cursor) cursor += text.length();
+    content.insert(qs_at, text);
+    // Cursor shifts (in UTF-16 internal units): AT-or-BEFORE-cursor
+    // insertion pushes cursor right by text's UTF-16 length; AFTER-cursor
+    // insertion leaves cursor in place.
+    if (qs_at <= cursor) cursor += text.length();
     bridge->send_ok(id);
 }
 
@@ -1385,19 +1472,22 @@ void LimnCommand::cmd_buffer_delete(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, "missing or invalid 'from' / 'to'");
         return;
     }
-    const int from = msg.value("from").toInt();
-    const int to   = msg.value("to").toInt();
+    const int cp_from = msg.value("from").toInt();
+    const int cp_to   = msg.value("to").toInt();
     QString& content = text_buffers[buf];
-    if (from < 0 || to > content.length() || from > to) {
-        bridge->send_fail(id, QString("range [%1, %2) out of buffer (len=%3)")
-                              .arg(from).arg(to).arg(content.length()));
+    const int total_cp = cp_count(content);
+    if (cp_from < 0 || cp_to > total_cp || cp_from > cp_to) {
+        bridge->send_fail(id, QString("range [%1, %2) out of buffer (cp-len=%3)")
+                              .arg(cp_from).arg(cp_to).arg(total_cp));
         return;
     }
-    content.remove(from, to - from);
-    // Adjust cursor based on its position vs deleted range:
+    const int qs_from = cp_to_qsidx(content, cp_from);
+    const int qs_to   = cp_to_qsidx(content, cp_to);
+    content.remove(qs_from, qs_to - qs_from);
+    // Adjust cursor (UTF-16 internal) based on its position vs deleted range:
     int& cursor = text_cursors[buf];
-    if (cursor >= to)   cursor -= (to - from);     // shifted left by removed chars
-    else if (cursor > from) cursor = from;         // was inside, snap to start
+    if (cursor >= qs_to)        cursor -= (qs_to - qs_from);  // shift left
+    else if (cursor > qs_from)  cursor = qs_from;             // snap to start
     bridge->send_ok(id);
 }
 
@@ -1660,7 +1750,46 @@ void LimnCommand::cmd_test_inject_drag_drop(const QString& id, const QJsonObject
 
 void LimnCommand::cmd_test_inject_ime_commit(const QString& id, const QJsonObject& msg) {
     QJsonObject ev = pick_keys(msg, {"frame-id", "text"});
+    // v0.16: SPEC §6 requires :frame-id on every frame-scoped event.
+    // Default to "f1" if caller didn't pass one (back-compat with v0.7).
+    if (!ev.contains("frame-id")) ev.insert("frame-id", "f1");
+    const QString text = msg.value("text").toString();
+
+    // v0.16: SERVER-SIDE dispatch. When the minibuffer is open, commit
+    // the IME text into *minibuffer* (advancing cursor by codepoint
+    // count of text) and emit minibuffer-input so Lisp observers see
+    // the change. When the minibuffer is closed: just fire the
+    // ime-commit event (graceful no-op for the text — observers can
+    // still react if they want).
+    //
+    // Same vanilla-Emacs C-core pattern: the C-level commit_text path
+    // mutates the buffer at point; Lisp doesn't have to wire dispatch.
+    if (minibuffer_open && !text.isEmpty()) {
+        QString& buf  = text_buffers["*minibuffer*"];
+        int&     cur  = text_cursors["*minibuffer*"];
+        buf.insert(cur, text);
+        cur += text.length();         // UTF-16 internal units
+        if (auto* c = chrome_of(main_widget))
+            c->set_minibuffer(true, minibuffer_prompt, buf);
+        QJsonObject input_ev;
+        input_ev.insert("frame-id", "f1");
+        input_ev.insert("text", buf);
+        bridge->push_event("minibuffer-input", input_ev);
+    }
+
     bridge->push_event("ime-commit", ev);
+    bridge->send_ok(id);
+}
+
+// v0.16: parallel primitive for the in-progress composition string the
+// IME is currently displaying. Distinct event type from ime-commit so
+// clients can show preedit underline / styling separately.
+void LimnCommand::cmd_test_inject_ime_preedit(const QString& id, const QJsonObject& msg) {
+    QJsonObject ev = pick_keys(msg, {"frame-id", "text"});
+    if (!ev.contains("frame-id")) ev.insert("frame-id", "f1");
+    // Empty :text by convention = "cancel composition". Same event shape,
+    // dispatcher can distinguish by string length.
+    bridge->push_event("ime-preedit", ev);
     bridge->send_ok(id);
 }
 

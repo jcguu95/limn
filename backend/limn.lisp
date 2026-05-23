@@ -247,6 +247,24 @@
         (funcall remove close #'%on-buffer-closed)
         (funcall add    close #'%on-buffer-closed)))))
 
+;;; ── ime-commit / ime-preedit notes (v0.16) ────────────────────────────
+;;;
+;;; SPEC §6 events ime-preedit / ime-commit. Dispatch into the
+;;; minibuffer happens *server-side* in cmd_test_inject_ime_commit
+;;; (and any future real IME commit path) — same vanilla-Emacs C-core
+;;; pattern: the C-level commit_text path mutates the buffer at point,
+;;; Lisp observers get the event but the mutation is automatic.
+;;;
+;;; This means user Lisp doesn't have to register a dispatcher to get
+;;; CJK typing in the minibuffer working — it Just Works. User code
+;;; that wants to OBSERVE ime-commit (e.g. log every committed string)
+;;; can still add-hook event/ime-commit normally.
+;;;
+;;; ime-preedit is purely informational at the C level (no buffer
+;;; mutation — it's a composition preview, not committed text). User
+;;; code can add-hook event/ime-preedit to render a composition
+;;; underline / candidate window if they want.
+
 ;;; ── start / stop ───────────────────────────────────────────────────────
 
 (defun %bootstrap-runtime ()

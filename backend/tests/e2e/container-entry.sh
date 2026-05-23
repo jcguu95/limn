@@ -49,6 +49,14 @@ fc-cache -f > /tmp/fc-cache.log 2>&1 || true
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
 
+# v0.16: UTF-8 locale required for xdotool to type multi-byte input
+# (CJK, emoji). Without this, `xdotool type "中文"` errors out with
+# "Invalid multi-byte sequence". run-os-e2e.sh sets this when it's
+# the entrypoint, but direct sbcl invocations through container-entry
+# need it set here too.
+export LANG="${LANG:-C.UTF-8}"
+export LC_ALL="${LC_ALL:-C.UTF-8}"
+
 # Optional x11vnc for live debug (map -p 5900:5900 on host).
 if [ "${X11VNC:-0}" = "1" ]; then
   x11vnc -display "${DISPLAY}" -nopw -forever -shared \

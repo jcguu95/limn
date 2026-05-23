@@ -81,6 +81,7 @@ private:
     void cmd_test_inject_gesture    (const QString& id, const QJsonObject& msg);
     void cmd_test_inject_drag_drop  (const QString& id, const QJsonObject& msg);
     void cmd_test_inject_ime_commit (const QString& id, const QJsonObject& msg);
+    void cmd_test_inject_ime_preedit(const QString& id, const QJsonObject& msg);   // v0.16
     void cmd_test_inject_audio_input(const QString& id, const QJsonObject& msg);
     void cmd_test_inject_resize     (const QString& id, const QJsonObject& msg);
     void cmd_test_emit_heartbeat    (const QString& id, const QJsonObject& msg);
