@@ -38,12 +38,32 @@ fails=()
 
 cleanup_between_drivers() {
   # Kill any limn process the previous driver may have left running.
-  # 30 drivers × multi sessions each = lots of opportunity for orphans.
+  # 30+ drivers × multi sessions each = lots of opportunity for orphans.
   pkill -9 -f "/limn/sioyek/limn" 2>/dev/null || true
   # Remove stale socket files
   rm -f /tmp/limn-e2e-*-* /tmp/limn-real-* /tmp/limn-repl-* 2>/dev/null || true
   # Force-release any modifier keys that might be stuck
   xdotool keyup ctrl alt shift Meta_L 2>/dev/null || true
+
+  # v0.14: forcibly destroy any residual X windows whose name contains
+  # "Limn". Cumulative-state flake observed across mouse-extras + others
+  # at ~25% rate (v0.13 noted as residual). Root cause: when a driver's
+  # SIGKILL of Limn beats openbox's normal close handshake, the window
+  # lingers in X tree for ~hundreds of ms; the next driver's
+  # wait-for-window-by-name picks up the corpse, routes xdotool keys to
+  # nowhere. Solution: actively xdotool windowkill them all and poll
+  # until "search Limn" returns empty.
+  for wid in $(xdotool search --name "Limn" 2>/dev/null); do
+    xdotool windowkill "$wid" 2>/dev/null || true
+  done
+  # Poll up to 2s for windows to be fully gone before returning.
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if [ -z "$(xdotool search --name 'Limn' 2>/dev/null)" ]; then
+      break
+    fi
+    sleep 0.1
+  done
+
   sleep 0.4
 }
 

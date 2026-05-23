@@ -62,3 +62,4 @@ sioyek/pdf_viewer/diff/
 
 # runtime REPL log
 limn-repl.log
+.claude/
