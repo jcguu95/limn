@@ -1,6 +1,122 @@
 #+TITLE: OS-level 測試擴充 TODO
 #+OPTIONS: toc:3
 
+* v0.11 sprint：續做 OS-level coverage (overnight autonomous)
+
+** 為什麼有這個 sprint
+
+使用者「我要去睡了、請繼續做完所有 OS-level 測試、明早驗收」。
+
+v0.10 sprint 完工後（7 + 3 recursive 強化 batch），plateau 訊號開始
+浮現（batch 4/5 抓 0 bug）。v0.11 試把 OS-level coverage 延伸到 v0.10
+覆蓋不到的 dimension：
+
+** 12 個追加 batch (batch 8-19)
+
+每 batch 一個 commit。
+
+*** Batch 8：mouse extras (12/12 全綠)  ✓
+
+  B4 horizontal scroll (button 6) → dx=120
+  B7 pure mousemove → 不該 emit mouse-click
+  B8 click 4 個不同位置都 OK
+  B9 triple click → 3 mouse-click events (Press+DblClick+Press)
+  B10 5 rapid clicks → 5 events
+  B11 邊界 click 不 crash
+
+*** Batch 9：concurrency (7/7 全綠)  ✓
+
+  L1 render burst + key inject 同時、7 keys 都到
+  L2 3 + 10 threads parallel wire calls、所有 ok
+  L4 minibuffer/open + immediate key inject → 走 minibuffer-input
+
+*** Batch 10：error edge (8/8 全綠)  ✓
+
+  H3 5 rapid C-g、first cancel、後 4 次 noop、session alive
+  H5 malformed JSON / wrong shape JSON → bridge 不 crash
+  E5 nested minibuffer/open → overwrites（SPEC 沒寫、釘住 impl）
+
+*** Batch 11：mode behavior (10/10 全綠) + **1 bug fix**  ✓
+
+  N3 mode :on-enter / :on-exit hooks 觸發順序 (a進 → a出+b進)
+  N4 多 mode-buffer 互不污染
+  runtime: b1 mode-buffer 的 major = fundamental-mode
+
+  【fixed bug】emit_buffer_opened 之前不帶 :engine 欄位、Lisp 端
+  %on-buffer-opened 拿不到 engine → engine-default-mode 永遠 nil →
+  activate 從未被呼叫 → mode-buffer.major 永遠 nil。SPEC §9.1 寫的
+  「engine-load → 啟用 engine 預設 major mode」這個 invariant 從來
+  沒落實過。
+
+*** Batch 12：user flow scenarios (13/13 全綠)  ✓
+
+  G1 PDF reading: 開檔 → j×5 → / → type → submit → *messages* 含結果
+  G2 customization chain: defcommand → bind → inject → introspect
+
+*** Batch 13：perf baseline (4/4 全綠)  ✓
+
+  I4 200 bindings registered ≈ 2 ms
+     50 dispatches all fired
+     100 where-is-command lookups < 1 ms
+
+*** Batch 14：navigation keys (15/15 全綠)  ✓
+
+  A8 14 個 named keys: PageUp/Down、Home/End、arrow×4、Insert/Delete、
+     BS/RET/ESC/TAB 都對應 SPEC §6 names
+  + bind <pageup> → fire 確認 OS routing 通
+
+*** Batch 15：multi-PDF + broken init (5/5 全綠)  ✓
+
+  G4 load A page 3 → load B same win-id → B 新 buffer-id、page 0
+  G6 broken init.lisp 拋 error 不靜默吞
+
+*** Batch 16：mode precedence (5/5 全綠)  ✓
+
+  K4 真實 OS dispatch 走完 minor(newest first)→major→global stack：
+     major only → :major
+     +minor-a   → :minor-a
+     +minor-b(無 z) → :minor-a (newest-first 但 b 沒 z fall through)
+     -minor-a   → :major
+
+*** Batch 17：chrome buffers + modeline (12/12 全綠)  ✓
+
+  *messages* 累積 3 條 message、順序保留
+  *echo-area* message/echo 寫入、message/clear 清空（不動 *messages*）
+  modeline left/middle/right 三段獨立、partial set preserve 其他
+
+*** Batch 18：hot reload init.lisp (6/6 全綠)  ✓
+
+  G5 init A 載入 → z fires :version-a
+     (load init-B) → z fires :version-b
+     unbind z → z 不 fire
+  Emacs-style dev loop 釘住。
+
+*** Batch 19：buffer edit OS-level (10/10 全綠) + **1 bug fix**  ✓
+
+  cursor-get / cursor-set / insert / delete 透過 OS 打字路徑全 sync。
+
+  【fixed bug】minibuffer_handle_key 漏更新 text_cursors[\"*minibuffer*\"]。
+  OS-level type 後 text 推進但 cursor 留 0。導致之後 buffer/insert
+  從位置 0 開始、不是直觀「在 cursor 後」。修：append 時同步
+  cursor = text.length()。
+
+** v0.11 累計
+
+  unit         315/315
+  integration 1001/1001
+  qt-e2e         3/3
+  os-e2e        29/0      ← v0.10 結束 17 → v0.11 加 12
+
+  抓 + 修 2 個 C++ bug:
+    1. emit_buffer_opened 缺 engine 欄位
+       → §9.1 mode auto-activation 從未真實 work
+    2. minibuffer_handle_key 漏更新 text_cursors
+       → OS 打字後 cursor 不 sync
+
+  v0.10 + v0.11 累計：10 + 2 = 12 個 C++/Lisp bug、1 feature 補完
+  (drag wire)、4 個 systematic recurse、29 個 OS-level driver、
+  ~210 個 sub-assertion 全綠。
+
 * v0.10 sprint 計畫：coverage backfill
 
 ** 為什麼這個 sprint 存在
