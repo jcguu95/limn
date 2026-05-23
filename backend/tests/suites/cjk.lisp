@@ -14,8 +14,8 @@
 ;;;;
 ;;;;   3. IME pipeline: Qt inputMethodEvent → ime-preedit / ime-commit
 ;;;;      events. Test injection primitives:
-;;;;         test/inject-ime-preedit :text :frame-id   (NEW v0.16)
-;;;;         test/inject-ime-commit  :text :frame-id   (existed since v0.7)
+;;;;         test/inject-ime/preedit :text :frame-id   (NEW v0.16)
+;;;;         test/inject-ime/commit  :text :frame-id   (existed since v0.7)
 ;;;;
 ;;;; All RED until v0.16 impl lands. Once GREEN, this suite is the
 ;;;; permanent regression net for CJK / non-BMP / IME behaviour.
@@ -109,15 +109,35 @@
 
 (deftest test-cjk-buffer-cursor-set-codepoint
   "cursor-set with codepoint offset; subsequent insert lands at that
-   codepoint, not at the corresponding UTF-16 index."
+   codepoint, not at the corresponding UTF-16 index.
+
+   Also verifies insert-AT-cursor shifts cursor right (existing rule):
+   cursor was 2, insert 1-codepoint Z at 2 → cursor=3."
   (let ((b (open-text-buffer)))
     (when b
       (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "🌟🌟🌟")
       (send! "buffer/cursor-set" :|buffer-id| b :|offset| 2)
       (assert-equal 2 (buf-cursor b) "cursor=2 (codepoint)")
-      (send! "buffer/insert" :|buffer-id| b :|offset| 2 :|text| "Z")
+      (send! "buffer/insert" :|buffer-id| b :|at| 2 :|text| "Z")
       (assert-equal "🌟🌟Z🌟" (buf-text b)
-                    "Z inserts between codepoints 2 and 3"))))
+                    "Z inserts between codepoints 2 and 3")
+      (assert-equal 3 (buf-cursor b)
+                    "cursor shifts right by 1 codepoint (Z)"))))
+
+(deftest test-cjk-buffer-insert-after-cursor-leaves-cursor
+  "Insert AT an offset AFTER the current cursor leaves cursor unchanged.
+   Tests the 'after-cursor insert' branch of the cursor-shift rule.
+   Specifically with non-BMP characters: insert 🌟 at offset 4 when
+   cursor is at 2 → cursor stays at 2 (not blindly +1 for char, not
+   +2 for UTF-16 units)."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "🌟🌟🌟🌟🌟")
+      (send! "buffer/cursor-set" :|buffer-id| b :|offset| 2)
+      (assert-equal 2 (buf-cursor b))
+      (send! "buffer/insert" :|buffer-id| b :|at| 4 :|text| "🌟")
+      (assert-equal 2 (buf-cursor b)
+                    "cursor unchanged when insert is AFTER cursor"))))
 
 ;;; ── C. minibuffer cursor consistency ─────────────────────────────────
 
@@ -143,11 +163,11 @@
 ;;; ── D. IME events: ime-preedit injection (NEW v0.16 primitive) ──────
 
 (deftest test-ime-inject-preedit-fires-event
-  "test/inject-ime-preedit pushes an ime-preedit event with the
+  "test/inject-ime/preedit pushes an ime-preedit event with the
    composition string. This is the in-progress text the user is
    composing (not yet committed to any buffer)."
   (drain-events)
-  (send! "test/inject-ime-preedit" :|text| "ち" :|frame-id| "f1")
+  (send! "test/inject-ime/preedit" :|text| "ち" :|frame-id| "f1")
   (let ((ev (read-event :type "ime-preedit" :timeout 1)))
     (assert-true ev "ime-preedit event arrived")
     (when ev
@@ -157,20 +177,20 @@
   "Successive preedits represent the evolving composition; each
    produces an event with the current :text."
   (drain-events)
-  (send! "test/inject-ime-preedit" :|text| "に")
+  (send! "test/inject-ime/preedit" :|text| "に")
   (let ((e1 (read-event :type "ime-preedit" :timeout 1)))
     (assert-true e1 "first preedit fired")
     (when e1 (assert-equal "に" (getf e1 :|text|))))
-  (send! "test/inject-ime-preedit" :|text| "にほん")
+  (send! "test/inject-ime/preedit" :|text| "にほん")
   (let ((e2 (read-event :type "ime-preedit" :timeout 1)))
     (assert-true e2 "second preedit fired")
     (when e2 (assert-equal "にほん" (getf e2 :|text|) "evolved text"))))
 
 (deftest test-ime-inject-commit-still-fires
-  "test/inject-ime-commit (existing since v0.7) regression: still
+  "test/inject-ime/commit (existing since v0.7) regression: still
    fires ime-commit event with :text."
   (drain-events)
-  (send! "test/inject-ime-commit" :|text| "日本" :|frame-id| "f1")
+  (send! "test/inject-ime/commit" :|text| "日本" :|frame-id| "f1")
   (let ((ev (read-event :type "ime-commit" :timeout 1)))
     (assert-true ev "ime-commit event arrived")
     (when ev (assert-equal "日本" (getf ev :|text|)))))
@@ -179,8 +199,8 @@
   "ime-preedit and ime-commit are distinct event types — verify by
    firing one of each and confirming both arrive on their own queues."
   (drain-events)
-  (send! "test/inject-ime-preedit" :|text| "に")
-  (send! "test/inject-ime-commit"  :|text| "日本")
+  (send! "test/inject-ime/preedit" :|text| "に")
+  (send! "test/inject-ime/commit"  :|text| "日本")
   (let ((pe (read-event :type "ime-preedit" :timeout 1))
         (ce (read-event :type "ime-commit"  :timeout 1)))
     (assert-true pe "preedit arrived")
@@ -194,14 +214,19 @@
 (deftest test-ime-commit-mutates-minibuffer
   "When minibuffer is open, ime-commit text should land in the
    minibuffer's text buffer (via dispatch wiring in limn-dispatch).
-   Pre-v0.16 there's no ime-commit dispatcher — this is RED."
+   Pre-v0.16 there's no ime-commit dispatcher — this is RED.
+
+   Also verifies that the cursor advances by the codepoint count of
+   the committed text (subsumes the multi-codepoint cursor assert)."
   (send! "minibuffer/open" :|prompt| "test: ")
   (unwind-protect
     (progn
       (send! "minibuffer/set-text" :|text| "")
-      (send! "test/inject-ime-commit" :|text| "中文")
+      (send! "test/inject-ime/commit" :|text| "中文")
       (assert-equal "中文" (mbtext)
-                    "ime-commit text appended into minibuffer"))
+                    "ime-commit text appended into minibuffer")
+      (assert-equal 2 (mbcursor)
+                    "cursor advances by 2 codepoints (BMP CJK)"))
     (send! "minibuffer/close")))
 
 (deftest test-ime-commit-cursor-advances-by-codepoint
@@ -211,7 +236,186 @@
   (unwind-protect
     (progn
       (send! "minibuffer/set-text" :|text| "")
-      (send! "test/inject-ime-commit" :|text| "🌟")
+      (send! "test/inject-ime/commit" :|text| "🌟")
       (assert-equal 1 (mbcursor)
                     "cursor=1 codepoint after non-BMP ime-commit"))
     (send! "minibuffer/close")))
+
+
+;;; ─────────────────────────────────────────────────────────────────────
+;;; Round 2 — net-new RED tests after coverage review (no overlap with
+;;; the deftests above; design decisions confirmed by reviewer):
+;;;
+;;;   • cursor-set / delete that would land mid-surrogate must FAIL
+;;;     (strict contract, not silent snap-to-boundary)
+;;;   • combining characters counted as N codepoints, NOT as 1 grapheme
+;;;     cluster (matches vanilla Emacs)
+;;;   • ime-commit when minibuffer is closed must be a graceful no-op
+;;;   • ime-preedit with empty string = cancel composition
+;;;   • all IME events carry :frame-id per SPEC §6
+;;; ─────────────────────────────────────────────────────────────────────
+
+;;; ── F. boundary / rejection contracts ───────────────────────────────
+
+(deftest test-cjk-cursor-set-out-of-codepoint-range-fails
+  "Post-v0.16 cursor-set offset is codepoint-counted. For buffer '🌟'
+   (1 codepoint), offset=2 used to be valid (UTF-16 end) but is now
+   beyond the codepoint count and must fail. offset=1 is end and OK."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "🌟")
+      (assert-ok   (send! "buffer/cursor-set" :|buffer-id| b :|offset| 0)
+                   "offset=0 OK (start)")
+      (assert-ok   (send! "buffer/cursor-set" :|buffer-id| b :|offset| 1)
+                   "offset=1 OK (end, codepoint count)")
+      (assert-fail (send! "buffer/cursor-set" :|buffer-id| b :|offset| 2)
+                   "offset=2 fails (was valid in UTF-16, now beyond cp)"))))
+
+(deftest test-cjk-buffer-delete-out-of-codepoint-range-fails
+  "Symmetric: delete from/to using codepoint indices. For 'a🌟b'
+   (3 codepoints), from=3 to=3 is valid end-of-buffer (empty range);
+   from=4 is beyond — fails."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "a🌟b")
+      (assert-ok   (send! "buffer/delete" :|buffer-id| b :|from| 3 :|to| 3)
+                   "from=to=end is valid no-op range")
+      (assert-fail (send! "buffer/delete" :|buffer-id| b :|from| 0 :|to| 4)
+                   "to=4 is beyond codepoint count (3)"))))
+
+(deftest test-cjk-buffer-empty-delete-noop
+  "Empty range delete (from == to) is a no-op: doesn't fail, doesn't
+   mutate text, doesn't move cursor."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "abc")
+      (send! "buffer/cursor-set" :|buffer-id| b :|offset| 2)
+      (assert-ok (send! "buffer/delete" :|buffer-id| b :|from| 1 :|to| 1))
+      (assert-equal "abc" (buf-text b) "text unchanged")
+      (assert-equal 2 (buf-cursor b)   "cursor unchanged"))))
+
+;;; ── G. cursor shift after delete (before / in / after region) ───────
+
+(deftest test-cjk-cursor-shifts-when-delete-before
+  "Delete a range BEFORE the cursor: cursor shifts left by the deleted
+   codepoint count. 'a🌟bcd' cursor=4 (at 'd'), delete from=0 to=2
+   (removes 'a🌟') → text='bcd', cursor=2 (still at 'd')."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "a🌟bcd")
+      (send! "buffer/cursor-set" :|buffer-id| b :|offset| 4)
+      (send! "buffer/delete" :|buffer-id| b :|from| 0 :|to| 2)
+      (assert-equal "bcd" (buf-text b))
+      (assert-equal 2 (buf-cursor b) "cursor shifts left by 2 codepoints"))))
+
+(deftest test-cjk-cursor-unchanged-when-delete-after
+  "Delete a range AFTER the cursor: cursor is unchanged.
+   'abc🌟d' cursor=2, delete from=3 to=5 (removes '🌟d') → cursor=2."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "abc🌟d")
+      (send! "buffer/cursor-set" :|buffer-id| b :|offset| 2)
+      (send! "buffer/delete" :|buffer-id| b :|from| 3 :|to| 5)
+      (assert-equal "abc" (buf-text b))
+      (assert-equal 2 (buf-cursor b) "cursor unchanged"))))
+
+(deftest test-cjk-cursor-clamps-when-delete-spans-cursor
+  "Delete a range CONTAINING the cursor: cursor clamps to range start.
+   'abcde' cursor=3 (between 'c' and 'd'), delete from=1 to=4 →
+   text='ae', cursor=1 (clamped to 'from')."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "abcde")
+      (send! "buffer/cursor-set" :|buffer-id| b :|offset| 3)
+      (send! "buffer/delete" :|buffer-id| b :|from| 1 :|to| 4)
+      (assert-equal "ae" (buf-text b))
+      (assert-equal 1 (buf-cursor b) "cursor clamps to delete range start"))))
+
+;;; ── H. pure-emoji buffer edge ops ───────────────────────────────────
+
+(deftest test-cjk-pure-emoji-delete-first
+  "Buffer is just emoji. Delete the first codepoint."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "🌟🌙🌞")
+      (send! "buffer/delete" :|buffer-id| b :|from| 0 :|to| 1)
+      (assert-equal "🌙🌞" (buf-text b)))))
+
+(deftest test-cjk-pure-emoji-delete-last
+  "Delete the last codepoint of a pure-emoji buffer."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "🌟🌙🌞")
+      (send! "buffer/delete" :|buffer-id| b :|from| 2 :|to| 3)
+      (assert-equal "🌟🌙" (buf-text b)))))
+
+(deftest test-cjk-pure-emoji-cursor-at-end
+  "Cursor at end-of-buffer (== codepoint count) is valid and stable."
+  (let ((b (open-text-buffer)))
+    (when b
+      (send! "buffer/insert" :|buffer-id| b :|at| 0 :|text| "🌟🌙🌞")
+      (assert-equal 3 (buf-cursor b) "cursor at end after insert")
+      (send! "buffer/cursor-set" :|buffer-id| b :|offset| 3)
+      (assert-equal 3 (buf-cursor b) "cursor-set to end roundtrips"))))
+
+;;; ── I. combining character: per-codepoint, NOT grapheme cluster ─────
+
+(deftest test-cjk-combining-character-counts-as-multiple-codepoints
+  "'é' written as 'e' (U+0065) + COMBINING ACUTE (U+0301) is 2
+   codepoints. We deliberately do NOT do grapheme cluster awareness
+   (would be 1 user-visible character but require ICU). Matches vanilla
+   Emacs's character-count behaviour."
+  (let ((b (open-text-buffer)))
+    (when b
+      ;; "café" with decomposed é: c a f e combining-acute
+      (send! "buffer/insert" :|buffer-id| b :|at| 0
+             :|text| (format nil "cafe~A" (code-char #x0301)))
+      (assert-equal 5 (buf-cursor b)
+                    "5 codepoints (NOT 4 grapheme clusters)"))))
+
+;;; ── J. IME — graceful no-op when minibuffer not open ────────────────
+
+(deftest test-ime-commit-without-minibuffer-doesnt-crash
+  "ime-commit when minibuffer is NOT open must NOT crash the server
+   and must NOT corrupt any random buffer (no scoping leak).
+   At minimum: the call succeeds, subsequent calls work."
+  ;; Make sure minibuffer is closed.
+  (send! "minibuffer/close")
+  (assert-ok (send! "test/inject-ime/commit" :|text| "中文" :|frame-id| "f1")
+             "inject responds OK even without minibuffer")
+  ;; Server must still respond to follow-up call.
+  (assert-ok (send! "bridge/capabilities")
+             "server still alive after orphan ime-commit"))
+
+;;; ── K. IME — empty preedit = cancel composition ─────────────────────
+
+(deftest test-ime-preedit-empty-text-cancels
+  "Wire contract: ime-preedit with :text=\"\" signals composition
+   cancellation. Test that the empty preedit fires its own event
+   distinct from the prior :text — clients can detect the cancel."
+  (drain-events)
+  (send! "test/inject-ime/preedit" :|text| "にほん")
+  (drain-events) ; flush the non-empty preedit event
+  (send! "test/inject-ime/preedit" :|text| "")
+  (let ((ev (read-event :type "ime-preedit" :timeout 1)))
+    (assert-true ev "empty preedit event fires (cancel signal)")
+    (when ev
+      (assert-equal "" (getf ev :|text|)
+                    ":text is empty string, signalling cancel"))))
+
+;;; ── L. SPEC §6 — every IME event carries :frame-id ──────────────────
+
+(deftest test-ime-events-include-frame-id
+  "SPEC §6 requires every frame-scoped event to carry :frame-id.
+   Verify for both ime-preedit and ime-commit."
+  (drain-events)
+  (send! "test/inject-ime/preedit" :|text| "に" :|frame-id| "f1")
+  (let ((pe (read-event :type "ime-preedit" :timeout 1)))
+    (assert-true pe "preedit arrived")
+    (when pe
+      (assert-has-key :|frame-id| pe "preedit event has :frame-id")))
+  (send! "test/inject-ime/commit" :|text| "日本" :|frame-id| "f1")
+  (let ((ce (read-event :type "ime-commit" :timeout 1)))
+    (assert-true ce "commit arrived")
+    (when ce
+      (assert-has-key :|frame-id| ce "commit event has :frame-id"))))

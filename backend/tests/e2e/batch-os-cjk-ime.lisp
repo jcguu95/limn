@@ -141,7 +141,7 @@
              (eql cur 3)))
     (mb-close)
 
-;;; ── Ω4: test/inject-ime-commit → minibuffer text (dispatch wiring) ─
+;;; ── Ω4: test/inject-ime/commit → minibuffer text (dispatch wiring) ─
 ;;;
 ;;; ime-commit must flow through limn-dispatch and land in minibuffer
 ;;; text. Pre-v0.16 there is no ime-commit handler — minibuffer stays
@@ -151,7 +151,7 @@
     (mb-open "test: ")
     (mb-set-text "")
     (sleep 0.2)
-    (limn:call "test/inject-ime-commit" :|text| "中文" :|frame-id| "f1")
+    (limn:call "test/inject-ime/commit" :|text| "中文" :|frame-id| "f1")
     (sleep 0.3)
     (let ((txt (mb-text)) (cur (mb-cursor)))
       (check (format nil "Ω4a — minibuffer text == '中文' after ime-commit (got ~s)" txt)
@@ -160,16 +160,16 @@
              (eql cur 2)))
     (mb-close)
 
-;;; ── Ω5: test/inject-ime-preedit fires event observable by client ─
+;;; ── Ω5: test/inject-ime/preedit fires event observable by client ─
 ;;;
-;;; v0.16 adds test/inject-ime-preedit primitive that pushes an
+;;; v0.16 adds test/inject-ime/preedit primitive that pushes an
 ;;; ime-preedit event with composition :text. RED until primitive
 ;;; exists.
 
-    (format t "~%── Ω5: test/inject-ime-preedit pushes ime-preedit event ──~%")
-    (let ((r (limn:call "test/inject-ime-preedit"
+    (format t "~%── Ω5: test/inject-ime/preedit pushes ime-preedit event ──~%")
+    (let ((r (limn:call "test/inject-ime/preedit"
                          :|text| "にほん" :|frame-id| "f1")))
-      (check "Ω5a — test/inject-ime-preedit responds ok"
+      (check "Ω5a — test/inject-ime/preedit responds ok"
              (eq (limn/bridge:response-ok r) t))
       (sleep 0.2)
       ;; Drain events from the client side; look for ime-preedit
@@ -191,19 +191,36 @@
     (mb-open "test: ")
     (mb-set-text "")
     (sleep 0.2)
-    (limn:call "test/inject-ime-preedit" :|text| "に")
-    (limn:call "test/inject-ime-preedit" :|text| "にほ")
-    (limn:call "test/inject-ime-preedit" :|text| "にほん")
+    (limn:call "test/inject-ime/preedit" :|text| "に")
+    (limn:call "test/inject-ime/preedit" :|text| "にほ")
+    (limn:call "test/inject-ime/preedit" :|text| "にほん")
     (sleep 0.2)
     (let ((txt-mid (mb-text)))
       (check (format nil "Ω6a — minibuffer empty during preedit (got ~s)" txt-mid)
              (and (stringp txt-mid) (string= txt-mid ""))))
-    (limn:call "test/inject-ime-commit" :|text| "日本")
+    (limn:call "test/inject-ime/commit" :|text| "日本")
     (sleep 0.3)
     (let ((txt-after (mb-text)))
       (check (format nil "Ω6b — minibuffer == '日本' after commit (got ~s)" txt-after)
              (and (stringp txt-after) (string= txt-after "日本"))))
     (mb-close)
+
+;;; ── Ω7: ime-commit when minibuffer NOT open → container survives ───
+;;;
+;;; OS-tier regression net for the "graceful no-op" contract. Pre-v0.16
+;;; the binary may segfault under specific surrogate-corruption + chrome-
+;;; repaint sequences (we observed this on host). A scope-aware dispatch
+;;; means ime-commit without an open minibuffer should do nothing and
+;;; the server keeps responding.
+
+    (format t "~%── Ω7: ime-commit with no minibuffer doesn't kill server ──~%")
+    (mb-close) (sleep 0.1)
+    (let ((r1 (limn:call "test/inject-ime/commit" :|text| "中文" :|frame-id| "f1")))
+      (check "Ω7a — orphan ime-commit responds ok"
+             (eq (limn/bridge:response-ok r1) t)))
+    (let ((r2 (limn:call "bridge/capabilities")))
+      (check "Ω7b — server still responding after orphan ime-commit"
+             (eq (limn/bridge:response-ok r2) t)))
 
     ;; ── summary ─────────────────────────────────────────────────
     (format t "~%~%── cjk-ime e2e results ──~%")
