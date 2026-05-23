@@ -196,6 +196,63 @@ docker build -t limn-e2e .        # 從零 (~10 分鐘 + 全下載)
 
 Docker Desktop 整個 Linux state 存在 =~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw=（sparse 60GB）。
 
+**Build cache（ccache）—— 加速 + 風險與逃生**
+
+容器內的 C++ 編譯走 ccache、cache 放在 buildkit 的 exec-cachemount
+（持久於 docker daemon、不在 image layer 裡）。沒這層 cache 時每
+次 incremental build 都要重編 ~80 個 .cpp，~3–5 分鐘；有的話只
+重編真正變動的 ~10–15 秒。
+
+ccache 的 key 是「(compiler 完整版本 + 全部 flags + preprocessed
+source 的 hash)」，*不看* mtime、不看 file path、不看 git branch。
+所以下面這些一般會把 .o 用爛的場景，ccache 全部繞掉：
+
+- =docker COPY= 沒保留 host 的 mtime
+- =git checkout= 跳 branch 把檔案時間倒退
+- 多個 worktree 同時 build
+- header 微改但某個 .cpp 沒被 Make 看見
+
+但有兩種雷它沒蓋到、debug 時要主動懷疑：
+
+1. *Toolchain 升 major version*：clang 21 → 22 時 hash key 自動變、
+   舊 .o 不會被誤用、但會出現 cache 全 miss → 一次 full rebuild。
+   *不會* 出錯、只是慢一次。
+2. *ccache 本身的 bug / cache 檔案損毀*：罕見、但發生過。symptom
+   通常很怪 —— undefined symbol、Qt segfault、test on host vs in
+   container 結果不一致、「我明明改了還是沒生效」迴圈。
+
+碰到 (2) 的 debug playbook：
+
+#+begin_src bash
+# Step 1: 證明它是 cache 問題、不是真 bug。
+bash scripts/nuke-build-cache.sh
+docker build --no-cache -t limn-e2e .
+# 重跑你原本失敗的測試或操作。
+
+# 若還是壞 → 真的是 code bug、放心去 debug。
+# 若 nuke 完就好 → 寫進 commit message / CHANGELOG，
+# 並考慮 file ccache upstream issue。
+#+end_src
+
+=scripts/nuke-build-cache.sh= 只清 ccache mount、不動 nix-store /
+layer cache / image，所以下次重 build 只多 ~3-5 分鐘 ccache 重建、
+不用重下載 nixpkgs 或重新 install Xvfb 等。
+
+Dockerfile 對應段落也有同樣警語、debug 時眼睛先掃 build 步驟的
+那一坨 banner 提醒。
+
+*絕對不要 `touch -d <未來日期>` source 檔案*。理由：
+- =docker COPY= 會保留 host 檔案的 mtime 進 image
+- make 拿未來 mtime 比 Makefile mtime → 永遠覺得 source 比較新 →
+  無限重跑 qmake → build 永遠卡在 step #13、看起來像是「hang」
+  但實際是 CPU 100% 在跑 qmake loop
+- 即使 host 上 =touch= 修回 mtime 也沒用，因為 docker COPY 的
+  layer cache 是 *content-based*、檔案內容沒變就重用 cached layer
+- 唯一修法：實際改檔案內容（例如加一行 comment）來 bust COPY cache
+這個雷踩過一次、花了 ~30 分鐘 debug。原始觸發是想 bypass macOS host
+上的 qmake xcode-license 錯誤、應該用其它解法（如 `nix develop --command make`
+直接跳過 qmake regen）。
+
 Macros / xdotool 命令參考見 =backend/tests/e2e/batch-os-*.lisp= 內的
 =xdotool= helper（=sb-ext:run-program= 包 xdotool key/mouse 等）。
 

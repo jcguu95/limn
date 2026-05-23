@@ -1,3 +1,4 @@
+# cache-bust marker (content change to invalidate docker COPY layer)
 TEMPLATE = app
 TARGET = limn
 VERSION = 0.3.0

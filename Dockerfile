@@ -29,15 +29,15 @@ COPY flake.nix flake.lock /limn/
 # Materialise the dev shell so the closure is fetched once at build time.
 RUN nix develop --command true
 
-# Now copy the actual source.
-COPY sioyek/  /limn/sioyek/
-COPY backend/ /limn/backend/
-
 # Add the OS-level tools the e2e flow needs but the dev shell doesn't
 # (Xvfb / xdotool / x11vnc / sbcl / fonts + a minimal window manager so
 # Qt's xcb backend gets ICCCM-conformant focus/mouse delivery). Done as
 # a fresh nix-env install rather than amending flake.nix because they
 # aren't macOS dev needs.
+#
+# NB: this layer MUST sit *above* the source COPYs — otherwise every
+# tiny .cpp / .lisp change re-invalidates the ~700MB nixpkgs reinstall
+# and adds ~30s of pointless rework per incremental build.
 RUN nix-env -iA \
       nixpkgs.xorg.xvfb \
       nixpkgs.xdotool \
@@ -50,12 +50,53 @@ RUN nix-env -iA \
       nixpkgs.coreutils \
       nixpkgs.fontconfig \
       nixpkgs.mesa \
-      nixpkgs.mesa-demos
+      nixpkgs.mesa-demos \
+      nixpkgs.ccache
 
-# Build Limn using the flake dev shell.
-RUN cd sioyek && \
-    nix develop /limn --command bash -c \
-      "qmake pdf_viewer_build_config.pro && make -j$(nproc)"
+# Now copy the actual source. Only this and the build step below get
+# re-run on incremental changes.
+COPY sioyek/  /limn/sioyek/
+COPY backend/ /limn/backend/
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Build Limn — with ccache via buildkit cache mount.
+#
+# ⚠  DEBUGGING A WEIRD BUILD / LINK / RUNTIME ERROR? READ THIS FIRST.
+#
+# This step compiles ~80 C++ files; without ccache, every incremental
+# `docker build` recompiles all of them from scratch (~3-5 min on
+# Apple Silicon → linux/amd64 Rosetta translation). ccache is content-
+# hashed (compiler args + preprocessed source), NOT mtime-based, so
+# it is *almost-always safe* — branch switches, file moves, COPY
+# mtime-loss, none of those fool it.
+#
+# But "almost-always" is not "always". If you are seeing ANY of:
+#   • undefined symbol at link time on code you can `grep` and see
+#   • segfault inside Qt before main() returns
+#   • a test that passes on host but fails in container (or vice versa)
+#   • "I rebuilt and the change didn't take effect" loop
+#   • clang ICE / "compiler crashed" with a stack trace inside ccache
+# the cache may be corrupted or holding stale objects from a toolchain
+# bump. NUKE it before going any further:
+#
+#   bash scripts/nuke-build-cache.sh
+#
+# (which runs `docker builder prune --filter type=exec.cachemount -f`)
+# Then `docker build --no-cache -t limn-e2e .` to confirm.
+#
+# See CONTRIBUTING.org §Build Cache for the full rationale and history.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RUN --mount=type=cache,id=limn-ccache,target=/root/.ccache,sharing=locked \
+    cd sioyek && \
+    nix develop /limn --command bash -c '\
+      export CCACHE_DIR=/root/.ccache && \
+      export CCACHE_MAXSIZE=5G && \
+      ccache --zero-stats > /dev/null && \
+      qmake QMAKE_CXX="ccache $CXX" QMAKE_CC="ccache $CC" \
+            pdf_viewer_build_config.pro && \
+      make -j$(nproc) && \
+      echo "── ccache stats after build ──" && \
+      ccache --show-stats'
 
 # Runtime config — match what backend/tests/e2e/run-os-e2e.sh expects.
 ENV DISPLAY=:99
