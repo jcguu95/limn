@@ -1,4 +1,4 @@
-* Limn 規格書 v0.6
+* Limn 規格書 v0.7
 
 Limn 是一個由 Common Lisp（SBCL）控制的顯示框架。
 Backend（Lisp）透過 Bridge（Unix socket + JSON）驅動 Frontend（Qt）。
@@ -401,15 +401,18 @@ Minibuffer 是 framework 的單行輸入區（chrome primitive，見 §1.2）。
 {"id":"r61", "cmd":"minibuffer/set-prompt", "prompt":"Search: "}
 
 // 替換目前文字（completion / history 回填）
+// set-text 後 cursor 自動移到文字末尾（Emacs 慣例：set-text 等同
+// 「插入並把點放在末尾」，使用者可以接著打字繼續延伸）。v0.7。
 {"id":"r62", "cmd":"minibuffer/set-text", "text":"hello world"}
 
 // 關閉（不論使用者送出 / 取消，backend 都應呼叫一次收尾）
 {"id":"r63", "cmd":"minibuffer/close"}
 
-// 查詢狀態
+// 查詢狀態。response 含 cursor 欄位（codepoint offset，0-based；
+// BMP 內 CJK 每字算一個 unit）。v0.7 新增 cursor。
 {"id":"r64", "cmd":"minibuffer/get"}
 → {"id":"r64", "ok":true,
-   "data":{"open":true, "prompt":"/", "text":"hello"}}
+   "data":{"open":true, "prompt":"/", "text":"hello", "cursor":5}}
 #+end_src
 
 使用者在 minibuffer 中的按鍵會經 =minibuffer-input= / =minibuffer-submit=
@@ -536,16 +539,24 @@ Frontend 主動推送，無 =id=。所有事件帶 =frame-id=（事件來源的 
 
 Minibuffer 開啟時（=minibuffer/open= 之後），使用者輸入的處理規則：
 
-- **printable 字元** → frontend 內部把字元 append 到 minibuffer 文字，
-  推 =minibuffer-input= 事件帶當前完整文字；**不**推 =key= 事件。
+- **printable 字元** → frontend 把字元 **插入到 cursor 位置**（v0.7 前為
+  append 到末尾），推 =minibuffer-input= 事件帶當前完整文字；**不**推
+  =key= 事件。Cursor 自動往右移一格。
+- **BS** → 刪掉 cursor 左邊那一個 codepoint（cursor 也左移一格），推
+  =minibuffer-input= 事件帶更新後文字；**不**推 =key= 事件。空 buffer
+  按 BS 仍 consume、不 fallback 到 =key= 事件。v0.7。
+- **Left / Right** → cursor 左 / 右移一個 codepoint；**不改文字、不推
+  事件**（cursor 移動屬靜默操作，Emacs 慣例。Lisp 端可用 =minibuffer/get=
+  問當前 cursor）。邊界（cursor=0 按 Left；cursor=末尾按 Right）no-op。v0.7。
+- **Home / End** → cursor 跳到開頭 / 末尾；**不改文字、不推事件**。v0.7。
 - **RET** → 推 =minibuffer-submit= 事件帶最終文字；**不**推 =key= 事件。
 - **ESC** → 推 =minibuffer-cancel= 事件；**不**推 =key= 事件。
-- **其他鍵**（modifier combos、function key、方向鍵）→ 推一般 =key=
+- **其他鍵**（modifier combos、function key 等非上列）→ 推一般 =key=
   事件。這樣 backend 仍能透過 minibuffer-mode keymap 或 global keymap
   處理（例如 =C-g= 取消、=Up/Down= 歷史導覽）。
 
 #+begin_src json
-// 每打一個 printable 字元
+// 每打一個 printable 字元 / BS — 帶當前完整文字
 {"event":"minibuffer-input",
  "frame-id":"f1", "text":"hel"}
 
@@ -557,6 +568,11 @@ Minibuffer 開啟時（=minibuffer/open= 之後），使用者輸入的處理規
 {"event":"minibuffer-cancel",
  "frame-id":"f1"}
 #+end_src
+
+設計取捨：cursor 移動鍵（Left/Right/Home/End）刻意不推事件，避免高頻
+方向鍵打爆 bridge。需要追蹤 cursor 的 use case 走 =minibuffer/get=
+主動查（response 含 =cursor= 欄位）。BS 推事件因為 text 真有變化、
+跟一般打字一致。
 
 ** 七、Engine Interface Spec
 
@@ -837,6 +853,35 @@ Interactive spec 字元（沿用 Emacs）：
 | =r=  | region（未來）                                |
 
 Command 可以無 interactive spec（不需要外部輸入時）。
+
+**Numeric prefix arg 累進器（v0.7 落實）：**
+
+對應 Emacs 慣例 =5g= → goto-page 5。Framework 在 dispatch key 之前，
+看到「無 modifier、無 key-prefix 中、單一數字字元」就累進到內部
+accumulator、**不** dispatch；遇到下一個非數字鍵時，把 acc parse 成
+integer、在 dispatch 該鍵的 handler 期間 dynamically bind 到
+=limn/cmd:*prefix-arg*=：
+
+#+begin_src lisp
+(defcommand goto-page (:interactive "p")
+  (lambda (n)
+    ;; n 自動拿到 *prefix-arg*；無前導數字時 default = 1
+    (view/set :page n)))
+
+(limn:bind "g" 'goto-page)
+
+;; user 按 "5g" → n = 5
+;; user 按 "42g" → n = 42
+;; user 按 "g" 單獨 → n = 1（default）
+#+end_src
+
+語意：
+- accumulator 只在 dispatch attempt 之後 reset（包括 unbound 鍵也算 dispatch
+  attempt、會 reset）
+- 數字鍵被攔截不會 fire 任何 binding；若 user 真要把 =5= bind 給 command、
+  得搭 modifier（如 =C-5=）避開累進器
+- =:interactive "p"= 從 =*prefix-arg*= 拿值；handler body 內若直接讀
+  =limn/cmd:*prefix-arg*= 也拿得到
 
 *** 9.3 Init file
 
