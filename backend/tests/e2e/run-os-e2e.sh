@@ -27,6 +27,10 @@ fi
 E2E_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 export LIMN_BACKEND_DIR="${LIMN_BACKEND_DIR:-/limn/backend/}"
+# UTF-8 locale required for xdotool to type CJK / multi-byte input.
+# Without this, xdotool errors "Invalid multi-byte sequence" on non-ASCII.
+export LANG="${LANG:-C.UTF-8}"
+export LC_ALL="${LC_ALL:-C.UTF-8}"
 
 pass=0
 fail=0

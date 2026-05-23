@@ -558,6 +558,13 @@ void LimnCommand::cmd_minibuffer_get(const QString& id, const QJsonObject&) {
     data.insert("open",   minibuffer_open);
     data.insert("prompt", minibuffer_prompt);
     data.insert("text",   text_buffers["*minibuffer*"]);
+    // SPEC §6: expose cursor (codepoint offset, not byte offset) so Lisp
+    // can introspect editing state — used by completion / point-aware
+    // commands and by tests that exercise BS / arrow / Home / End logic
+    // added in v0.12 batch 20. Returned value matches text_cursors which
+    // is QString-index (UTF-16 code units); for BMP chars including
+    // common CJK that equals codepoint count.
+    data.insert("cursor", text_cursors["*minibuffer*"]);
     bridge->send_ok(id, data);
 }
 
