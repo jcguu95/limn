@@ -187,7 +187,15 @@
       (check "π1 — call ended in error (not silent success)"
              (and (stringp result) (search "ERR:" result))
              (format nil "got result=~s" result))))
-  (handler-case (limn:stop) (error () nil)))
+  ;; Critical: π1 SIGKILLed limn mid-call; we MUST go through the full
+  ;; stop-session sequence so that:
+  ;;   (a) process-wait reaps the zombie before next start-session races
+  ;;       on its /tmp socket file,
+  ;;   (b) the "Limn" X window is fully gone from xdotool search before
+  ;;       π2's wait-for-window-by-name latches onto the dying window
+  ;;       and routes keys into a corpse.
+  ;; Without this, π2 ξ1 ξ2 flake intermittently (~25% rate observed).
+  (stop-session proc))
 
 ;;; ═════════════════════════════════════════════════════════════════
 ;;; π2: limn:stop + limn:start clean restart

@@ -1,6 +1,62 @@
 #+TITLE: OS-level 測試擴充 TODO
 #+OPTIONS: toc:3
 
+* v0.13 sprint：了結 v0.12 follow-up + CJK minibuffer (overnight autonomous)
+
+** 為什麼有這個 sprint
+
+v0.12 ship 時誠實標兩個 follow-up：
+  - stronger-3 driver SIGKILL → graceful stop（cumulative-state flake root cause）
+  - A6 CJK input in minibuffer 還沒 driver
+
+v0.13 把兩個都吃掉，順手抓到一個 API gap (~minibuffer/get~ 沒回 cursor)
++ 一個 container 設定問題（locale 不是 UTF-8、xdotool 拒 CJK 輸入）。
+
+** 交付
+
+*** stronger-3 π1 加 stop-session (fix v0.12 follow-up)
+
+  Root cause: π1 故意 SIGKILL Limn 測 hang recovery、結束只 ~limn:stop~，
+  沒呼叫 ~stop-session~ → 沒 process-wait reap zombie、沒等 X window
+  從 xdotool search 消失。下個 section π2 ~wait-for-window-by-name~
+  latch 到屍體 window、xdotool inject key 全打到屍體上、ξ1 ξ2 fail。
+
+  修：π1 結尾加 ~(stop-session proc)~，與其它 section 一致。
+
+  驗證：修前 4 連跑 1 fail 3 pass、修後 3 連跑全綠。
+
+*** Batch 23：CJK minibuffer (9/9 全綠)  ✓
+
+  Cases:
+    1. 純 CJK 「你好世界」、cursor=4 codepoints
+    2. CJK + ASCII 「hi你好」、cursor=4
+    3. BS 退一個 CJK codepoint (不是 byte)
+    4. Left 跨 CJK char 移 cursor、insert 「hiX你」
+    5. defcommand callback 收到 CJK string
+
+*** 順手抓到 + 修
+
+  - container locale: ~run-os-e2e.sh~ export LANG=C.UTF-8 LC_ALL=C.UTF-8
+    （沒這個 xdotool type CJK 直接 die "Invalid multi-byte sequence"）
+  - C++ ~cmd_minibuffer_get~ 補回 :cursor 欄位（SPEC §6 introspection
+    API 本來就缺；Lisp 端拿不到 cursor 位置、batch 20 之後的 BS/arrow
+    feature 沒法 introspect）
+
+** v0.13 結果
+
+  + 33 OS-level driver、+9 assertion（總 ~280）
+  + stronger-3 flake root cause 真正修了
+  + 補 1 個 SPEC §6 API gap (~minibuffer/get~ :cursor)
+  + 修 container locale 預設、未來所有 CJK 走 OS-level path 都能跑
+
+** 誠實標記：殘留問題不歸入 v0.13
+
+  - cumulative-state flake 不只 stronger-3 一個來源。觀察到
+    ~batch-os-mouse-extras~ 在某些 4-run window 也 ~25% intermittent
+    fail（retry-once 也 catch 不到）。表示「30+ driver 同一個 Xvfb
+    container」這個架構本身就有 state leak、單修每個 driver 處理不完。
+    v0.14 follow-up: per-driver fresh Xvfb 或 X server reset 機制。
+
 * v0.12 sprint：把 feature-blocked dimension 落實 (overnight autonomous)
 
 ** 為什麼有這個 sprint
