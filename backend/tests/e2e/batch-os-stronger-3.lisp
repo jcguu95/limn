@@ -87,8 +87,18 @@
 
 (defun stop-session (proc)
   (handler-case (limn:stop) (error () nil))
-  (handler-case (sb-ext:process-kill proc 15) (error () nil))
-  (sleep 0.3))
+  (handler-case (sb-ext:process-kill proc 9) (error () nil))
+  ;; Wait for the window to actually disappear from X. Without this,
+  ;; consecutive start-session calls inside the same Xvfb pick up the
+  ;; stale window via xdotool search.
+  (loop repeat 20
+        while (zerop
+               (sb-ext:process-exit-code
+                (sb-ext:run-program "xdotool"
+                                     '("search" "--name" "Limn")
+                                     :search t :wait t :output nil)))
+        do (sleep 0.1))
+  (sleep 0.2))
 
 ;;; ═════════════════════════════════════════════════════════════════
 ;;; μ1 / μ2: hook 異常 robustness

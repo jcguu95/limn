@@ -308,13 +308,10 @@
     (xdotool "keyup" "ctrl")
     (sleep 0.3)
     ;; γ3: 真實 OS drag 應該 emit mouse-drag event 帶 mods=[ctrl]。
-    ;; 目前 mouse-drag 只由 test/inject-mouse-drag 模擬 path 發送、
-    ;; QEvent::MouseMove + 按鈕 held → wire event 那條沒做。
-    ;; **honest red**：直接走 check、計入 *failures*。修法見 TODO
-    ;; （feature work、batch 2 處理 B6 時順手做、或推 v0.11+）。
+    ;; v0.10 batch 1.7-after fix: LimnInputFilter 加 MouseMove +
+    ;; button-held tracking、drag wire 從 OS path 真實 emit。
     (let ((ev (first *captured-drag-events*)))
-      (check "γ3 — mouse-drag event arrived"
-             ev "drag wire from OS path not implemented yet")
+      (check "γ3 — mouse-drag event arrived" ev)
       (when ev
         (let ((mods (getf ev :|mods|)))
           (check "γ3 — drag event has mods=[ctrl]"

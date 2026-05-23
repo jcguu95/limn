@@ -194,6 +194,64 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             // v0.10 batch 1.5 γ1 caught it.
             e.insert("mods", modifiers_to_array(mev->modifiers(), QString()));
             bridge->push_event("mouse-click", e);
+
+            // Begin drag tracking: remember anchor for subsequent
+            // MouseMove events. Reset on MouseButtonRelease.
+            drag_active      = true;
+            drag_button      = button_id(mev->button());
+            drag_anchor_x    = static_cast<int>(mev->position().x());
+            drag_anchor_y    = static_cast<int>(mev->position().y());
+            drag_anchor_page = -1;
+            drag_anchor_nx   = 0.0;
+            drag_anchor_ny   = 0.0;
+            if (command &&
+                command->widget_to_page_norm(drag_anchor_x, drag_anchor_y,
+                                              &drag_anchor_page,
+                                              &drag_anchor_nx,
+                                              &drag_anchor_ny)) {
+                // ok — anchor coords on a page
+            } else {
+                drag_anchor_page = -1;
+            }
+            break;
+        }
+        case QEvent::MouseMove: {
+            if (!drag_active) break;
+            auto* mev = static_cast<QMouseEvent*>(ev);
+            // Compute current page-relative coords for delta. If
+            // current cursor is off any page, use widget pixel delta.
+            int    cur_page = -1;
+            double cur_nx = 0.0, cur_ny = 0.0;
+            bool ok = (command &&
+                       command->widget_to_page_norm(
+                           static_cast<int>(mev->position().x()),
+                           static_cast<int>(mev->position().y()),
+                           &cur_page, &cur_nx, &cur_ny));
+            QJsonObject e;
+            e.insert("frame-id", "f1");
+            e.insert("win-id",   "w1");
+            if (ok && cur_page == drag_anchor_page && drag_anchor_page >= 0) {
+                // both anchor and current on same page → page-norm delta
+                e.insert("page", drag_anchor_page);
+                e.insert("x",    drag_anchor_nx);
+                e.insert("y",    drag_anchor_ny);
+                e.insert("dx",   cur_nx - drag_anchor_nx);
+                e.insert("dy",   cur_ny - drag_anchor_ny);
+            } else {
+                // fallback: pixel coords + pixel delta
+                e.insert("page", drag_anchor_page);
+                e.insert("x",    drag_anchor_x);
+                e.insert("y",    drag_anchor_y);
+                e.insert("dx",   static_cast<int>(mev->position().x()) - drag_anchor_x);
+                e.insert("dy",   static_cast<int>(mev->position().y()) - drag_anchor_y);
+            }
+            e.insert("button", drag_button);
+            e.insert("mods",   modifiers_to_array(mev->modifiers(), QString()));
+            bridge->push_event("mouse-drag", e);
+            break;
+        }
+        case QEvent::MouseButtonRelease: {
+            drag_active = false;
             break;
         }
         case QEvent::Wheel: {

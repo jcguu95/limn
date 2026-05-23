@@ -39,4 +39,15 @@ protected:
 private:
     LimnBridge*  bridge;
     LimnCommand* command;
+
+    // Drag tracking: between MouseButtonPress and MouseButtonRelease, when
+    // a MouseMove event fires we emit mouse-drag with the start (anchor)
+    // position + delta. Reset on Release. v0.10 batch 1.5 γ3 / batch 2 B6.
+    bool   drag_active     = false;
+    int    drag_button     = 0;
+    int    drag_anchor_x   = 0;       // widget coords of original press
+    int    drag_anchor_y   = 0;
+    int    drag_anchor_page = -1;     // pdf page at press (for events)
+    double drag_anchor_nx  = 0.0;     // normalized x on anchor page
+    double drag_anchor_ny  = 0.0;
 };
