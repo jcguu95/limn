@@ -19,8 +19,17 @@ QString key_to_string(QKeyEvent* ev) {
     // Ctrl-d gives ASCII 0x04, not "d". Without this fallback the bridge
     // would report key="<key-68>" mods=["ctrl"] and the user's "C-d"
     // binding could never match.
+    //
+    // For letters: if Shift is held, return uppercase so it round-trips
+    // through case_encodes_shift logic in modifiers_to_array. Without
+    // this, C-M-S-x would silently drop the shift (key="x" + mods strips
+    // shift via case_encodes_shift → S- disappears). v0.10 A12 caught it.
     if (ev->key() >= Qt::Key_A && ev->key() <= Qt::Key_Z) {
-        return QString(QChar(ev->key())).toLower();
+        QChar c(ev->key());     // Qt::Key_A..Z is 0x41..0x5A = 'A'..'Z'
+        if (ev->modifiers() & Qt::ShiftModifier) {
+            return QString(c);                  // already uppercase
+        }
+        return QString(c).toLower();
     }
     if (ev->key() >= Qt::Key_0 && ev->key() <= Qt::Key_9) {
         return QString(QChar(ev->key()));
@@ -43,6 +52,22 @@ QString key_to_string(QKeyEvent* ev) {
         case Qt::Key_End:       return "<end>";
         case Qt::Key_PageUp:    return "<pageup>";
         case Qt::Key_PageDown:  return "<pagedown>";
+        case Qt::Key_Insert:    return "<insert>";
+        // Function keys F1–F12 — v0.10 batch 3 H2/E2 caught they were
+        // falling through to the "<key-N>" default and thus could not
+        // be bound by name (limn:bind "F12" 'cmd). Now named.
+        case Qt::Key_F1:        return "<f1>";
+        case Qt::Key_F2:        return "<f2>";
+        case Qt::Key_F3:        return "<f3>";
+        case Qt::Key_F4:        return "<f4>";
+        case Qt::Key_F5:        return "<f5>";
+        case Qt::Key_F6:        return "<f6>";
+        case Qt::Key_F7:        return "<f7>";
+        case Qt::Key_F8:        return "<f8>";
+        case Qt::Key_F9:        return "<f9>";
+        case Qt::Key_F10:       return "<f10>";
+        case Qt::Key_F11:       return "<f11>";
+        case Qt::Key_F12:       return "<f12>";
         default:
             return QString("<key-%1>").arg(ev->key());
     }
@@ -74,10 +99,19 @@ QJsonArray buttons_to_array(Qt::MouseButtons b) {
 }
 
 int button_id(Qt::MouseButton b) {
-    if (b == Qt::LeftButton)   return 1;
-    if (b == Qt::MiddleButton) return 2;
-    if (b == Qt::RightButton)  return 3;
-    return 0;
+    // X11/sioyek convention extends button numbering past 1/2/3:
+    //   1 left, 2 middle, 3 right, 4/5 scroll up/down (Wheel event,
+    //   not MouseButton), 6/7 scroll left/right, 8 back, 9 forward.
+    // Previously returned 0 for anything outside 1/2/3 — that lost
+    // info AND collided with "no button" semantic. v0.10 batch 1.6
+    // λ1 caught it.
+    if (b == Qt::LeftButton)    return 1;
+    if (b == Qt::MiddleButton)  return 2;
+    if (b == Qt::RightButton)   return 3;
+    if (b == Qt::BackButton)    return 8;
+    if (b == Qt::ForwardButton) return 9;
+    // unknown button: -1 signals "saw a click but don't know which button"
+    return -1;
 }
 
 }  // anonymous namespace
@@ -94,11 +128,35 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
     // when posted to the backing QWidgetWindow, once when forwarded to the
     // focused QWidget. Skip the QWindow pass so each press fires our
     // bindings exactly once.
-    if (qobject_cast<QWindow*>(obj)) return false;
+    //
+    // 但 Resize event 只走 QWindow path（Xvfb + openbox 上 QWidget 不收
+    // 二次分發）。所以這個 filter 對 Resize 特例放行。
+    if (qobject_cast<QWindow*>(obj) && ev->type() != QEvent::Resize) {
+        return false;
+    }
 
     switch (ev->type()) {
         case QEvent::KeyPress: {
             auto* kev = static_cast<QKeyEvent*>(ev);
+
+            // Skip bare modifier presses. When the user types C-x C-f,
+            // X11 / Qt deliver THREE KeyPress events: bare Ctrl, then
+            // Ctrl+x, then bare Ctrl (release-press cycle?), then
+            // Ctrl+f. The bare Ctrl events have no character payload —
+            // they're just modifier-being-held notifications. If we
+            // forward them as 'key' events, the backend's prefix-key
+            // accumulator (limn::*key-prefix*) sees an unbound spec
+            // like "C-<key-16777249>" and resets, killing any in-flight
+            // multi-key sequence. OS-level e2e test batch-os-prefix
+            // (v0.10 A6) caught this.
+            int qk = kev->key();
+            if (qk == Qt::Key_Control || qk == Qt::Key_Alt    ||
+                qk == Qt::Key_Shift   || qk == Qt::Key_Meta   ||
+                qk == Qt::Key_AltGr   || qk == Qt::Key_Super_L ||
+                qk == Qt::Key_Super_R) {
+                break;
+            }
+
             QString k = key_to_string(kev);
             QJsonArray mods = modifiers_to_array(kev->modifiers(), k);
             // Diagnostic: stderr-log every captured key. Lets us tell, from
@@ -122,6 +180,13 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             bridge->push_event("key", e);
             break;
         }
+        case QEvent::MouseButtonDblClick:
+            // Qt 把「短時間內第二次按鍵」合併成 MouseButtonDblClick、
+            // 不再 fire MouseButtonPress。為了讓 xdotool click --repeat
+            // 2 (或人類雙擊) 在 backend 看起來就是兩個 mouse-click event、
+            // 把 DblClick 直接 fall-through 到 Press 的處理。v0.10
+            // batch 2 B2 caught it.
+            [[fallthrough]];
         case QEvent::MouseButtonPress: {
             auto* mev = static_cast<QMouseEvent*>(ev);
             QJsonObject e;
@@ -147,7 +212,69 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
                 e.insert("y",    mev->position().y());
             }
             e.insert("button", button_id(mev->button()));
+            // SPEC §6: mouse-click carries modifier state so users can
+            // bind C-mouse-1 / S-mouse-1 / etc. Previously missing —
+            // v0.10 batch 1.5 γ1 caught it.
+            e.insert("mods", modifiers_to_array(mev->modifiers(), QString()));
             bridge->push_event("mouse-click", e);
+
+            // Begin drag tracking: remember anchor for subsequent
+            // MouseMove events. Reset on MouseButtonRelease.
+            drag_active      = true;
+            drag_button      = button_id(mev->button());
+            drag_anchor_x    = static_cast<int>(mev->position().x());
+            drag_anchor_y    = static_cast<int>(mev->position().y());
+            drag_anchor_page = -1;
+            drag_anchor_nx   = 0.0;
+            drag_anchor_ny   = 0.0;
+            if (command &&
+                command->widget_to_page_norm(drag_anchor_x, drag_anchor_y,
+                                              &drag_anchor_page,
+                                              &drag_anchor_nx,
+                                              &drag_anchor_ny)) {
+                // ok — anchor coords on a page
+            } else {
+                drag_anchor_page = -1;
+            }
+            break;
+        }
+        case QEvent::MouseMove: {
+            if (!drag_active) break;
+            auto* mev = static_cast<QMouseEvent*>(ev);
+            // Compute current page-relative coords for delta. If
+            // current cursor is off any page, use widget pixel delta.
+            int    cur_page = -1;
+            double cur_nx = 0.0, cur_ny = 0.0;
+            bool ok = (command &&
+                       command->widget_to_page_norm(
+                           static_cast<int>(mev->position().x()),
+                           static_cast<int>(mev->position().y()),
+                           &cur_page, &cur_nx, &cur_ny));
+            QJsonObject e;
+            e.insert("frame-id", "f1");
+            e.insert("win-id",   "w1");
+            if (ok && cur_page == drag_anchor_page && drag_anchor_page >= 0) {
+                // both anchor and current on same page → page-norm delta
+                e.insert("page", drag_anchor_page);
+                e.insert("x",    drag_anchor_nx);
+                e.insert("y",    drag_anchor_ny);
+                e.insert("dx",   cur_nx - drag_anchor_nx);
+                e.insert("dy",   cur_ny - drag_anchor_ny);
+            } else {
+                // fallback: pixel coords + pixel delta
+                e.insert("page", drag_anchor_page);
+                e.insert("x",    drag_anchor_x);
+                e.insert("y",    drag_anchor_y);
+                e.insert("dx",   static_cast<int>(mev->position().x()) - drag_anchor_x);
+                e.insert("dy",   static_cast<int>(mev->position().y()) - drag_anchor_y);
+            }
+            e.insert("button", drag_button);
+            e.insert("mods",   modifiers_to_array(mev->modifiers(), QString()));
+            bridge->push_event("mouse-drag", e);
+            break;
+        }
+        case QEvent::MouseButtonRelease: {
+            drag_active = false;
             break;
         }
         case QEvent::Wheel: {
@@ -157,6 +284,9 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             e.insert("win-id",   "w1");
             e.insert("dx",       wev->angleDelta().x());
             e.insert("dy",       wev->angleDelta().y());
+            // SPEC §6: scroll carries modifier state (Ctrl-scroll = zoom
+            // convention etc). v0.10 batch 1.5 γ4 caught the omission.
+            e.insert("mods", modifiers_to_array(wev->modifiers(), QString()));
             bridge->push_event("scroll", e);
             break;
         }

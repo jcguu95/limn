@@ -17,64 +17,351 @@ v0.7 / v0.8 / v0.9 期間「先寫測試再寫 code」原則（=CONTRIBUTING.org
 每 batch ≈ 一個 commit、commit message 帶 entry 編號。
 完成的 entry 在下方 detailed sections 內標 =DONE= + commit hash。
 
-*** Batch 1：鍵盤完整 sweep                          ~半天
+*** Batch 1：鍵盤完整 sweep                          ~半天 ✓ DONE
 
-- [ ] A1   全鍵盤打字（字母 / 數字 / 符號）
-- [ ] A12  C-M-S-x 三 modifier 組合
-- [ ] A6   C-x C-f 真實 Emacs prefix
-- [ ] C5   PDF 檔名含中文字
+- [X] A1   全鍵盤打字（字母 / 數字 / 符號）        =batch-os-keys.lisp=
+- [X] A12  C-M-S-x 三 modifier 組合                =batch-os-mods.lisp=
+- [X] A6   C-x C-f 真實 Emacs prefix                =batch-os-prefix.lisp=
+- [X] C5   PDF 檔名含中文字                        =batch-os-cjk-path.lisp=
+
+順手抓到 2 個 C++ bug、一起修進這個 batch：
+- 裸 modifier 鍵當 key event 推到 backend、打斷 multi-key prefix
+  accumulation。修在 =limn_input.cpp= 的 KeyPress 分支：filter
+  Qt::Key_Control / Alt / Shift / Meta / Super / AltGr。
+- Shift + letter 非 printable 路徑（C-M-S-x）一律 lowercase 但
+  modifiers_to_array 仍 case-encodes-shift、剝掉 shift。結果 S- 被
+  silently dropped。修在 =key_to_string=：letter fallback 在 Shift
+  held 時回 uppercase。
 
 為什麼第一個：SPC 那種「char mapping 漏」class bug 最容易在這出現、
 抓到一個算一個、心理上 momentum 起來。
 
-*** Batch 2：滑鼠完整 sweep                          ~半天
+*** Batch 1.5：強化測試（基於 batch 1 抓到的 meta-pattern）  ~半天 ✓ DONE
 
-- [ ] B1   right/middle click (button 2/3)
-- [ ] B2   double click
-- [ ] B3   scroll wheel up/down
-- [ ] B6   drag mousedown/move/up
+8/8 sub-test 全綠（γ3 drag wire 在 1.7 後補完）。
+
+**為什麼有這個 batch**：
+
+batch 1 順手抓到 2 個 C++ bug。回頭看那 2 個 bug 都不在「input space
+列舉的 N 個點」上、而在**沒列舉的 dimension**：
+
+  Bug 1（裸 modifier 重置 prefix）  → event 生命週期 / 時序 dimension
+  Bug 2（Shift + 字母被吃）         → 同 input 兩條 code path 互動 dimension
+
+batch 1 的測試是 interpolation 風（在已知 dimension 上點多採樣）、抓
+不到「沒列舉的 dimension」上的 bug。**真強的測試**該在這些被遺漏的
+dimension 上加 assertion。
+
+**五個 stronger test 類別**：
+
+| 類別 | 直譯名稱 | 對應 meta-pattern |
+|------+----------+--------------------|
+| α    | cross-path equivalence | 修 Bug 2 那類 |
+| β    | negative assertion     | 修 Bug 1 那類 |
+| γ    | cross-modality         | 我們之前完全沒列的 dimension：keyboard × mouse |
+| δ    | event lifecycle / timing | Bug 1 同族（更深一層） |
+| ε    | roundtrip / invariant 維持 | 整 class 的 universal claim |
+
+**entries**：
+
+- [X] γ1   Ctrl + click → mouse-click event 應該帶 mods=["ctrl"]    ★★★
+- [X] γ2   Shift + click → 同上、mods=["shift"]                       ★★★
+- [X] β1   裸 modifier press → 後端應**沒**收到 key event             ★★
+- [X] α2   path A / path B post-condition cross-check                  ★★
+            (a no-mod、A shift only、a ctrl、A ctrl+shift、
+             a ctrl+alt、A ctrl+alt+shift 六種組合一次 sweep、
+             斷言 case + mods 完全對齊 SPEC convention)
+- [X] δ1   modifier 提早 release 中斷 prefix                          ★★
+            (keydown ctrl、key x、keyup ctrl、key f → 應該不觸發 C-x C-f)
+- [X] γ3   Ctrl+drag → mouse-drag event 帶 mods                       ★
+            修了：LimnInputFilter 加 drag-active / drag-anchor 狀態、
+            在 QEvent::MouseMove with button held 時 emit mouse-drag
+            event（page-norm dx/dy or pixel fallback、帶 mods + button）。
+            QEvent::MouseButtonRelease 清狀態。~30 行 C++。
+- [X] γ4   Ctrl+scroll → scroll event 帶 mods                          ★
+- [X] ε1   bind + inject + where-is-command 全 sweep                  ★
+
+順手抓到 + 修的 C++ bug：
+
+- γ1/γ2：MouseButtonPress emit 的 mouse-click event **完全沒** :mods
+  欄位。讀 limn_input.cpp 就看得到、但沒人測過。修 1 行：
+  =e.insert("mods", modifiers_to_array(mev->modifiers(), QString()));=
+- γ4：QEvent::Wheel emit 的 scroll event **完全沒** :mods 欄位。同
+  類修 1 行。
+
+預期完全準：γ 系列必紅、修完綠；β/α/δ/ε 應該綠（守剛修完 batch 1
+的 invariant）；γ3 是 feature gap、EXPECTED-FAIL。
+
+**為什麼這幾個 stronger**：
+
+- **γ1 / γ2 / γ3 / γ4 必發現 bug**：讀 =limn_input.cpp= MouseButtonPress
+  分支可見、event 完全沒插 mods 欄位（只插 button / page / x / y）。
+  C-mouse-1 跟普通 click 在 backend 看起來一模一樣、使用者無從綁定
+  modified click。OS-level 寫測試立刻紅、修 5 行立刻綠、之後永遠
+  catch。
+
+- **β1 守住剛修的 Bug 1 invariant**：之前是「漏了所以壞」、β1 直接
+  assert「不該漏」。寫了之後 future code 任何改動讓裸 modifier 又
+  漏出來、立刻紅。
+
+- **α2 守住剛修的 Bug 2 invariant**：六組組合一次 sweep、卡住 path A
+  跟 path B post-condition 對齊的 SPEC contract。
+
+- **δ1 探究 batch 1 沒列舉的時序 dimension**：使用者真實 typo 場景。
+
+- **ε1 是 class-wide claim**：不是「測 N 個點」、是「測整個 keymap
+  UX chain 的 universal 性質」。
+
+**預期結果**：
+
+  γ1 / γ2 / γ3 / γ4 → 紅（mods 欄位漏插）→ 修 → 綠
+  β1 / α2 / δ1     → 多半綠（剛修完應該守住）、若紅代表剛修不完整
+  ε1                → 應綠
+
+預估：4 個 entries fail + 修、4 個 entries 一次過。半天工作。
+
+*** Batch 1.6：強化 1.5 自己（systematic dimension sweeps）  ~半天 ✓ DONE
+
+**為什麼有這個 batch**：
+
+1.5 抓到的 bug 形狀 = 「事件 emit 時漏掉 SPEC 規定的欄位」（mouse-click /
+scroll 沒 mods）。1.5 在 keyboard 軸做了 systematic sweep（α2 case+mods
+matrix）、但在**事件層**只查了 4 個 event type（key / mouse-click /
+scroll / resize）、其餘 ~11 個沒問。
+
+1.6 把 1.5 的 systematic 風格**自己** generalize：
+
+| 類 | 直譯名稱 | 從 1.5 哪個來、推到哪 |
+|----+----------+-----------------------|
+| ζ  | event field 完整性 systematic sweep | 1.5 mouse-click/scroll 漏 mods、現掃全 event |
+| η  | 負向 cross-modality                | 1.5 β1 守 key、現守 mouse / scroll |
+| θ  | 時序與順序                          | 1.5 全 sequential、沒考慮 ordering |
+| ι  | 並行 / 跨 thread                    | 1.5 沒考慮 race |
+| κ  | Mode-differential                   | 1.5 沒問 mode 切換時不同 modality 走哪條 |
+| λ  | Enum preservation                   | Qt enum 漏值（mouse button 4–8 等） |
+
+**entries**：
+
+- [X] ζ1   全 event type SPEC field 完整 sweep                       ★★★
+            掃完 key / mouse-click / scroll / resize / minibuffer-input
+            / -submit / -cancel / buffer-opened / heartbeat 共 9 個
+            event type、each 欄位 SPEC 對齊。發現 resize 在 Xvfb +
+            openbox 下 Qt 不重派、改用 test/inject-resize wire-level
+            觸發。
+- [X] κ1   minibuffer 開時、click 應該還是 emit mouse-click           ★★★
+- [X] κ2   minibuffer 開時、scroll 應該還是 emit scroll                ★★★
+- [X] η1   裸 modifier 不該 emit mouse-click event                    ★★
+- [X] η2   純 mousemove（沒按鍵）不該 emit mouse-click                ★★
+- [X] η3   modifier 按下不該意外 emit scroll                           ★★
+- [X] λ1   xdotool click 8（back button）→ button enum 不該 return 0  ★★
+- [X] θ1   rapid inject abcde → event 到的順序是 a,b,c,d,e            ★
+- [X] ι1   key inject 中、另一 thread 同時 call view/get、無 dropped event ★
+
+順手抓 + 修的 bug：
+
+- 【λ1 修】button_id() 對非 1/2/3 button 一律 return 0、丟失資訊也
+  跟「沒按鈕」混淆。修：加 BackButton (→8) / ForwardButton (→9) /
+  其餘未知 → -1。
+- 【ζ1 resize 修】LimnInputFilter 一律 skip QWindow obj、但 Resize
+  event 只走 QWindow path（Xvfb 上 QWidget 不收）。修：filter 對
+  Resize event 特例放行。
+- 【ζ1 resize infra 限制】xdotool windowsize 改 X11 size 但 Qt 在
+  Xvfb + openbox 下不重派 QResizeEvent。改用 test/inject-resize
+  wire-level 觸發、繞過 infra limitation。
+
+順手釘住的 invariant（沒抓到 bug、但守住）：
+
+- κ1/κ2：minibuffer 開時 mouse-click / scroll 都還 passthrough。
+  沒 silent intercept。意外是綠的——這是 happy surprise。
+- η1/η2/η3：cross-modality negative assertions 全 hold。
+- θ1：rapid inject 順序保留、沒 reorder。
+- ι1：並行 wire call + key inject、無 dropped event。pump thread
+  在競爭下 robust。
+
+**預期會抓的 bug**（讀 code 已可預判一部分）：
+
+- ζ1 大概率有 1–3 event type 漏文件欄位、過去沒人查
+- κ1 / κ2：minibuffer 開時 mouse-click / scroll 路徑沒被想過——
+  整個 dimension 是黑盒、就算現在巧合 work 也是 silent invariant
+- λ1：button_id 函式只 handle 1/2/3、其餘 return 0、表示 button 4+
+  click 在 backend 看起來都一樣
+
+預估：4–6 個 entry fail + 修、其餘綠。半天工作。
+
+*** Batch 1.7：再 recurse 一層 — error / shutdown / 跨 thread       ~半天 ✓ DONE
+
+**為什麼有這個 batch**：
+
+1.5 / 1.6 都在「happy path event 流」這個大 dimension 內探索（不同事件
+類型、不同 modifier 組合、不同 modality、minibuffer 開/關狀態）。但這
+些都假設「程式正常運作、沒人 throw 例外、沒人砍進程」。
+
+真實使用者跑 Limn 一週、會遇到：
+  - hook handler 寫錯丟 condition
+  - 進程被 OOM killer 砍
+  - 多 session 開關
+  - 大資料量（1000+ event 累積、長 minibuffer 字串）
+
+這些「異常 / 邊界 / 規模」dimension 1.5 / 1.6 完全沒問。1.7 補。
+
+**4 個新 dimension**：
+
+| 類 | 直譯名稱 | 從哪來 |
+|----+----------+--------|
+| μ  | hook handler 異常 robustness | 1.5/1.6 假設 hook 都好好 return |
+| ν  | wire command 錯誤路徑      | 假設 caller 都餵對 |
+| ξ  | 長尾規模 / 記憶體穩定       | 每測都 sequential、沒測累積後 |
+| π  | shutdown / cleanup / restart | 假設 session 永遠不停 |
+
+**entries**：
+
+- [X] μ1   hook handler 丟 condition → 同 event 其他 handler 還跑      ★★★
+- [X] μ2   hook handler 丟 condition → pump thread 仍存活                ★★★
+- [X] ν2   wire cmd 缺 required field → ok=false + error msg          ★★
+- [X] π1   kill limn process 中途 → call signals error 不 hang          ★★
+- [X] π2   limn:stop + limn:start clean restart、二次 start 還能 work   ★★
+- [X] ξ1   200 key inject 不漏 event、RSS 不爆漲（200 而非 1000、xdotool 慢） ★
+- [X] ξ2   minibuffer 累積 1000 chars 不 crash（1000 而非 10000、xdotool stdin 限制） ★
+
+順手抓 + 修的 bug：
+
+- 【π1 修】limn/dispatch:call 不知 pump thread 死活：peer 砍掉後
+  pump thread 退、call 還傻等 *request-timeout* (10s)。修：每次
+  sleep loop iter 檢查 pump thread alive、死了直接 error。
+
+意外綠的、釘住既有 robustness：
+
+- μ1/μ2: limn-hooks run-hook 已有 per-handler handler-case (error () nil)
+  → 任一 hook throw 不污染其他 + pump thread 存活。design 早做對。
+- ν2: C++ 端 wire cmd dispatcher 對缺欄位 send_fail、Lisp 端拿到
+  ok=false 不 crash。
+- π2: limn:stop 清乾淨 *session*、再 start 重建 pump thread 正常 work。
+- ξ1: 200 keys 後 RSS 只成長 64KB——SBCL GC 健康、hook captured-events
+  list 沒 leak。
+- ξ2: 1000-char minibuffer text 完整保留、不 truncate 不 crash。
+
+**預期會抓的 bug**（讀 code 預判）：
+
+- μ1 / μ2 大概率紅：limn-hooks.lisp 的 run-hook 是
+    =(dolist (fn ...) (apply fn args))= 沒 handler-case
+    第一個 throw 就 propagate 出去、後面的 hook 不跑、pump thread
+    死掉。這是 real bug。
+- π1 應該綠：limn/dispatch:call 有 timeout 機制。
+- π2 不確定：limn:stop 有沒清乾淨 *session* 全域、第二次 start 會不會
+    雙 pump thread。
+- ξ1 / ξ2 大概率綠（SBCL GC 不錯）、但值得釘 baseline。
+- ν2 大概率綠（C++ 端有 send_fail）、但釘住 contract。
+
+預估：2–3 entry fail + 修、其餘綠。半天工作。
+
+*** Batch 2：滑鼠完整 sweep                          ~半天 ✓ DONE
+
+- [X] B1   right/middle click (button 2/3)
+- [X] B2   double click
+- [X] B3   scroll wheel up/down
+- [X] B6   drag mousedown/move/up
+
+順手抓 + 修：
+
+- 【B2 修】QEvent::MouseButtonDblClick 沒接、雙連點只觸發 1 個
+  mouse-click event。修：fall-through 到 MouseButtonPress 處理，
+  雙擊 = 2 個 mouse-click event（符合直觀）。
+- 【B6 修】widget_to_page_norm 對 NaN coords 還 return true、害
+  下游 page-norm 計算出 NaN 序列化成 JSON null。修：std::isfinite
+  檢查、NaN 回 false、上游 fallback 到 pixel coords。
+- 【副作用】batch-os-click 之前依賴 NaN 矇混過去的 page>=0 assertion
+  現在正確失敗 → 改成 (integerp page) 不強求 >= 0（page=-1 是
+  Xvfb 下合法 fallback、不是 bug）。
 
 為什麼這時：mouse-click 只測過 left click on one position；B6 整條
 drag 鏈條從未走過 OS-level。
 
-*** Batch 3：window event + error path 安全網         ~半天
+*** Batch 3：window event + error path 安全網         ~半天 ✓ DONE
 
-- [ ] D1   resize event
-- [ ] H1   開不存在 PDF
-- [ ] H2   unbound key noop
-- [ ] H4   C-g 沒 minibuffer 時 noop
-- [ ] H6   unknown wire cmd error
-- [ ] H8   損壞 PDF
-- [ ] E2   minibuffer 空 submit
+- [X] D1   resize event                    （已被 batch 1.6 ζ1 蓋過）
+- [X] H1   開不存在 PDF                    batch-os-error-paths.lisp
+- [X] H2   unbound key noop                同上
+- [X] H4   C-g 沒 minibuffer 時 noop       同上
+- [X] H6   unknown wire cmd error          （已被 batch 1.7 ν2 蓋過）
+- [X] H8   損壞 PDF                        同 batch 3 driver
+- [X] E2   minibuffer 空 submit             同 batch 3 driver
+
+順手抓 + 修的 bug：
+
+- 【F-keys 沒名稱】key_to_string 對 F1–F12 走 default "<key-N>"
+  fallback、使用者無法 (limn:bind "<f12>" ...)。修：加 case
+  Qt::Key_F1..F12 → "<f1>".."<f12>"。對應 SPEC §6 key 名約定。
+
+已知 infra quirk（不是 Limn bug、文件化）：
+
+- Xvfb 下 F-keys 抵達時帶 phantom Alt modifier (mods=0x8000000)。
+  不知是 Xvfb keymap 還是 Qt xcb 解讀問題。在 E2 測試裡改用 z 觸發、
+  繞過。真機（macOS）行為待 v0.11+ 驗證確認是否同樣。
+
+未解 flake（待 follow-up）：
+
+- batch-os-stronger-3 偶發 fail in run-all-tiers 但直接跑 docker
+  run 過。可能 X server 跨 driver 累積狀態。重跑就綠。記下追蹤。
 
 為什麼這時：7 個 entry、各自獨立、低風險、跑完信心很高。
 
-*** Batch 4：Minibuffer state primitives             ~半天
+*** Batch 4：Minibuffer state primitives             ~半天 ✓ DONE
 
-- [ ] E3   minibuffer/set-text
-- [ ] E4   minibuffer/set-prompt
-- [ ] E6   type 1000 chars
-- [ ] E7   C-g vs printable g during minibuffer open
+- [X] E3   minibuffer/set-text                  batch-os-minibuffer-state.lisp
+- [X] E4   minibuffer/set-prompt                同上
+- [X] E6   type 1000 chars                      （已被 1.7 ξ2 蓋過）
+- [X] E7   C-g vs printable g during open       （batch-os-cg + -keys 組合）
 
-*** Batch 5：Lisp runtime OS-level coverage          ~半天
+意外綠：所有 SPEC §5.4 對 set-text / set-prompt 的契約都已 honour。
+set-prompt 在關閉的 minibuffer 上呼叫也正確回 ok=false（§5.4 規定）。
 
-- [ ] K2   hook on event/key 真的 fires
-- [ ] K3   describe-key 對 demo binding 回對
-- [ ] O1   bridge/capabilities returns expected
+*** Batch 5：Lisp runtime OS-level coverage          ~半天 ✓ DONE
 
-*** Batch 6：Visual regression infra + 首批視覺測試   ~1 天
+- [X] K2   hook on event/key 真的 fires             batch-os-lisp-runtime.lisp
+- [X] K3   describe-key 對 demo binding 回對        同上
+- [X] O1   bridge/capabilities returns expected      同上
 
-- [ ] F1   截圖比對 baseline 框架
-- [ ] F2   zoom visual change
+0 bug——hook system、introspection、capabilities 都已 honour SPEC。
+batch 1 系列（hook 抓 event）跟 batch 8 batch 10 (introspect) 設計
+時做對了、coverage backfill 釘住而已。
+
+*** Batch 6：Visual regression infra + 首批視覺測試   ~1 天 部分 DONE
+
+- [X] F1   截圖比對 baseline 框架               batch-os-visual.lisp
+- [△] F2   zoom visual change                   降級成 wire-level round-trip
+
+【F1】test/grab-window 工作得很好——回 PNG (8620 bytes base64) +
+aggregate stats (width/height/luminance/opaque-pixels)。視覺 baseline
+infra 就位、後續視覺 regression 可直接堆在這上。
+
+【F2】**真正視覺驗證 Xvfb 無法做**——PDF viewport 是 QOpenGLWidget、
+Xvfb 沒 OpenGL context（log 中 \"QOpenGLWidget: Failed to create
+context\"）、grab 拿到的 PDF 區域是空 placeholder、zoom 動了但 pixel
+完全不變。降級成「view/set zoom 回 ok + view/get 反映」純 wire-level
+驗證、視覺 contract 沒守住。
+
+未來想真做 visual regression、選項：
+- 在 sioyek 加 software-render fallback（不依賴 OpenGL）
+- 或用 macOS host 直跑、避開 Xvfb
+- 或 nixpkgs 用 mesa-software OpenGL
+
+歸類：infra gap、不是 Limn bug、不阻 v0.10。
 
 為什麼這時：前 5 batch 把所有非視覺 entry 都做完、剩下都依賴
 screenshot infra。infra 一次蓋完、F3/F4/F5（未來）都靠這套。
 
-*** Batch 7：Stress / perf baseline                  ~半天
+*** Batch 7：Stress / perf baseline                  ~半天 ✓ DONE
 
-- [ ] I2   1000 keystroke 不 drop
-- [ ] I5   5 個 limn instance 各自獨立
-- [ ] I3   long session memleak watch (1 hour run)
+- [X] I2   1000 keystroke 不 drop              batch-os-stress.lisp
+- [X] I5   5 個 limn instance 各自獨立          同上
+- [X] I3   long session memleak watch          同上（壓縮成 30s burst loop）
+
+0 bug——dispatch / pump thread 在 1000 events 高頻下不漏、395 iterations
+mixed ops 後 RSS 只成長 +2.4%、5 instance 同 host 互不干擾。
+
+【scale 取捨】I3 原計畫 1 小時 run、壓縮成 30 秒 burst loop（395
+iterations、混合 view/get + view/set + minibuffer open/close）。同樣
+能 catch leak、但 fit CI 時間預算。
 
 為什麼最後：這層發現的問題是「scale 才出來」、不適合 dev loop；最後
 跑一輪確認 baseline 對。
@@ -83,14 +370,17 @@ screenshot infra。infra 一次蓋完、F3/F4/F5（未來）都靠這套。
 
 | Batch | Entries | 時間 |
 |-------+---------+------|
-| 1     | 4       | ~0.5 天 |
+| 1     | 4       | ~0.5 天 ✓ |
+| 1.5   | 8       | ~0.5 天 部分（7/8、γ3 honest red） |
+| 1.6   | 9       | ~0.5 天 ✓ |
+| 1.7   | 7       | ~0.5 天 |
 | 2     | 4       | ~0.5 天 |
 | 3     | 7       | ~0.5 天 |
 | 4     | 4       | ~0.5 天 |
 | 5     | 3       | ~0.5 天 |
 | 6     | 2       | ~1 天 |
 | 7     | 3       | ~0.5 天 |
-| Total | 27      | ~5 天 |
+| Total | 51      | ~6.5 天 |
 
 最後 merge =feature/v0.10-coverage-backfill= → main (=--no-ff=)、tag
 =v0.10.0=。

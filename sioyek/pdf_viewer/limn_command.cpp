@@ -1536,6 +1536,15 @@ bool LimnCommand::widget_to_page_norm(int widget_x, int widget_y,
     // DocumentPos x/y are in page-local doc units; normalize by page rect.
     *out_nx = static_cast<double>(dp.x) / static_cast<double>(pw);
     *out_ny = static_cast<double>(dp.y) / static_cast<double>(ph);
+    // Reject NaN — sioyek's window_to_document_pos can return NaN under
+    // incomplete layout (e.g. Xvfb without OpenGL context). Callers
+    // expect "true means valid finite coords"; falling through to
+    // pixel-coord fallback is cleaner than letting NaN propagate
+    // to JSON (where it becomes null and breaks downstream math).
+    // v0.10 batch 2 B6 caught it.
+    if (!std::isfinite(*out_nx) || !std::isfinite(*out_ny)) {
+        return false;
+    }
     return true;
 }
 
