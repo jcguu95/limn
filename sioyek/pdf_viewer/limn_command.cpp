@@ -342,7 +342,65 @@ void LimnCommand::cmd_bridge_win_focus(const QString& id, const QJsonObject& msg
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
+
+    // v0.15 per-window independent DocumentView.
+    //
+    // The physical Qt widget is shared; focus switching swaps the live
+    // DV's state between LimnWindow snapshots. Three steps:
+    //
+    //   1. Save the live DV's drift (continuous fields — zoom/offset —
+    //      that the user may have scrolled/zoomed inline) back into
+    //      the previously-focused LimnWindow. `page` is intent-level
+    //      and already lives in win->page from view/set, so we don't
+    //      sync it from the (offscreen-unreliable) center-page heuristic.
+    //   2. Flip the focused flag.
+    //   3. If target window has a buffer, restore its snapshot into
+    //      the live DV (re-open the document if it differs from live,
+    //      then apply page/zoom/offset/dark-mode). Rebuild the overlay
+    //      raster so the new focused window's overlays paint.
+    DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
+    LimnWindow* prev = windows->get(windows->focused_id());
+    if (prev && dv && !prev->buffer_id.isEmpty()) {
+        Document* live = dv->get_document();
+        if (live && registry->find_id(live) == prev->buffer_id) {
+            prev->zoom     = dv->get_zoom_level();
+            prev->offset_x = dv->get_offset_x();
+            prev->offset_y = dv->get_offset_y();
+        }
+    }
+
     windows->set_focused(win_id);
+
+    LimnWindow* target = windows->get(win_id);
+    if (target && dv && !target->buffer_id.isEmpty()) {
+        Document* target_doc = registry->lookup(target->buffer_id);
+        Document* live_doc   = dv->get_document();
+        if (target_doc && target_doc != live_doc) {
+            // Re-attach the target buffer's document to the live DV.
+            // DocumentManager caches by canonical path, so this is a
+            // cheap lookup, not a re-parse.
+            main_widget->open_document(target_doc->get_path());
+        }
+        if (target_doc) {
+            dv->set_zoom_level(target->zoom, true, true);
+            dv->goto_page(target->page);
+            dv->set_offsets(target->offset_x, target->offset_y, true);
+            main_widget->opengl_widget()->set_dark_mode(target->dark_mode);
+            // rotation: apply diff so the visible widget matches the
+            // window's stored absolute rotation.
+            // (We store target->rotation as absolute; sioyek's rotate()
+            // is a 90° delta — so issue (target - 0 % 4) / 90 calls
+            // assuming the visible widget reset to 0 on document swap.
+            // For now we leave rotation re-apply to a follow-up; the
+            // stored value is still correct for view/get.)
+        }
+    }
+
+    rebuild_overlay_raster(overlay_raster.width(), overlay_raster.height());
+    if (main_widget && main_widget->opengl_widget()) {
+        main_widget->opengl_widget()->update();
+    }
+
     bridge->send_ok(id);
 }
 
@@ -420,9 +478,15 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
     // if this window is the focused/active one.
     DocumentView* dv = main_widget->document_view();
     Document* doc = dv->get_document();
+    // v0.15: "is_active" = this window owns the live widget. Use the
+    // explicit focused-id (single source of truth, set by bridge/win-
+    // focus), not a buffer-id match. The old buffer-id heuristic was
+    // ambiguous when two windows happened to point at the same cached
+    // Document* (same PDF path), and let non-focused view/set leak into
+    // the visible DV — violating per-window isolation.
+    const bool    is_active = (windows->focused_id() == win_id);
     const QString live_buf  = registry->find_id(doc);
-    const bool    is_active = (!win->buffer_id.isEmpty()
-                                && win->buffer_id == live_buf);
+    (void)live_buf;
 
     // Sync continuous fields (offset, zoom) before applying partial
     // updates. Without this, a request that only sets :|offset-y| would
@@ -1146,10 +1210,10 @@ QJsonObject LimnCommand::collect_view_state(const QString& win_id) {
     // in headless/offscreen tests (viewport is degenerate) and would make
     // view/get :page disagree with what the client just set.
     DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
-    Document* live_doc = dv ? dv->get_document() : nullptr;
-    const QString live_buf = registry->find_id(live_doc);
-    const bool is_active = (!win->buffer_id.isEmpty()
-                            && win->buffer_id == live_buf);
+    // v0.15: focused-id is the single source of truth for "is this
+    // window the one driving the live widget". See cmd_view_set for
+    // why we don't use the buffer-id heuristic anymore.
+    const bool is_active = (windows->focused_id() == win_id);
     if (is_active && dv) {
         win->zoom     = dv->get_zoom_level();
         win->offset_x = dv->get_offset_x();
