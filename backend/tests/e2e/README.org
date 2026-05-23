@@ -49,14 +49,35 @@ sbcl --no-userinit --no-sysinit --non-interactive \
 Each script exits 0 on pass, non-zero on fail, prints a clear VERDICT
 line you can grep.
 
-* Limitations
+* Two flavours: -qt and -os
 
-These tests use Qt-level key injection (=test/inject-qt-key=), which
-generates a real ~QKeyEvent~ via ~QApplication::sendEvent~. This covers
-the Qt event filter, dispatch chain, and everything backend-side — but
-*not* the macOS HID → AppKit → QApplication path.
+Each scenario lives as a pair of drivers, designed to be the same test
+exercised at two layers:
 
-For real OS-level keystrokes we'd need =osascript= + macOS Accessibility
-permission for the parent process. That's gated by an interactive
-system grant, so we keep it out of the default suite. See =LIMN-SPEC=
-or =CONTRIBUTING= once we settle on a strategy (likely VM-based).
+| suffix          | injection mechanism                | covers                                    | runs on                  |
+|-----------------+------------------------------------+-------------------------------------------+--------------------------|
+| =batch*-qt.lisp= | =test/inject-qt-key= (QApplication::sendEvent) | Qt event filter ↓ everything Lisp-side | any host (macOS / Linux) |
+| =batch*-os.lisp= | =xdotool key= (real X11 input events) | + X server → XInput → Qt xcb              | Linux container only     |
+
+The =-os= flavour is what makes the test layer cover the same chain a
+real user keypress goes through. We use Linux + Xvfb + xdotool because:
+
+- macOS OS-level injection needs Accessibility system permission (gated)
+- Linux X11 input subsystem has no permission gate
+- Container makes the test env reproducible
+
+Both flavours of each scenario should pass — they are not redundant,
+they are different layers of the same chain.
+
+* Running
+
+#+begin_src bash
+# All Qt-level tests (macOS / Linux, no container needed):
+backend/tests/e2e/run-e2e.sh
+
+# All OS-level tests (must be inside the Limn container):
+backend/tests/e2e/run-os-e2e.sh
+
+# Both, with container build/start if needed:
+backend/tests/run-all-tiers.sh
+#+end_src

@@ -1,0 +1,38 @@
+# Trim docker build context — exclude large/irrelevant trees.
+
+# vendored libs we don't need for Linux build (Linux uses system mupdf)
+sioyek/mupdf/
+sioyek/zlib/
+sioyek/android/
+sioyek/windows_runtime/
+
+# macOS-only build outputs
+sioyek/limn.app/
+sioyek/sioyek.app/
+sioyek/*.app/
+
+# build artifacts that should be regenerated inside container
+sioyek/*.o
+sioyek/pdf_viewer/*.o
+sioyek/moc_*.cpp
+sioyek/moc_predefs.h
+sioyek/qrc_resources.cpp
+sioyek/Makefile
+
+# logs / scratch
+limn-repl.log
+/tmp/
+
+# git internals
+.git/
+.gitignore
+
+# direnv / build outputs (not needed inside container)
+.envrc
+result*
+# flake.nix + flake.lock ARE needed (Dockerfile uses nix develop)
+
+# editor / OS junk
+.DS_Store
+*.swp
+*~
