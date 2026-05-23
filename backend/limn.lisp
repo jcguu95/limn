@@ -46,6 +46,12 @@
 (defvar *key-prefix* '()
   "Accumulated key prefix while walking a multi-key sequence.")
 
+(defvar *prefix-arg-acc* ""
+  "Accumulator for numeric prefix arg. e.g. user typing '5g' sees:
+     '5' → *prefix-arg-acc* = \"5\"
+     'g' → parse \"5\", bind limn/cmd:*prefix-arg* to 5, dispatch 'g',
+           reset accumulator.")
+
 (defvar *running* nil)
 
 (declaim (ftype (function () t) stop))
@@ -90,29 +96,60 @@
    (`:prefix`), we commit to that level for the duration of the prefix.
    This matches Emacs (you don't \"fall through\" mid-sequence)."
   (let* ((spec       (%event-key-spec ev))
-         (sequence   (append *key-prefix* (list spec)))
+         (mods       (getf ev :|mods|))
          (km         *global-keymap*)
-         (lookup-seq (%sym :limn/keys '#:lookup-sequence))
-         (rt         (find-package :limn/runtime)))
+         (lookup-seq (%sym :limn/keys '#:lookup-sequence)))
     (unless lookup-seq (return-from %dispatch-key nil))
-    (let* ((win-id  (or (getf ev :|win-id|) "w1"))
+
+    ;; A5 numeric prefix arg accumulation: a digit pressed with no
+    ;; modifier AND no multi-key prefix in progress is treated as a
+    ;; prefix-arg digit (just like Emacs C-u 5 g, but without C-u).
+    ;; First non-digit ends accumulation, value goes into
+    ;; limn/cmd:*prefix-arg* dynamic binding for that dispatch.
+    (when (and (null mods)
+               (null *key-prefix*)
+               (= 1 (length spec))
+               (let ((c (char spec 0)))
+                 (and (char>= c #\0) (char<= c #\9))))
+      ;; accumulate digit, do NOT dispatch the digit itself
+      (setf *prefix-arg-acc* (concatenate 'string *prefix-arg-acc* spec))
+      (return-from %dispatch-key nil))
+
+    (let* ((sequence   (append *key-prefix* (list spec)))
+           (win-id  (or (getf ev :|win-id|) "w1"))
+           (rt      (find-package :limn/runtime))
            (mb-fn   (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW" rt)))
            (mb      (and mb-fn (funcall mb-fn win-id)))
-           ;; Try the mode-stack lookup first (returns leaf action,
-           ;; :prefix mid-sequence, or NIL).
            (mode-result (%mode-stack-lookup mb sequence lookup-seq))
-           ;; Then global (only if mode stack didn't claim it).
            (global-result (and km (funcall lookup-seq km sequence)))
-           (result        (or mode-result global-result)))
+           (result        (or mode-result global-result))
+           ;; Bind prefix-arg if accumulated; gather-args reads it
+           ;; via :interactive "p". Reset accumulator regardless.
+           (acc-int (when (plusp (length *prefix-arg-acc*))
+                      (parse-integer *prefix-arg-acc* :junk-allowed t))))
+      (setf *prefix-arg-acc* "")
       (cond
         ((eq result :prefix)
          (setf *key-prefix* sequence))
         ((functionp result)
          (setf *key-prefix* '())
-         (handler-case (funcall result ev)
-           (error (e) (format *error-output*
-                              "limn: binding for ~{~a~^ ~} errored: ~a~%"
-                              sequence e))))
+         (let ((cmd-pkg (find-package :limn/cmd)))
+           (if (and acc-int cmd-pkg)
+               (let ((slot (find-symbol "*PREFIX-ARG*" cmd-pkg)))
+                 (if slot
+                     (progv (list slot) (list acc-int)
+                       (handler-case (funcall result ev)
+                         (error (e) (format *error-output*
+                                            "limn: binding for ~{~a~^ ~} errored: ~a~%"
+                                            sequence e))))
+                     (handler-case (funcall result ev)
+                       (error (e) (format *error-output*
+                                          "limn: binding for ~{~a~^ ~} errored: ~a~%"
+                                          sequence e)))))
+               (handler-case (funcall result ev)
+                 (error (e) (format *error-output*
+                                    "limn: binding for ~{~a~^ ~} errored: ~a~%"
+                                    sequence e))))))
         (t
          (setf *key-prefix* '()))))))
 
