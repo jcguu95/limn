@@ -67,6 +67,31 @@ private:
     void cmd_buffer_metadata     (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render       (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render_region(const QString& id, const QJsonObject& msg);
+
+    // ─── bookmark/* (SPEC §5.x, v0.17) ──────────────────────────────
+    // Per-buffer in-memory bookmark store. Persistence (sidecar file,
+    // PDF native outline rewrite, hybrid) is user-Lisp territory.
+    void cmd_bookmark_list_native(const QString& id, const QJsonObject& msg);
+    void cmd_bookmark_list   (const QString& id, const QJsonObject& msg);
+    void cmd_bookmark_set    (const QString& id, const QJsonObject& msg);
+    void cmd_bookmark_get    (const QString& id, const QJsonObject& msg);
+    void cmd_bookmark_delete (const QString& id, const QJsonObject& msg);
+
+public:
+    // ─── v0.17 bookmark store (public so anon-namespace helpers in the
+    //                          .cpp can serialise the struct) ─────────
+    // Per-buffer (keyed by Limn buffer-id) ordered list of user
+    // bookmarks. QList preserves insertion order for deterministic
+    // bookmark/list responses. Cleared on buffer/close.
+    struct BookmarkRecord {
+        QString name;
+        int     page = 0;
+        double  x    = 0.0;
+        double  y    = 0.0;
+        QString note;
+    };
+private:
+    QHash<QString, QList<BookmarkRecord>> bookmarks;
     // SPEC v0.5 §5.3 後段 — text engine 編輯 primitives
     void cmd_buffer_cursor_get   (const QString& id, const QJsonObject& msg);
     void cmd_buffer_cursor_set   (const QString& id, const QJsonObject& msg);

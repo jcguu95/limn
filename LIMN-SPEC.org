@@ -1334,21 +1334,37 @@ v0.13 batch 23 已驗 xdotool type 直送 CJK 字元 path、本 release 補
 
 C++ + container infra；Lisp 端只是新事件 dispatch。
 
-*** v0.17 bookmark wire primitive ⏭ planned
+*** v0.17.0 bookmark wire primitive ✅ shipped
 
-只暴露 C++ 端「讀 / 寫 PDF native bookmark (mupdf outline)」的
-primitive、persistence (存哪、格式、UI) 全部留給 user Lisp。
+framework 暴露的 bookmark primitive，persistence (存哪、格式、UI)
+全部留給 user Lisp。
 
-新 §5.x bookmark/ section：
-- =bookmark/list=：列 PDF 內建 outline tree
-- =bookmark/get= / =bookmark/set= / =bookmark/delete=（per buffer-id）
+新 §5.x bookmark/ section（命名比初版 SPEC 微調、避開「list 回 tree
+但 get 回 single record」的不對稱、實作時自然分流）：
 
-設計原則：framework 不決定 user 怎麼存。user 可以選擇：
-- 完全用 PDF native outline（跟著 PDF 走、其它 reader 也讀得到）
-- 自己另存 sidecar file（=.limn-bookmarks= 之類、user Lisp 控制）
-- 或 hybrid
+- =bookmark/list-native= :buffer-id   → PDF 內建 outline tree
+  (read-only wrapper、内部 delegate 到 buffer/toc 既有邏輯)
+- =bookmark/list=  :buffer-id         → user-managed bookmark list
+  (in-memory per buffer)
+- =bookmark/set=   :buffer-id :name :page [:x :y :note]
+  → upsert by :name；page 必須在 [0, num_pages)；name 非空
+- =bookmark/get=   :buffer-id :name   → single record 或 fail
+- =bookmark/delete= :buffer-id :name  → 嚴格、unknown name fail
 
-C++ 為主（mupdf API wrapper）、Lisp 端薄。
+設計原則：framework 不決定 user 怎麼存：
+- 完全用 PDF native outline（跟著 PDF 走、其它 reader 也讀得到、
+  walk via =bookmark/list-native=）
+- 自己另存 sidecar file（=.limn-bookmarks= 之類、user Lisp 控制、
+  walk via =bookmark/list= + =bookmark/set=）
+- 或 hybrid（list-native 讀、set/get/delete 寫到 sidecar）
+
+Storage 模型：=QHash<buffer-id, QList<BookmarkRecord>>=、QList 保插入
+順序。buffer/close 自動清乾淨；framework 不 persist。
+
+C++ 為主，Lisp 端零改動。Wire contract 全新（不破壞既有）。
+
+測試：Qt-tier suites/bookmark.lisp 17 deftest；OS-tier
+batch-os-bookmark.lisp 6 Ω blocks；37/37 OS regression green。
 
 *** v0.18 frame system + VM workspace 測試 ⏭ planned
 

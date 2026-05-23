@@ -46,6 +46,7 @@
                  "suites/overlays-paint.lisp"
                  "suites/per-window.lisp"
                  "suites/cjk.lisp"
+                 "suites/bookmark.lisp"
                  "suites/buffer.lisp"
                  "suites/events.lisp"
                  "suites/test-mode.lisp"

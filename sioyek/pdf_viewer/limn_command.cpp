@@ -132,6 +132,13 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "buffer/insert")        { cmd_buffer_insert       (id, msg); return; }
     if (cmd == "buffer/delete")        { cmd_buffer_delete       (id, msg); return; }
 
+    // bookmark/* (SPEC §5.x, v0.17)
+    if (cmd == "bookmark/list-native") { cmd_bookmark_list_native(id, msg); return; }
+    if (cmd == "bookmark/list")        { cmd_bookmark_list       (id, msg); return; }
+    if (cmd == "bookmark/set")         { cmd_bookmark_set        (id, msg); return; }
+    if (cmd == "bookmark/get")         { cmd_bookmark_get        (id, msg); return; }
+    if (cmd == "bookmark/delete")      { cmd_bookmark_delete     (id, msg); return; }
+
     // test/* — only available when --test-mode was set on startup
     if (cmd.startsWith("test/")) {
         if (!test_mode) {
@@ -1355,6 +1362,9 @@ void LimnCommand::cmd_buffer_close(const QString& id, const QJsonObject& msg) {
         LimnWindow* w = windows->get(wid);
         if (w && w->buffer_id == buffer_id) w->buffer_id.clear();
     }
+    // v0.17: drop any user bookmarks attached to this buffer. Lisp
+    // clients that want persistence have already sidecar'd them by now.
+    bookmarks.remove(buffer_id);
     bridge->send_ok(id);
     emit_buffer_closed(buffer_id);
 }
@@ -1614,6 +1624,130 @@ void LimnCommand::cmd_buffer_toc(const QString& id, const QJsonObject& msg) {
     } catch (const std::exception& e) {
         bridge->send_fail(id, QString::fromUtf8(e.what()));
     }
+}
+
+// ─── bookmark/* (SPEC §5.x, v0.17) ─────────────────────────────────────
+//
+// In-memory per-buffer store. Persistence (sidecar file / outline rewrite
+// / hybrid) is user-Lisp territory — framework keeps no opinion. Keyed
+// by buffer-id so close() drops everything for that buffer.
+//
+// Wire shape of a single record:
+//   { "name": str, "page": int, "x": float, "y": float, "note": str }
+//
+// list returns { "items": [<record>, ...] } in insertion order.
+
+namespace {
+QJsonObject bookmark_to_json(const LimnCommand::BookmarkRecord& b) {
+    QJsonObject o;
+    o.insert("name", b.name);
+    o.insert("page", b.page);
+    o.insert("x",    b.x);
+    o.insert("y",    b.y);
+    o.insert("note", b.note);
+    return o;
+}
+
+// Resolve mupdf buffer-id (rejects text-engine and unknown). Returns
+// Document* or nullptr with fail-response already sent.
+Document* resolve_mupdf_buffer(LimnBridge* bridge, LimnBufferRegistry* reg,
+                                const QHash<QString,QString>& text_bufs,
+                                const QString& id, const QString& buffer_id) {
+    if (buffer_id.isEmpty()) {
+        bridge->send_fail(id, "missing 'buffer-id'");
+        return nullptr;
+    }
+    if (text_bufs.contains(buffer_id)) {
+        bridge->send_fail(id, "bookmark/* requires a mupdf buffer (got text-engine)");
+        return nullptr;
+    }
+    Document* doc = reg->lookup(buffer_id);
+    if (!doc) {
+        bridge->send_fail(id, QString("unknown buffer-id: %1").arg(buffer_id));
+        return nullptr;
+    }
+    return doc;
+}
+}  // anon
+
+void LimnCommand::cmd_bookmark_list_native(const QString& id, const QJsonObject& msg) {
+    const QString buf = msg.value("buffer-id").toString();
+    Document* doc = resolve_mupdf_buffer(bridge, registry, text_buffers, id, buf);
+    if (!doc) return;
+    try {
+        QJsonArray items = LimnMupdf::extract_toc(doc);
+        QJsonObject data;
+        data.insert("items", items);
+        bridge->send_ok(id, data);
+    } catch (const std::exception& e) {
+        bridge->send_fail(id, QString::fromUtf8(e.what()));
+    }
+}
+
+void LimnCommand::cmd_bookmark_list(const QString& id, const QJsonObject& msg) {
+    const QString buf = msg.value("buffer-id").toString();
+    if (!resolve_mupdf_buffer(bridge, registry, text_buffers, id, buf)) return;
+    QJsonArray items;
+    for (const auto& b : bookmarks.value(buf)) items.append(bookmark_to_json(b));
+    QJsonObject data;
+    data.insert("items", items);
+    bridge->send_ok(id, data);
+}
+
+void LimnCommand::cmd_bookmark_set(const QString& id, const QJsonObject& msg) {
+    const QString buf  = msg.value("buffer-id").toString();
+    Document* doc = resolve_mupdf_buffer(bridge, registry, text_buffers, id, buf);
+    if (!doc) return;
+    const QString name = msg.value("name").toString();
+    if (name.isEmpty()) { bridge->send_fail(id, "missing or empty 'name'"); return; }
+    if (!msg.value("page").isDouble()) {
+        bridge->send_fail(id, "missing or non-integer 'page'"); return;
+    }
+    const int page = msg.value("page").toInt();
+    if (page < 0 || page >= doc->num_pages()) {
+        bridge->send_fail(id, QString("page %1 out of range [0, %2)")
+                              .arg(page).arg(doc->num_pages()));
+        return;
+    }
+    BookmarkRecord rec;
+    rec.name = name;
+    rec.page = page;
+    rec.x    = msg.value("x").toDouble(0.0);
+    rec.y    = msg.value("y").toDouble(0.0);
+    rec.note = msg.value("note").toString();
+
+    QList<BookmarkRecord>& list = bookmarks[buf];
+    // Upsert: replace existing by name, else append (preserves
+    // insertion order for genuinely new entries).
+    bool updated = false;
+    for (auto& b : list) {
+        if (b.name == name) { b = rec; updated = true; break; }
+    }
+    if (!updated) list.append(rec);
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_bookmark_get(const QString& id, const QJsonObject& msg) {
+    const QString buf  = msg.value("buffer-id").toString();
+    if (!resolve_mupdf_buffer(bridge, registry, text_buffers, id, buf)) return;
+    const QString name = msg.value("name").toString();
+    if (name.isEmpty()) { bridge->send_fail(id, "missing or empty 'name'"); return; }
+    for (const auto& b : bookmarks.value(buf)) {
+        if (b.name == name) { bridge->send_ok(id, bookmark_to_json(b)); return; }
+    }
+    bridge->send_fail(id, QString("no bookmark named: %1").arg(name));
+}
+
+void LimnCommand::cmd_bookmark_delete(const QString& id, const QJsonObject& msg) {
+    const QString buf  = msg.value("buffer-id").toString();
+    if (!resolve_mupdf_buffer(bridge, registry, text_buffers, id, buf)) return;
+    const QString name = msg.value("name").toString();
+    if (name.isEmpty()) { bridge->send_fail(id, "missing or empty 'name'"); return; }
+    QList<BookmarkRecord>& list = bookmarks[buf];
+    for (int i = 0; i < list.size(); ++i) {
+        if (list[i].name == name) { list.removeAt(i); bridge->send_ok(id); return; }
+    }
+    bridge->send_fail(id, QString("no bookmark named: %1").arg(name));
 }
 
 void LimnCommand::cmd_buffer_text(const QString& id, const QJsonObject& msg) {
