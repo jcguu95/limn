@@ -543,6 +543,11 @@ void LimnCommand::cmd_minibuffer_set_text(const QString& id, const QJsonObject& 
         return;
     }
     text_buffers["*minibuffer*"] = msg.value("text").toString();
+    // After set-text, cursor goes to end — Emacs convention, lets the
+    // user keep typing to extend. v0.12 batch 20 added cursor-aware
+    // insertion in minibuffer_handle_key; this keeps set-text+typing
+    // composable.
+    text_cursors["*minibuffer*"] = text_buffers["*minibuffer*"].length();
     if (auto* c = chrome_of(main_widget))
         c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
     bridge->send_ok(id);
@@ -582,6 +587,44 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
         bridge->push_event("minibuffer-cancel", ev);
         return true;
     }
+    // BS — delete character before cursor (current implementation: always
+    // at end). emits minibuffer-input with updated text. Maps to A2 TODO
+    // entry. v0.12.
+    if (key == "BS") {
+        QString& buf = text_buffers["*minibuffer*"];
+        if (buf.length() > 0) {
+            // Honour cursor position (set by buffer/cursor-set or by
+            // append-typing). Delete the char to the LEFT of cursor.
+            int cur = text_cursors["*minibuffer*"];
+            if (cur > 0 && cur <= buf.length()) {
+                buf.remove(cur - 1, 1);
+                text_cursors["*minibuffer*"] = cur - 1;
+            }
+            if (auto* c = chrome_of(main_widget))
+                c->set_minibuffer(true, minibuffer_prompt, buf);
+            ev.insert("text", buf);
+            bridge->push_event("minibuffer-input", ev);
+        }
+        return true;   // consume even at empty (no key fallback)
+    }
+    // Left / Right — move cursor without modifying text. Maps to A4
+    // TODO entry.
+    if (key == "<left>" || key == "<right>") {
+        int cur = text_cursors["*minibuffer*"];
+        const int len = text_buffers["*minibuffer*"].length();
+        if (key == "<left>"  && cur > 0)   text_cursors["*minibuffer*"] = cur - 1;
+        if (key == "<right>" && cur < len) text_cursors["*minibuffer*"] = cur + 1;
+        // No event push — cursor move is silent (caller can buffer/cursor-get
+        // if they want to observe). Matches Emacs convention: no minibuffer-
+        // input event because text didn't change.
+        return true;
+    }
+    // Home / End — cursor to start / end.
+    if (key == "<home>") { text_cursors["*minibuffer*"] = 0; return true; }
+    if (key == "<end>") {
+        text_cursors["*minibuffer*"] = text_buffers["*minibuffer*"].length();
+        return true;
+    }
     // Printable single-character key → accumulate into text.
     // "SPC" is the named form of space — key_to_string in limn_input.cpp
     // always returns "SPC" not " " (so binding "SPC" → cmd works), so
@@ -593,13 +636,16 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
         to_append = " ";
     }
     if (!to_append.isEmpty()) {
-        text_buffers["*minibuffer*"].append(to_append);
-        // SPEC §5.3: cursor advances with the inserted text. v0.10 batch
-        // 19 caught that OS-level typing append didn't update cursor.
-        text_cursors["*minibuffer*"] = text_buffers["*minibuffer*"].length();
+        QString& buf = text_buffers["*minibuffer*"];
+        int cur = text_cursors["*minibuffer*"];
+        // Insert at cursor (not append at end) — let Left/Right move
+        // cursor and have typing land there. v0.12 batch 20.
+        if (cur < 0 || cur > buf.length()) cur = buf.length();
+        buf.insert(cur, to_append);
+        text_cursors["*minibuffer*"] = cur + to_append.length();
         if (auto* c = chrome_of(main_widget))
-            c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
-        ev.insert("text", text_buffers["*minibuffer*"]);
+            c->set_minibuffer(true, minibuffer_prompt, buf);
+        ev.insert("text", buf);
         bridge->push_event("minibuffer-input", ev);
         return true;
     }

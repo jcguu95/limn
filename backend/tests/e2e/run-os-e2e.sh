@@ -36,13 +36,20 @@ for driver in "$E2E_DIR"/batch-os-*.lisp; do
   [ -f "$driver" ] || continue
   name="$(basename "$driver" .lisp)"
   echo "── $name ─────────────────────────────────────"
+  # ONE sbcl invocation per driver — capture both stdout for grep
+  # snippet AND exit code. Previously ran twice (once for grep, once
+  # for exit) which doubled X-state pollution and caused cumulative
+  # flake by ~driver 20+. v0.12: log to file, grep file, use real
+  # exit code.
+  log="/tmp/os-e2e-${name}.log"
   if sbcl --no-userinit --no-sysinit --non-interactive \
-          --load "$driver" 2>&1 \
-       | grep -E "VERDICT|PHASE|xdotool|minibuffer|page " ; then
-    :
+          --load "$driver" > "$log" 2>&1 ; then
+    rc=0
+  else
+    rc=$?
   fi
-  if sbcl --no-userinit --no-sysinit --non-interactive \
-          --load "$driver" > /dev/null 2>&1 ; then
+  grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
+  if [ $rc -eq 0 ]; then
     echo "  ✓ $name PASS"
     pass=$((pass + 1))
   else
