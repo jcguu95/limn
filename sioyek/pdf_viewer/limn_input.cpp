@@ -83,10 +83,19 @@ QJsonArray buttons_to_array(Qt::MouseButtons b) {
 }
 
 int button_id(Qt::MouseButton b) {
-    if (b == Qt::LeftButton)   return 1;
-    if (b == Qt::MiddleButton) return 2;
-    if (b == Qt::RightButton)  return 3;
-    return 0;
+    // X11/sioyek convention extends button numbering past 1/2/3:
+    //   1 left, 2 middle, 3 right, 4/5 scroll up/down (Wheel event,
+    //   not MouseButton), 6/7 scroll left/right, 8 back, 9 forward.
+    // Previously returned 0 for anything outside 1/2/3 — that lost
+    // info AND collided with "no button" semantic. v0.10 batch 1.6
+    // λ1 caught it.
+    if (b == Qt::LeftButton)    return 1;
+    if (b == Qt::MiddleButton)  return 2;
+    if (b == Qt::RightButton)   return 3;
+    if (b == Qt::BackButton)    return 8;
+    if (b == Qt::ForwardButton) return 9;
+    // unknown button: -1 signals "saw a click but don't know which button"
+    return -1;
 }
 
 }  // anonymous namespace
@@ -103,7 +112,12 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
     // when posted to the backing QWidgetWindow, once when forwarded to the
     // focused QWidget. Skip the QWindow pass so each press fires our
     // bindings exactly once.
-    if (qobject_cast<QWindow*>(obj)) return false;
+    //
+    // 但 Resize event 只走 QWindow path（Xvfb + openbox 上 QWidget 不收
+    // 二次分發）。所以這個 filter 對 Resize 特例放行。
+    if (qobject_cast<QWindow*>(obj) && ev->type() != QEvent::Resize) {
+        return false;
+    }
 
     switch (ev->type()) {
         case QEvent::KeyPress: {

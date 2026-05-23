@@ -127,6 +127,74 @@ dimension 上加 assertion。
 
 預估：4 個 entries fail + 修、4 個 entries 一次過。半天工作。
 
+*** Batch 1.6：強化 1.5 自己（systematic dimension sweeps）  ~半天 ✓ DONE
+
+**為什麼有這個 batch**：
+
+1.5 抓到的 bug 形狀 = 「事件 emit 時漏掉 SPEC 規定的欄位」（mouse-click /
+scroll 沒 mods）。1.5 在 keyboard 軸做了 systematic sweep（α2 case+mods
+matrix）、但在**事件層**只查了 4 個 event type（key / mouse-click /
+scroll / resize）、其餘 ~11 個沒問。
+
+1.6 把 1.5 的 systematic 風格**自己** generalize：
+
+| 類 | 直譯名稱 | 從 1.5 哪個來、推到哪 |
+|----+----------+-----------------------|
+| ζ  | event field 完整性 systematic sweep | 1.5 mouse-click/scroll 漏 mods、現掃全 event |
+| η  | 負向 cross-modality                | 1.5 β1 守 key、現守 mouse / scroll |
+| θ  | 時序與順序                          | 1.5 全 sequential、沒考慮 ordering |
+| ι  | 並行 / 跨 thread                    | 1.5 沒考慮 race |
+| κ  | Mode-differential                   | 1.5 沒問 mode 切換時不同 modality 走哪條 |
+| λ  | Enum preservation                   | Qt enum 漏值（mouse button 4–8 等） |
+
+**entries**：
+
+- [X] ζ1   全 event type SPEC field 完整 sweep                       ★★★
+            掃完 key / mouse-click / scroll / resize / minibuffer-input
+            / -submit / -cancel / buffer-opened / heartbeat 共 9 個
+            event type、each 欄位 SPEC 對齊。發現 resize 在 Xvfb +
+            openbox 下 Qt 不重派、改用 test/inject-resize wire-level
+            觸發。
+- [X] κ1   minibuffer 開時、click 應該還是 emit mouse-click           ★★★
+- [X] κ2   minibuffer 開時、scroll 應該還是 emit scroll                ★★★
+- [X] η1   裸 modifier 不該 emit mouse-click event                    ★★
+- [X] η2   純 mousemove（沒按鍵）不該 emit mouse-click                ★★
+- [X] η3   modifier 按下不該意外 emit scroll                           ★★
+- [X] λ1   xdotool click 8（back button）→ button enum 不該 return 0  ★★
+- [X] θ1   rapid inject abcde → event 到的順序是 a,b,c,d,e            ★
+- [X] ι1   key inject 中、另一 thread 同時 call view/get、無 dropped event ★
+
+順手抓 + 修的 bug：
+
+- 【λ1 修】button_id() 對非 1/2/3 button 一律 return 0、丟失資訊也
+  跟「沒按鈕」混淆。修：加 BackButton (→8) / ForwardButton (→9) /
+  其餘未知 → -1。
+- 【ζ1 resize 修】LimnInputFilter 一律 skip QWindow obj、但 Resize
+  event 只走 QWindow path（Xvfb 上 QWidget 不收）。修：filter 對
+  Resize event 特例放行。
+- 【ζ1 resize infra 限制】xdotool windowsize 改 X11 size 但 Qt 在
+  Xvfb + openbox 下不重派 QResizeEvent。改用 test/inject-resize
+  wire-level 觸發、繞過 infra limitation。
+
+順手釘住的 invariant（沒抓到 bug、但守住）：
+
+- κ1/κ2：minibuffer 開時 mouse-click / scroll 都還 passthrough。
+  沒 silent intercept。意外是綠的——這是 happy surprise。
+- η1/η2/η3：cross-modality negative assertions 全 hold。
+- θ1：rapid inject 順序保留、沒 reorder。
+- ι1：並行 wire call + key inject、無 dropped event。pump thread
+  在競爭下 robust。
+
+**預期會抓的 bug**（讀 code 已可預判一部分）：
+
+- ζ1 大概率有 1–3 event type 漏文件欄位、過去沒人查
+- κ1 / κ2：minibuffer 開時 mouse-click / scroll 路徑沒被想過——
+  整個 dimension 是黑盒、就算現在巧合 work 也是 silent invariant
+- λ1：button_id 函式只 handle 1/2/3、其餘 return 0、表示 button 4+
+  click 在 backend 看起來都一樣
+
+預估：4–6 個 entry fail + 修、其餘綠。半天工作。
+
 *** Batch 2：滑鼠完整 sweep                          ~半天
 
 - [ ] B1   right/middle click (button 2/3)
@@ -184,14 +252,15 @@ screenshot infra。infra 一次蓋完、F3/F4/F5（未來）都靠這套。
 | Batch | Entries | 時間 |
 |-------+---------+------|
 | 1     | 4       | ~0.5 天 ✓ |
-| 1.5   | 8       | ~0.5 天 |
+| 1.5   | 8       | ~0.5 天 部分（7/8、γ3 honest red） |
+| 1.6   | 9       | ~0.5 天 |
 | 2     | 4       | ~0.5 天 |
 | 3     | 7       | ~0.5 天 |
 | 4     | 4       | ~0.5 天 |
 | 5     | 3       | ~0.5 天 |
 | 6     | 2       | ~1 天 |
 | 7     | 3       | ~0.5 天 |
-| Total | 35      | ~5.5 天 |
+| Total | 44      | ~6 天 |
 
 最後 merge =feature/v0.10-coverage-backfill= → main (=--no-ff=)、tag
 =v0.10.0=。
