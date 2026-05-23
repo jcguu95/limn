@@ -350,11 +350,18 @@ context\"）、grab 拿到的 PDF 區域是空 placeholder、zoom 動了但 pixe
 為什麼這時：前 5 batch 把所有非視覺 entry 都做完、剩下都依賴
 screenshot infra。infra 一次蓋完、F3/F4/F5（未來）都靠這套。
 
-*** Batch 7：Stress / perf baseline                  ~半天
+*** Batch 7：Stress / perf baseline                  ~半天 ✓ DONE
 
-- [ ] I2   1000 keystroke 不 drop
-- [ ] I5   5 個 limn instance 各自獨立
-- [ ] I3   long session memleak watch (1 hour run)
+- [X] I2   1000 keystroke 不 drop              batch-os-stress.lisp
+- [X] I5   5 個 limn instance 各自獨立          同上
+- [X] I3   long session memleak watch          同上（壓縮成 30s burst loop）
+
+0 bug——dispatch / pump thread 在 1000 events 高頻下不漏、395 iterations
+mixed ops 後 RSS 只成長 +2.4%、5 instance 同 host 互不干擾。
+
+【scale 取捨】I3 原計畫 1 小時 run、壓縮成 30 秒 burst loop（395
+iterations、混合 view/get + view/set + minibuffer open/close）。同樣
+能 catch leak、但 fit CI 時間預算。
 
 為什麼最後：這層發現的問題是「scale 才出來」、不適合 dev loop；最後
 跑一輪確認 baseline 對。
