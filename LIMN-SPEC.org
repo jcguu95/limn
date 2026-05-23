@@ -1264,21 +1264,55 @@ overlays = 引擎之上的 Lisp 控制視覺、放在 paintGL「pages 畫完後�
 widget 上」的夾層。將來換 engine（epub / web / image）overlays
 機制能直接沿用、不會跟著 engine 死綁。
 
-*** v0.15 per-window independent DocumentView ⏭ planned
+*** v0.15 per-window independent DocumentView — 分兩波 ship
 
 v0.8 真實 Qt 視窗分割 ship 時、兩個 pane 仍共享同一個底層
-=DocumentView=、滾一個另一個跟。v0.15 改成每個 pane 自己的：
-
-- page / zoom / scroll
-- overlay 集合（v0.14 paintGL 之後）
-- 視覺選取狀態
+=DocumentView=、滾一個另一個跟。v0.15 改成每個 pane 自己的。
 
 SPEC §5.2 =view/get= / =view/set= 早已寫成「per-window」語意（用
-=win-id= routing）、實作對齊即可、不算 contract 變動。
+=win-id= routing）、實作對齊即可、不算 contract 變動。前置：v0.14
+paintGL 完、才有「per-window overlay 集合」這層要切。
 
-前置：v0.14 paintGL 完、才有「per-window overlay 集合」這層要切。
+工作量比預期大、拆成兩個 patch release。
 
-C++ 結構性 refactor 為主。
+**** v0.15.0 ✅ shipped — focus swap + 基本 state 獨立
+
+涵蓋：
+- per-window =page= / =zoom= / =offset-x= / =offset-y=
+- per-window =overlay= 集合（v0.14 paintGL 銜接）
+- per-window =buffer-id=
+- per-window =dark-mode= / =rotation=（state 已存、rotation 視覺
+  套用留 v0.15.1）
+- =bridge/win-focus= 真實 swap live DV 狀態（save 前 focused 的
+  drift、restore 新 focused 的快照）
+- =view/set= / =view/get= 的 =is_active= 改用 focused-id 為單一
+  真實來源、不再用 buffer-id 啟發式
+
+測試：Qt-tier 17 + OS-tier 20 + 34 個舊 batch regression 全綠。
+
+**** v0.15.1 ⏭ planned — selection + isolation 完工
+
+v0.15.0 ship 時 *誠實* 列為缺項、本 release 補完：
+
+1. *Visual selection state per-window*（SPEC §12 v0.15 原文「視覺
+   選取狀態」一條）：sioyek 的 highlight / drag-select state 移進
+   =LimnWindow=、新 wire 命令 =view/selection-get= /
+   =view/selection-set= / =view/selection-clear=，focus swap 涵蓋
+2. *Engine-load on non-focused window 不擾動 live widget*：目前
+   =cmd_bridge_engine_load= 無條件叫 =main_widget->open_document=、
+   會搶 focused 視窗的顯示。改成只 register doc 進 registry、
+   只有當載入目標 == focused 視窗時才動 live DV
+3. *Rotation focus-swap 真實套用*：v0.15.0 在 focus swap code 裡
+   留 TODO、stored value 對但 live widget 沒實際 rotate。補上 diff-
+   based 套用
+4. *Scroll-then-focus-away-then-back 保留 scroll 位置*：v0.15.0 加
+   了 save-on-focus-out 邏輯、但沒寫對應 test
+5. *Pixel-level 驗證* dark-mode / rotation 在 focus 切換後真的反映
+   到 live raster（v0.15.0 只驗 state、沒驗 pixel）
+6. *邊角*：floating window focus swap 行為、深層 split 鏈、
+   buffer-close on non-focused window 後的 dangling buffer_id
+
+C++ 為主、少量 wire contract 新增（selection commands）。
 
 *** v0.16 CJK 三件套 ⏭ planned
 
@@ -1364,6 +1398,39 @@ C++ + container WM 設定為主。
 
 framework 提供 primitive、user 自己組生態系。對齊 vanilla Emacs C
 core + elisp 內建 keymap.el 的分工。
+
+*** v0.20 gap-buffer primitive ⏭ planned
+
+Text engine 的儲存從 =QHash<QString, QString>= 換成 gap buffer。純
+C++ refactor、wire contract（=buffer/insert= / =buffer/delete= /
+=buffer/cursor-set/get=）零變動。
+
+動機：v0.5–v0.7 那層 QString backing 對 chrome 短字串（minibuffer
+< 1KB、echo-area 單行、messages append-only log）完全堪用，但對
+「user 真的拿來編 prose 或 code 的 text-mode buffer」每 keystroke
+都 memcpy 整段 tail —— 10KB buffer 就明顯慢、100KB 不能用。
+Vanilla Emacs C core 用 gap buffer 不是巧合。
+
+C++ 端：
+- 新增 =GapBuffer= class（~200 行、單 header + cpp）。介面對齊
+  QString：=insert(offset, str)= / =remove(offset, len)= /
+  =to_qstring()= / =length()=、cursor 用 offset (codepoint or UTF-16
+  unit，跟 v0.16 結論一致)
+- =text_buffers= 從 =QHash<QString, QString>= 換成 =QHash<QString,
+  GapBuffer>=
+- chrome 三個保留 buffer（=*minibuffer*= / =*echo-area*= /
+  =*messages*=）也走 gap buffer —— 多一條 code path 不划算
+- Lisp 端、wire contract 完全不變
+
+測試：
+- ~20 unit tests for GapBuffer（移動 gap、insert/remove 邊界、UTF-8
+  multibyte boundary）
+- 既有的 buffer/insert / buffer/delete suite 全 green = 對外行為
+  一致
+
+排序考量：等 v0.16 codepoint cursor 統一定下來再做、不然 GapBuffer
+要為了 v0.7 QString-index 跟 v0.8 codepoint 兩套 API 寫兩遍。所以
+不能比 v0.16 早。也跟 v0.17/v0.18/v0.19 互不阻擋、排這裡剛好。
 
 *** 未來 milestone（待排序、未來再排）
 
