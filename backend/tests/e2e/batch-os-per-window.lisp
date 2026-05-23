@@ -75,6 +75,11 @@
   (limn/bridge:response-data
    (limn:call "test/region-hash" :|x0| x0 :|y0| y0 :|x1| x1 :|y1| y1)))
 
+(defun region-bbox (x0 y0 x1 y1 match-color)
+  (limn/bridge:response-data
+   (limn:call "test/region-bbox" :|x0| x0 :|y0| y0
+               :|x1| x1 :|y1| y1 :|match-color| match-color)))
+
 (defun page-pixel-rect (&key (win-id "w1") (page 0))
   (limn/bridge:response-data
    (limn:call "test/page-pixel-rect" :|win-id| win-id :|page| page)))
@@ -290,6 +295,141 @@
         (check (format nil "Ω8c — view/get w1 still responsive (page ~a)"
                        (getf d :|page|))
                (numberp (getf d :|page|)))))
+
+;;; ─────────────────────────────────────────────────────────────────
+;;; v0.15.1 follow-up — pixel-level checks (RED until impl lands)
+;;; ─────────────────────────────────────────────────────────────────
+
+      ;; Need w2 back for these — recreate.
+      (let* ((sr (limn:call "bridge/win-split" :|win-id| "w1" :|dir| "h"))
+             (w2 (getf (limn/bridge:response-data sr) :|win-b|)))
+        (limn:call "bridge/engine-load" :|engine| "mupdf"
+                   :|path| (b/ "tests/fixtures/test.pdf") :|win-id| w2)
+        (sleep 0.3)
+
+;;; ── Ω9: engine-load on non-focused — state isolation via overlay raster ─
+;;;
+;;; The OS-level visible side-effect of engine-load is via the overlay
+;;; raster: cmd_bridge_engine_load calls rebuild_overlay_raster() at
+;;; the end, which redraws from the FOCUSED window's overlays. If the
+;;; engine-load leaks into focused-window state (e.g., resets its
+;;; overlays), the raster would change. v0.15.1 must ensure engine-load
+;;; on a non-focused window touches ONLY that window's state.
+;;;
+;;; State-level checks live in Qt-tier per-window.lisp; this Ω is the
+;;; raster-level companion.
+
+        (format t "~%── Ω9: engine-load on non-focused leaves focused raster intact ──~%")
+        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
+        (set-overlay "w1" "#FF8000")
+        (sleep 0.3)
+        (let* ((pr (page-pixel-rect))
+               (x0 (getf pr :|x|)) (y0 (getf pr :|y|))
+               (x1 (+ x0 (getf pr :|w|))) (y1 (+ y0 (getf pr :|h|)))
+               (h-before (getf (region-hash x0 y0 x1 y1) :|sha256|)))
+          (limn:call "bridge/engine-load" :|engine| "mupdf"
+                     :|path| (b/ "tests/fixtures/test.pdf") :|win-id| w2)
+          (sleep 0.4)
+          (let ((h-after (getf (region-hash x0 y0 x1 y1) :|sha256|)))
+            (check (format nil "Ω9 — raster unchanged after w2 engine-load (~a == ~a)"
+                           (and h-before (subseq h-before 0 16))
+                           (and h-after  (subseq h-after  0 16)))
+                   (string= h-before h-after))))
+
+;;; ── Ω10: scroll-then-focus-away-then-back preserves position ───
+
+        (format t "~%── Ω10: w1 scroll → focus w2 → focus w1 → offset survives ──~%")
+        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
+        (limn:call "view/set" :|win-id| "w1" :|offset-y| 222.0)
+        (sleep 0.2)
+        (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.2)
+        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.3)
+        (let ((y (getf (view-get "w1") :|offset-y|)))
+          (check (format nil "Ω10 — w1 offset-y survived focus toggle (got ~a, want 222.0)" y)
+                 (and y (< (abs (- y 222.0)) 1.0))))
+
+;;; ── Ω11 SKIP: dark-mode pixel verification ──
+;;;
+;;; The overlay raster is "overlays on opaque white substrate" — it
+;;; deliberately does NOT include the PDF page render or any sioyek-
+;;; level chrome. So we cannot pixel-check dark-mode background changes
+;;; here. Dark-mode state-level coverage lives in Qt-tier per-window.lisp
+;;; (test-pw-isolation-dark-mode). A real pixel-level dark-mode check
+;;; would need GL framebuffer grab, which isn't reliable under Xvfb
+;;; without a GPU.
+
+;;; ── Ω12: rotation focus-swap actually rotates live widget ───────
+;;;
+;;; w1 rotation=0, w2 rotation=90. Put an overlay rect that's wider
+;;; than tall on each. After focus toggle, the rotated window's
+;;; bbox dimensions should be swapped (w<->h).
+
+        (format t "~%── Ω12: focus swap applies per-window rotation to live widget ──~%")
+        (clear-ov "w1") (clear-ov w2) (sleep 0.2)
+        (limn:call "view/set" :|win-id| "w1"
+                    :|engine-params| (list :|rotation| 0))
+        (limn:call "view/set" :|win-id| w2
+                    :|engine-params| (list :|rotation| 90))
+        ;; Same page-norm rect on both; if rotation applies, the visible
+        ;; bbox aspect ratio inverts between the two focused states.
+        (set-overlay "w1" "#FF00FF" :rect '(0.2 0.4 0.8 0.5))
+        (set-overlay w2   "#FF00FF" :rect '(0.2 0.4 0.8 0.5))
+        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.3)
+        (let* ((pr (page-pixel-rect))
+               (b1 (region-bbox (getf pr :|x|) (getf pr :|y|)
+                                 (+ (getf pr :|x|) (getf pr :|w|))
+                                 (+ (getf pr :|y|) (getf pr :|h|))
+                                 "#FF00FF")))
+          (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.3)
+          (let ((b2 (region-bbox (getf pr :|x|) (getf pr :|y|)
+                                  (+ (getf pr :|x|) (getf pr :|w|))
+                                  (+ (getf pr :|y|) (getf pr :|h|))
+                                  "#FF00FF")))
+            (check (format nil "Ω12 — rotated bbox aspect inverted (w1 w/h=~a vs w2 w/h=~a)"
+                           (and b1 (and (getf b1 :|h|) (not (zerop (getf b1 :|h|))))
+                                       (/ (float (getf b1 :|w|))
+                                          (float (getf b1 :|h|))))
+                           (and b2 (and (getf b2 :|h|) (not (zerop (getf b2 :|h|))))
+                                       (/ (float (getf b2 :|w|))
+                                          (float (getf b2 :|h|)))))
+                   (and b1 b2
+                        (not (zerop (getf b1 :|h|)))
+                        (not (zerop (getf b2 :|h|)))
+                        ;; w1: wide-and-short (w/h > 1). w2 rotated 90°:
+                        ;; should be tall-and-narrow (w/h < 1).
+                        (let ((r1 (/ (float (getf b1 :|w|)) (float (getf b1 :|h|))))
+                              (r2 (/ (float (getf b2 :|w|)) (float (getf b2 :|h|)))))
+                          (and (> r1 1.5) (< r2 0.7)))))))
+
+;;; ── Ω13: visual selection drawn into raster, per-window ─────────
+;;;
+;;; v0.15.1 wires view/selection-set. Selection visually paints over
+;;; the document. Test: set selection on w1 (focused), sample a pixel
+;;; in the selected region — should be a non-white color (selection
+;;; highlight). Then focus to w2 (no selection) — same coords should
+;;; be white again.
+
+        (format t "~%── Ω13: visual selection appears in raster on focused window only ──~%")
+        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
+        (clear-ov "w1") (clear-ov w2) (sleep 0.2)
+        (limn:call "view/selection-clear" :|win-id| "w1")
+        (limn:call "view/selection-clear" :|win-id| w2)
+        (limn:call "view/selection-set" :|win-id| "w1"
+                    :|begin| '(:|page| 0 :|x| 0.2 :|y| 0.2)
+                    :|end|   '(:|page| 0 :|x| 0.6 :|y| 0.22))
+        (sleep 0.3)
+        (let ((pr (page-pixel-rect)))
+          (when pr
+            (multiple-value-bind (cx cy) (norm-to-px-xy 0.4 0.21 pr)
+              (let ((p-w1-sel (sample-pixel cx cy)))
+                (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.3)
+                (let ((p-w2-nosel (sample-pixel cx cy)))
+                  (check "Ω13 — selection visible on w1 but absent on w2"
+                         (and p-w1-sel p-w2-nosel
+                              (not (pixels-near p-w1-sel p-w2-nosel 20)))))))))
+
+        ;; cleanup w2
+        (ignore-errors (limn:call "bridge/win-close" :|win-id| w2)))
 
     ;; ── summary ─────────────────────────────────────────────────
     (format t "~%~%── per-window e2e results ──~%")
