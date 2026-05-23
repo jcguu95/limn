@@ -1,4 +1,4 @@
-* Limn 規格書 v0.7
+* Limn 規格書 v0.8
 
 Limn 是一個由 Common Lisp（SBCL）控制的顯示框架。
 Backend（Lisp）透過 Bridge（Unix socket + JSON）驅動 Frontend（Qt）。
@@ -1190,32 +1190,154 @@ cumulative-state flake。
 
 到此 33 OS-level driver、~280 assertion 全綠且穩定。
 
-*** 未來 milestone（待排序、淨化版）
+*** v0.14 view/overlays paintGL ⏭ planned
 
-以下功能 SPEC 已釘住輪廓或哲學上預設、實作時機未定。v0.13.1 後重新
-排序：
+把 =view/overlays= wire command 從目前的 stub 升成真實渲染。C++ 接
+JSON 描述 → paintGL 翻譯成 GL 呼叫。
 
-協議擴充：
-- *Per-window independent =DocumentView=*（v0.8 split 後 panes 共享 DV、
-  滾一個另一個跟。需動 C++、中等成本）
-- *Frame 系統*（多 OS 視窗，§3.2 / §7.2 frame/、長期目標）
-- *Keymap UX 完工*（=limn:bind :mode=、=limn:define-key keymap=；§9.1
-  修訂、純 Lisp 改、小成本、user 寫 init.lisp 真正會用到）
-- *=view/overlays= 真接 paintGL*（annotation / search highlight / hint
-  都靠它；philosophy 核心；C++ paintGL、中等成本）
-- *Bookmark persistence + wire commands*（user-visible feature、對應
-  philosophy 「PDF state dump 成可讀資料流」目標、全棧、中等成本）
-- *SPEC §11.5 drift detector 落實*（spec 已寫只是沒做；dogfood、自己
-  抓自己漏的；純 Lisp + 一點 C++、小成本）
-- *真實 CJK IME 整合*（container 加 fcitx + Limn 接 Qt IME 事件；對
-  中文用戶必要；container infra 變動大）
-- *Surrogate-pair CJK 在 cursor 計數*（v0.7 :cursor 用 QString-index、
-  BMP 內 CJK 對得上、emoji 等 non-BMP 會差；小成本）
+- 接受項目類型：rect、line、text、image
+- 座標系：page-relative normalized（與 §6 mouse-click 的 =page-x= /
+  =page-y= 同 unit、跨 zoom 不變）
+- z-order 疊加、per-frame clear、blending 模式（at least normal 與
+  multiply、未來再擴）
+- 細節 contract（JSON shape / 各欄位語意）隨此 release 一起 ship、
+  §5.2 view/overlays 段落本次擴寫
+
+哲學動機：annotation marker、search highlight、reading progress、hint
+overlay、margin note、視覺 debugging 全部底下是這個 primitive。
+解鎖大片 user-land Lisp 玩法、是接下來幾個 release 視覺面的基礎。
+
+C++ 為主、Lisp 端薄薄一層 wrapper。
+
+*** v0.15 per-window independent DocumentView ⏭ planned
+
+v0.8 真實 Qt 視窗分割 ship 時、兩個 pane 仍共享同一個底層
+=DocumentView=、滾一個另一個跟。v0.15 改成每個 pane 自己的：
+
+- page / zoom / scroll
+- overlay 集合（v0.14 paintGL 之後）
+- 視覺選取狀態
+
+SPEC §5.2 =view/get= / =view/set= 早已寫成「per-window」語意（用
+=win-id= routing）、實作對齊即可、不算 contract 變動。
+
+前置：v0.14 paintGL 完、才有「per-window overlay 集合」這層要切。
+
+C++ 結構性 refactor 為主。
+
+*** v0.16 CJK 三件套 ⏭ planned
+
+三件相關但獨立的中文 / 多語支援補洞：
+
+1. *Surrogate-pair cursor 計數*：v0.7 =:cursor= 用 QString-index
+   （UTF-16 code units）。BMP 內 CJK 每字一個 unit 跟 codepoint 對得
+   上、但 emoji 等 non-BMP 字會差。改用 codepoint count。
+2. *Cursor 語意 consistency*：=minibuffer/get=、=buffer/cursor-get=
+   等所有回 =:cursor= 的回應統一用 codepoint 單位。
+3. *Qt =inputMethodEvent= 整合 + container 加 fcitx*：真實 IME
+   composition pipeline 通透（preedit string 顯示、commit 進 buffer）。
+   container 透過 nix 加 fcitx + 一個 input method（最少裝可注入中文
+   composition 的測試 IM）。新事件進 §6：=ime-preedit= /
+   =ime-commit=。
+
+v0.13 batch 23 已驗 xdotool type 直送 CJK 字元 path、本 release 補
+真實 IME composition path。
+
+C++ + container infra；Lisp 端只是新事件 dispatch。
+
+*** v0.17 bookmark wire primitive ⏭ planned
+
+只暴露 C++ 端「讀 / 寫 PDF native bookmark (mupdf outline)」的
+primitive、persistence (存哪、格式、UI) 全部留給 user Lisp。
+
+新 §5.x bookmark/ section：
+- =bookmark/list=：列 PDF 內建 outline tree
+- =bookmark/get= / =bookmark/set= / =bookmark/delete=（per buffer-id）
+
+設計原則：framework 不決定 user 怎麼存。user 可以選擇：
+- 完全用 PDF native outline（跟著 PDF 走、其它 reader 也讀得到）
+- 自己另存 sidecar file（=.limn-bookmarks= 之類、user Lisp 控制）
+- 或 hybrid
+
+C++ 為主（mupdf API wrapper）、Lisp 端薄。
+
+*** v0.18 frame system + VM workspace 測試 ⏭ planned
+
+§3.2 / §7.2 frame/ 落實。Frame = OS 視窗（vs window/pane = frame 內
+的分割單元）。
+
+C++ 端：
+- =frame/create= / =frame/close= / =frame/list= / =frame/focus= 等
+  wire command（細節 contract 本 release ship 時釘住）
+- 多 frame 同時運作、frame-id routing
+- 新事件：=frame-focus= / =frame-close= / =frame-workspace-change=
+
+VM workspace 測試（在 nix container 內、用 openbox X11 multi-desktop）：
+- 把 frame 切到 workspace 2、bridge call 仍通
+- xdotool 經 set_desktop_for_window 把 frame 拉回
+- 背景 workspace 的 frame 收到 key inject 路由正確
+- frame 跨 workspace 移動時、frame-workspace-change 事件 fire
+- 多 frame 同時存在不同 workspace、各自 modeline / minibuffer 隔離
+
+依賴 v0.15 per-window DV — frame 內若再有 pane、pane 不能共享 DV、
+不然 v0.8 那個遺憾會在 frame 維度重演。
+
+C++ + container WM 設定為主。
+
+*** v0.19 keymap α + β（純 Lisp）⏭ planned
+
+純 Lisp 改、C++ 一行不動。分兩階段：
+
+α — 半缺補完（既有 SPEC contract 補齊、無 contract 變動）：
+- =define-mode :parent= 真的 wire（目前 reserved、user 要手動 setf
+  keymap parent）
+- =describe-bindings= 遞迴 walk prefix sub-keymap（目前只回 top-level）
+- =lookup-key= 自動 fallback global keymap（目前 caller 自己處理）
+
+β — 新 primitive（§9.1 contract 擴張、v0.19 ship 完 bump v0.8 → v0.9）：
+- =*key-prefix*= 提升成 package var + =key-prefix-changed= hook
+  → 解鎖 user-land 寫 which-key
+- =set-transient-map= + =*transient-keymap*= lookup 最頂層
+  → 解鎖 user-land 寫 hydra / repeat-mode
+- mode-buffer 加 =local-keymap= slot + =lookup-key= 多一層
+  → 解鎖 user-land 寫 =local-set-key=
+
+刻意 *不做* 的（這些是 user-land ergonomic 該自己長的 macro）：
+- =limn:bind :mode= 之類的語法糖 wrapper
+- general.el-like 定義 DSL
+- evil-mode / hydra 套件本身
+
+framework 提供 primitive、user 自己組生態系。對齊 vanilla Emacs C
+core + elisp 內建 keymap.el 的分工。
+
+*** 未來 milestone（待排序、未來再排）
+
+以下功能 SPEC 已釘住輪廓或哲學上預設、v0.19 之後再排：
+
+- =*undo-tree*= 視覺化 (§10.6 limits 提及)：用 =view/overlays= 畫
+  undo tree、user-land 可組
+- Engine 第二個落地（=web= / =image= / =audio= 等）：long term
+- 更完整的 mode 系統 dogfood（=pdf-mode= 正式版、需 paintGL 接
+  highlight / annotation）
+- =gesture= 事件完整支援、=audio-input= pipeline
+- GTK / terminal（sixel）frontend
 
 已 shipped、從本 list 移除（歷史備忘）：
-- ~~Engine-specific default mode~~（v0.11 batch 11 修 emit_buffer_opened :engine 缺欄位時順手做、現在 mupdf engine 有 fundamental-mode placeholder、=pdf-mode= 正式版要實作待 paintGL）
-- ~~Undo 模型~~（SPEC §10 已立、實作 limn-undo.lisp 已 ship）
-- ~~Bridge primitive registry + introspection~~（SPEC §11 已立、實作已 ship、只剩 §11.5 drift detector 那一塊）
+- ~~Engine-specific default mode~~（v0.11 batch 11 修 emit_buffer_opened
+  =:engine= 缺欄位時順手做、現在 mupdf engine 有 fundamental-mode
+  placeholder、=pdf-mode= 正式版要實作待 paintGL）
+- ~~Undo 模型~~（SPEC §10 已立、實作 =limn-undo.lisp= 已 ship）
+- ~~Bridge primitive registry + introspection~~（SPEC §11 已立、實作已
+  ship；只剩 §11.5 drift detector 那一塊、列為 dogfood 後續再做）
+- ~~Keymap UX 完工 (=limn:bind :mode=...)~~（重新分類：純 ergonomic
+  wrapper、屬 user-land Lisp macro 範疇、framework 不替 user 寫；
+  framework 的 keymap 義務是 v0.19 那 6 條 primitive、不是 wrapper）
+- ~~真實 CJK IME 整合~~（升級為 v0.16）
+- ~~Surrogate-pair CJK 在 cursor 計數~~（升級為 v0.16）
+- ~~Per-window independent =DocumentView=~~（升級為 v0.15）
+- ~~Frame 系統~~（升級為 v0.18）
+- ~~=view/overlays= 真接 paintGL~~（升級為 v0.14）
+- ~~Bookmark wire commands~~（升級為 v0.17）
 
 開發過程 / 測試基礎建設不在 SPEC 範圍——見 =CONTRIBUTING.org=。
 
