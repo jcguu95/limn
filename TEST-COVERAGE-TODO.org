@@ -325,10 +325,27 @@ set-prompt 在關閉的 minibuffer 上呼叫也正確回 ok=false（§5.4 規定
 batch 1 系列（hook 抓 event）跟 batch 8 batch 10 (introspect) 設計
 時做對了、coverage backfill 釘住而已。
 
-*** Batch 6：Visual regression infra + 首批視覺測試   ~1 天
+*** Batch 6：Visual regression infra + 首批視覺測試   ~1 天 部分 DONE
 
-- [ ] F1   截圖比對 baseline 框架
-- [ ] F2   zoom visual change
+- [X] F1   截圖比對 baseline 框架               batch-os-visual.lisp
+- [△] F2   zoom visual change                   降級成 wire-level round-trip
+
+【F1】test/grab-window 工作得很好——回 PNG (8620 bytes base64) +
+aggregate stats (width/height/luminance/opaque-pixels)。視覺 baseline
+infra 就位、後續視覺 regression 可直接堆在這上。
+
+【F2】**真正視覺驗證 Xvfb 無法做**——PDF viewport 是 QOpenGLWidget、
+Xvfb 沒 OpenGL context（log 中 \"QOpenGLWidget: Failed to create
+context\"）、grab 拿到的 PDF 區域是空 placeholder、zoom 動了但 pixel
+完全不變。降級成「view/set zoom 回 ok + view/get 反映」純 wire-level
+驗證、視覺 contract 沒守住。
+
+未來想真做 visual regression、選項：
+- 在 sioyek 加 software-render fallback（不依賴 OpenGL）
+- 或用 macOS host 直跑、避開 Xvfb
+- 或 nixpkgs 用 mesa-software OpenGL
+
+歸類：infra gap、不是 Limn bug、不阻 v0.10。
 
 為什麼這時：前 5 batch 把所有非視覺 entry 都做完、剩下都依賴
 screenshot infra。infra 一次蓋完、F3/F4/F5（未來）都靠這套。
