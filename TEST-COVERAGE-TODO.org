@@ -36,7 +36,9 @@ v0.7 / v0.8 / v0.9 期間「先寫測試再寫 code」原則（=CONTRIBUTING.org
 為什麼第一個：SPC 那種「char mapping 漏」class bug 最容易在這出現、
 抓到一個算一個、心理上 momentum 起來。
 
-*** Batch 1.5：強化測試（基於 batch 1 抓到的 meta-pattern）  ~半天 ✓ DONE
+*** Batch 1.5：強化測試（基於 batch 1 抓到的 meta-pattern）  ~半天 部分 DONE
+
+7/8 sub-test 綠、γ3 mouse-drag honest red 待修（drag wire feature gap）。
 
 **為什麼有這個 batch**：
 
@@ -71,10 +73,18 @@ dimension 上加 assertion。
              斷言 case + mods 完全對齊 SPEC convention)
 - [X] δ1   modifier 提早 release 中斷 prefix                          ★★
             (keydown ctrl、key x、keyup ctrl、key f → 應該不觸發 C-x C-f)
-- [⊘] γ3   Ctrl+drag → mouse-drag event 帶 mods                       ★
-            EXPECTED-FAIL：drag wire 只接 test/inject-mouse-drag 模擬
-            路徑、實際 X11 MouseMove with button held → mouse-drag
-            event 那條沒做。推 v0.11+ 當新 feature 處理。
+- [✗] γ3   Ctrl+drag → mouse-drag event 帶 mods                       ★
+            **honest red、未修**。drag wire 只接 test/inject-mouse-drag
+            模擬路徑、實際 X11 MouseMove with button held → mouse-drag
+            event 那條沒做。在 batch-os-stronger driver 內 fail、計入
+            *failures*、driver exit 非零、run-all-tiers 顯示 os-e2e
+            8/9 fail。
+
+            修法兩條（待選）：
+            (i) batch 2 順手做（~30 行 C++、加 MouseMove 追蹤按鈕狀態
+                + emit mouse-drag wire event）
+            (ii) 推 v0.11+ 當 feature work、其間 batch-os-stronger 維持
+                 red（記得這層 red 是 known、不要把它「修」回去藏掉）
 - [X] γ4   Ctrl+scroll → scroll event 帶 mods                          ★
 - [X] ε1   bind + inject + where-is-command 全 sweep                  ★
 

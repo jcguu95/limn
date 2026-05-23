@@ -307,17 +307,19 @@
     (sleep 0.1)
     (xdotool "keyup" "ctrl")
     (sleep 0.3)
-    ;; EXPECTED-FAIL γ3: 真實 OS drag 沒接到 mouse-drag event wire——
-    ;; 目前 mouse-drag 只由 test/inject-mouse-drag 模擬發送、實際
-    ;; QEvent::MouseMove + 按鈕 held → wire event 那條路沒做。屬於
-    ;; feature gap、推 v0.11+。informational only, 不算進 *failures*。
+    ;; γ3: 真實 OS drag 應該 emit mouse-drag event 帶 mods=[ctrl]。
+    ;; 目前 mouse-drag 只由 test/inject-mouse-drag 模擬 path 發送、
+    ;; QEvent::MouseMove + 按鈕 held → wire event 那條沒做。
+    ;; **honest red**：直接走 check、計入 *failures*。修法見 TODO
+    ;; （feature work、batch 2 處理 B6 時順手做、或推 v0.11+）。
     (let ((ev (first *captured-drag-events*)))
-      (if (null ev)
-          (format t "  ⊘ γ3 (EXPECTED-FAIL) — no mouse-drag event; ~%    drag wire from OS path not implemented yet (v0.11+)~%")
-          (let ((mods (getf ev :|mods|)))
-            (check "γ3 — drag event has mods=[ctrl] (unexpected: drag wire IS working!)"
-                   (and (listp mods) (find "ctrl" mods :test #'string=))
-                   (format nil "got mods=~s" mods)))))
+      (check "γ3 — mouse-drag event arrived"
+             ev "drag wire from OS path not implemented yet")
+      (when ev
+        (let ((mods (getf ev :|mods|)))
+          (check "γ3 — drag event has mods=[ctrl]"
+                 (and (listp mods) (find "ctrl" mods :test #'string=))
+                 (format nil "got mods=~s" mods)))))
 
 ;;; ── γ4: Ctrl + scroll ───────────────────────────────────────────────
 
