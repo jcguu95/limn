@@ -88,17 +88,20 @@
 (defun stop-session (proc)
   (handler-case (limn:stop) (error () nil))
   (handler-case (sb-ext:process-kill proc 9) (error () nil))
-  ;; Wait for the window to actually disappear from X. Without this,
-  ;; consecutive start-session calls inside the same Xvfb pick up the
-  ;; stale window via xdotool search.
-  (loop repeat 20
+  ;; Wait for the kernel to actually reap the process (process-wait
+  ;; blocks until then). Without this, process-kill returns immediately
+  ;; and the next start-session can race with cleanup of /tmp socket
+  ;; files etc.
+  (handler-case (sb-ext:process-wait proc) (error () nil))
+  ;; Wait for the window to actually disappear from X.
+  (loop repeat 30
         while (zerop
                (sb-ext:process-exit-code
                 (sb-ext:run-program "xdotool"
                                      '("search" "--name" "Limn")
                                      :search t :wait t :output nil)))
         do (sleep 0.1))
-  (sleep 0.2))
+  (sleep 0.3))
 
 ;;; ═════════════════════════════════════════════════════════════════
 ;;; μ1 / μ2: hook 異常 robustness
