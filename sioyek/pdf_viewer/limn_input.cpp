@@ -52,6 +52,22 @@ QString key_to_string(QKeyEvent* ev) {
         case Qt::Key_End:       return "<end>";
         case Qt::Key_PageUp:    return "<pageup>";
         case Qt::Key_PageDown:  return "<pagedown>";
+        case Qt::Key_Insert:    return "<insert>";
+        // Function keys F1–F12 — v0.10 batch 3 H2/E2 caught they were
+        // falling through to the "<key-N>" default and thus could not
+        // be bound by name (limn:bind "F12" 'cmd). Now named.
+        case Qt::Key_F1:        return "<f1>";
+        case Qt::Key_F2:        return "<f2>";
+        case Qt::Key_F3:        return "<f3>";
+        case Qt::Key_F4:        return "<f4>";
+        case Qt::Key_F5:        return "<f5>";
+        case Qt::Key_F6:        return "<f6>";
+        case Qt::Key_F7:        return "<f7>";
+        case Qt::Key_F8:        return "<f8>";
+        case Qt::Key_F9:        return "<f9>";
+        case Qt::Key_F10:       return "<f10>";
+        case Qt::Key_F11:       return "<f11>";
+        case Qt::Key_F12:       return "<f12>";
         default:
             return QString("<key-%1>").arg(ev->key());
     }

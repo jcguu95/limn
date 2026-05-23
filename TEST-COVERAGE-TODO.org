@@ -276,15 +276,32 @@ scroll / resize）、其餘 ~11 個沒問。
 為什麼這時：mouse-click 只測過 left click on one position；B6 整條
 drag 鏈條從未走過 OS-level。
 
-*** Batch 3：window event + error path 安全網         ~半天
+*** Batch 3：window event + error path 安全網         ~半天 ✓ DONE
 
-- [ ] D1   resize event
-- [ ] H1   開不存在 PDF
-- [ ] H2   unbound key noop
-- [ ] H4   C-g 沒 minibuffer 時 noop
-- [ ] H6   unknown wire cmd error
-- [ ] H8   損壞 PDF
-- [ ] E2   minibuffer 空 submit
+- [X] D1   resize event                    （已被 batch 1.6 ζ1 蓋過）
+- [X] H1   開不存在 PDF                    batch-os-error-paths.lisp
+- [X] H2   unbound key noop                同上
+- [X] H4   C-g 沒 minibuffer 時 noop       同上
+- [X] H6   unknown wire cmd error          （已被 batch 1.7 ν2 蓋過）
+- [X] H8   損壞 PDF                        同 batch 3 driver
+- [X] E2   minibuffer 空 submit             同 batch 3 driver
+
+順手抓 + 修的 bug：
+
+- 【F-keys 沒名稱】key_to_string 對 F1–F12 走 default "<key-N>"
+  fallback、使用者無法 (limn:bind "<f12>" ...)。修：加 case
+  Qt::Key_F1..F12 → "<f1>".."<f12>"。對應 SPEC §6 key 名約定。
+
+已知 infra quirk（不是 Limn bug、文件化）：
+
+- Xvfb 下 F-keys 抵達時帶 phantom Alt modifier (mods=0x8000000)。
+  不知是 Xvfb keymap 還是 Qt xcb 解讀問題。在 E2 測試裡改用 z 觸發、
+  繞過。真機（macOS）行為待 v0.11+ 驗證確認是否同樣。
+
+未解 flake（待 follow-up）：
+
+- batch-os-stronger-3 偶發 fail in run-all-tiers 但直接跑 docker
+  run 過。可能 X server 跨 driver 累積狀態。重跑就綠。記下追蹤。
 
 為什麼這時：7 個 entry、各自獨立、低風險、跑完信心很高。
 
