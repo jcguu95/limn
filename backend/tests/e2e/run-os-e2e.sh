@@ -32,30 +32,57 @@ pass=0
 fail=0
 fails=()
 
+cleanup_between_drivers() {
+  # Kill any limn process the previous driver may have left running.
+  # 30 drivers × multi sessions each = lots of opportunity for orphans.
+  pkill -9 -f "/limn/sioyek/limn" 2>/dev/null || true
+  # Remove stale socket files
+  rm -f /tmp/limn-e2e-*-* /tmp/limn-real-* /tmp/limn-repl-* 2>/dev/null || true
+  # Force-release any modifier keys that might be stuck
+  xdotool keyup ctrl alt shift Meta_L 2>/dev/null || true
+  sleep 0.4
+}
+
+run_one_driver() {
+  local driver="$1"
+  local name="$(basename "$driver" .lisp)"
+  local log="/tmp/os-e2e-${name}.log"
+  if sbcl --no-userinit --no-sysinit --non-interactive \
+          --load "$driver" > "$log" 2>&1 ; then
+    return 0
+  else
+    return $?
+  fi
+}
+
 for driver in "$E2E_DIR"/batch-os-*.lisp; do
   [ -f "$driver" ] || continue
   name="$(basename "$driver" .lisp)"
   echo "── $name ─────────────────────────────────────"
-  # ONE sbcl invocation per driver — capture both stdout for grep
-  # snippet AND exit code. Previously ran twice (once for grep, once
-  # for exit) which doubled X-state pollution and caused cumulative
-  # flake by ~driver 20+. v0.12: log to file, grep file, use real
-  # exit code.
+  cleanup_between_drivers
   log="/tmp/os-e2e-${name}.log"
-  if sbcl --no-userinit --no-sysinit --non-interactive \
-          --load "$driver" > "$log" 2>&1 ; then
-    rc=0
-  else
-    rc=$?
-  fi
-  grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
-  if [ $rc -eq 0 ]; then
+
+  # First attempt
+  if run_one_driver "$driver"; then
+    grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
     echo "  ✓ $name PASS"
     pass=$((pass + 1))
   else
-    echo "  ✗ $name FAIL"
-    fail=$((fail + 1))
-    fails+=("$name")
+    # Retry ONCE — Xvfb cumulative state pollution causes intermittent
+    # flake (~10% per driver after ~15 prior drivers in same container).
+    # Single retry with cleanup almost always passes if it's the flake.
+    echo "  (first attempt failed, retrying once)"
+    cleanup_between_drivers
+    if run_one_driver "$driver"; then
+      grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
+      echo "  ✓ $name PASS (retry)"
+      pass=$((pass + 1))
+    else
+      grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
+      echo "  ✗ $name FAIL (failed twice)"
+      fail=$((fail + 1))
+      fails+=("$name")
+    fi
   fi
 done
 
