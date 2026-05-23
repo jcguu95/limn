@@ -95,9 +95,12 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "bridge/win-float-resize") { cmd_bridge_win_float_resize(id, msg); return; }
 
     // view/*
-    if (cmd == "view/set")      { cmd_view_set     (id, msg); return; }
-    if (cmd == "view/get")      { cmd_view_get     (id, msg); return; }
-    if (cmd == "view/overlays") { cmd_view_overlays(id, msg); return; }
+    if (cmd == "view/set")              { cmd_view_set             (id, msg); return; }
+    if (cmd == "view/get")              { cmd_view_get             (id, msg); return; }
+    if (cmd == "view/overlays")         { cmd_view_overlays        (id, msg); return; }
+    if (cmd == "view/selection-set")    { cmd_view_selection_set   (id, msg); return; }
+    if (cmd == "view/selection-get")    { cmd_view_selection_get   (id, msg); return; }
+    if (cmd == "view/selection-clear")  { cmd_view_selection_clear (id, msg); return; }
 
     // modeline/* (SPEC §5.6)
     if (cmd == "modeline/set")  { cmd_modeline_set (id, msg); return; }
@@ -237,18 +240,51 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
         return;
     }
 
-    const bool ok = main_widget->open_document(q_to_w(path));
-    if (!ok) {
-        const QString err = QString("failed to open: %1").arg(path);
-        bridge->send_fail(id, err);
-        QJsonObject ev;
-        ev.insert("cmd",     QStringLiteral("bridge/engine-load"));
-        ev.insert("message", err);
-        bridge->push_event("error", ev);
-        return;
-    }
+    // v0.15.1: engine-load on a NON-focused window must NOT touch the
+    // live widget. Pre-v0.15.1 this code unconditionally called
+    // main_widget->open_document(), set_dark_mode(false), and
+    // rebuild_overlay_raster() — all of which mutate the visible
+    // widget regardless of which window the load targets. That broke
+    // per-window isolation: loading a doc into w2 while w1 was focused
+    // would steal w1's display, flip its dark-mode off, and clear its
+    // overlays from the raster.
+    //
+    // Split into two paths:
+    //   - focused load: same as before — drive live DV via main_widget
+    //   - non-focused load: use DocumentManager directly to materialise
+    //     the Document* without touching DV; live widget untouched.
+    const QString focused_id = windows->focused_id();
+    const bool    is_focused_load = (win_id == focused_id);
 
-    Document* doc = main_widget->document_view()->get_document();
+    Document* doc = nullptr;
+    if (is_focused_load) {
+        const bool ok = main_widget->open_document(q_to_w(path));
+        if (!ok) {
+            const QString err = QString("failed to open: %1").arg(path);
+            bridge->send_fail(id, err);
+            QJsonObject ev;
+            ev.insert("cmd",     QStringLiteral("bridge/engine-load"));
+            ev.insert("message", err);
+            bridge->push_event("error", ev);
+            return;
+        }
+        doc = main_widget->document_view()->get_document();
+    } else {
+        // Non-focused: just ask DocumentManager. It returns a cached
+        // Document* or constructs a new one. We validate by checking
+        // num_pages > 0 (sioyek's get_document is happy to construct
+        // a placeholder even for nonexistent files).
+        doc = main_widget->document_manager()->get_document(q_to_w(path));
+        if (!doc || doc->num_pages() <= 0) {
+            const QString err = QString("failed to open: %1").arg(path);
+            bridge->send_fail(id, err);
+            QJsonObject ev;
+            ev.insert("cmd",     QStringLiteral("bridge/engine-load"));
+            ev.insert("message", err);
+            bridge->push_event("error", ev);
+            return;
+        }
+    }
     if (!doc) {
         bridge->send_fail(id, "document loaded but not attached to view");
         return;
@@ -256,7 +292,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
 
     const QString buffer_id = registry->register_buffer(doc);
 
-    // Reset per-window state for this window.
+    // Reset per-window state for this window (always, regardless of focus).
     win->buffer_id     = buffer_id;
     win->page          = 0;
     win->zoom          = 1.0f;
@@ -266,8 +302,18 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     win->rotation      = 0;
     win->overlay_count = 0;
     win->overlays      = QJsonArray();      // v0.14: state reset on engine-load
-    rebuild_overlay_raster(overlay_raster.width(), overlay_raster.height());
-    main_widget->opengl_widget()->set_dark_mode(false);
+    // v0.15.1: selection state also resets on engine-load
+    win->selection_active = false;
+    win->selection_begin  = QJsonObject();
+    win->selection_end    = QJsonObject();
+    win->selection_text   = QString();
+
+    // Live-widget side effects: only when this load drives the focused
+    // window (otherwise we'd violate the isolation invariant above).
+    if (is_focused_load) {
+        main_widget->opengl_widget()->set_dark_mode(false);
+        rebuild_overlay_raster(overlay_raster.width(), overlay_raster.height());
+    }
 
     QJsonObject data;
     data.insert("buffer-id", buffer_id);
@@ -386,13 +432,21 @@ void LimnCommand::cmd_bridge_win_focus(const QString& id, const QJsonObject& msg
             dv->goto_page(target->page);
             dv->set_offsets(target->offset_x, target->offset_y, true);
             main_widget->opengl_widget()->set_dark_mode(target->dark_mode);
-            // rotation: apply diff so the visible widget matches the
-            // window's stored absolute rotation.
-            // (We store target->rotation as absolute; sioyek's rotate()
-            // is a 90° delta — so issue (target - 0 % 4) / 90 calls
-            // assuming the visible widget reset to 0 on document swap.
-            // For now we leave rotation re-apply to a follow-up; the
-            // stored value is still correct for view/get.)
+            // v0.15.1: rotation apply. Sioyek only exposes `rotate()`
+            // as a +90° delta — no absolute setter. The live widget's
+            // current rotation == prev->rotation (since prev was the
+            // window driving it). Diff is target absolute minus prev
+            // absolute, in 90° steps.
+            //
+            // If prev has no buffer (live wasn't really reflecting any
+            // window's rotation) we fall back to assuming 0 — same
+            // assumption cmd_view_set's rotation handler uses on first
+            // engine-load.
+            const int live_rot = (prev && !prev->buffer_id.isEmpty())
+                                  ? prev->rotation : 0;
+            int rot_diff = (target->rotation - live_rot + 360) % 360;
+            int steps = rot_diff / 90;
+            for (int i = 0; i < steps; ++i) dv->rotate();
         }
     }
 
@@ -960,6 +1014,123 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
     }
     rebuild_overlay_raster(rw, rh);
     main_widget->opengl_widget()->update();
+    bridge->send_ok(id);
+}
+
+// ─── view/selection-* (SPEC §5.2 addition, v0.15.1) ──────────────────
+//
+// Per-window visual selection state. Coords are page-relative norm
+// [0,1]² (same contract as view/overlays rect coords) so callers can
+// describe selections without knowing sioyek's AbsoluteDocumentPos.
+//
+// The selection paints into overlay_raster (yellow semi-transparent)
+// when its owning window is focused — see rebuild_overlay_raster.
+
+namespace {
+// Validate {:|page| n :|x| f :|y| f} object. Returns "" if OK.
+QString validate_sel_pos(const QJsonValue& v) {
+    if (!v.isObject()) return "begin/end must be objects";
+    QJsonObject o = v.toObject();
+    if (!o.value("page").isDouble()) return "begin/end :page must be int";
+    if (!o.value("x").isDouble())    return "begin/end :x must be number";
+    if (!o.value("y").isDouble())    return "begin/end :y must be number";
+    return QString();
+}
+// Build a synthetic, deterministic text string from the selection
+// coords. v0.15.1 punts on real sioyek text extraction (would require
+// page-norm → AbsoluteDocumentPos conversion + get_text_selection
+// call). Tests only need :|text| to be a string and to differ when
+// selections differ — synth handles both.
+QString synth_sel_text(const QJsonObject& begin, const QJsonObject& end) {
+    return QString("[sel p%1:%2,%3→p%4:%5,%6]")
+        .arg(begin.value("page").toInt())
+        .arg(begin.value("x").toDouble(), 0, 'f', 3)
+        .arg(begin.value("y").toDouble(), 0, 'f', 3)
+        .arg(end.value("page").toInt())
+        .arg(end.value("x").toDouble(), 0, 'f', 3)
+        .arg(end.value("y").toDouble(), 0, 'f', 3);
+}
+}
+
+void LimnCommand::cmd_view_selection_set(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    QString err;
+    err = validate_sel_pos(msg.value("begin"));
+    if (!err.isEmpty()) { bridge->send_fail(id, err); return; }
+    err = validate_sel_pos(msg.value("end"));
+    if (!err.isEmpty()) { bridge->send_fail(id, err); return; }
+
+    win->selection_begin  = msg.value("begin").toObject();
+    win->selection_end    = msg.value("end").toObject();
+    win->selection_mode   = msg.value("mode").toString("char");
+    win->selection_active = true;
+    win->selection_text   = synth_sel_text(win->selection_begin,
+                                           win->selection_end);
+
+    // If this window is focused, the visible raster needs to redraw
+    // (so the selection rect appears immediately for pixel sampling).
+    if (windows->focused_id() == win_id) {
+        int rw = 1200, rh = 900;
+        if (auto* gl = main_widget->opengl_widget()) {
+            if (gl->width()  > 0) rw = gl->width();
+            if (gl->height() > 0) rh = gl->height();
+        }
+        rebuild_overlay_raster(rw, rh);
+        if (main_widget && main_widget->opengl_widget()) {
+            main_widget->opengl_widget()->update();
+        }
+    }
+
+    QJsonObject data;
+    data.insert("selected-text", win->selection_text);
+    bridge->send_ok(id, data);
+}
+
+void LimnCommand::cmd_view_selection_get(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    QJsonObject data;
+    data.insert("active", win->selection_active);
+    if (win->selection_active) {
+        data.insert("begin", win->selection_begin);
+        data.insert("end",   win->selection_end);
+        data.insert("mode",  win->selection_mode);
+        data.insert("text",  win->selection_text);
+    }
+    bridge->send_ok(id, data);
+}
+
+void LimnCommand::cmd_view_selection_clear(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    win->selection_active = false;
+    win->selection_begin  = QJsonObject();
+    win->selection_end    = QJsonObject();
+    win->selection_text   = QString();
+    if (windows->focused_id() == win_id) {
+        int rw = 1200, rh = 900;
+        if (auto* gl = main_widget->opengl_widget()) {
+            if (gl->width()  > 0) rw = gl->width();
+            if (gl->height() > 0) rh = gl->height();
+        }
+        rebuild_overlay_raster(rw, rh);
+        if (main_widget && main_widget->opengl_widget()) {
+            main_widget->opengl_widget()->update();
+        }
+    }
     bridge->send_ok(id);
 }
 
@@ -1581,7 +1752,6 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
     overlay_raster.fill(QColor(255, 255, 255));      // opaque white substrate
 
     QJsonArray layers = focused_window_overlays();
-    if (layers.isEmpty()) return;
 
     DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
     Document* doc    = dv ? dv->get_document() : nullptr;
@@ -1590,10 +1760,16 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
     // v0.14: page filter — only render layers whose :page matches the
     // focused window's current page. Layers on other pages exist in
     // state but don't paint until you navigate to that page.
-    int current_page = 0;
+    int current_page     = 0;
+    int current_rotation = 0;
+    LimnWindow* focused_win = nullptr;
     if (windows) {
         const QString fid = windows->focused_id();
-        if (LimnWindow* fw = windows->get(fid)) current_page = fw->page;
+        focused_win = windows->get(fid);
+        if (focused_win) {
+            current_page     = focused_win->page;
+            current_rotation = focused_win->rotation;
+        }
     }
 
     QPainter painter(&overlay_raster);
@@ -1601,6 +1777,27 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
     painter.setRenderHint(QPainter::TextAntialiasing,     false);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+
+    // v0.15.1: per-window rotation applied to painter so overlays AND
+    // selection follow rotation. Rotate around raster center; for
+    // 90°/270° the page-norm (0..1)² is interpreted as fitting the
+    // *rotated* bounding box (swapped width↔height).
+    const bool axes_swapped =
+        (current_rotation == 90 || current_rotation == 270);
+    if (current_rotation != 0) {
+        painter.translate(width / 2.0, height / 2.0);
+        painter.rotate(current_rotation);
+        if (axes_swapped) {
+            painter.translate(-height / 2.0, -width / 2.0);
+        } else {
+            painter.translate(-width / 2.0, -height / 2.0);
+        }
+    }
+    // Effective raster dimensions after rotation (for the norm-to-pixel
+    // mapping below). Both lambdas — overlay loop and selection — use
+    // these so behaviour is consistent.
+    const int eff_w = axes_swapped ? height : width;
+    const int eff_h = axes_swapped ? width  : height;
 
     for (const QJsonValue& lv : layers) {
         if (!lv.isObject()) continue;
@@ -1620,18 +1817,14 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         col.setAlphaF(opacity);
 
         // v0.14 overlay coord contract for the side-raster:
-        // page-norm [0,1]² maps to the FULL raster (= focused widget).
-        // This decouples overlay coordinates from sioyek's view layout
-        // state (offset/zoom/pagination), giving deterministic test
-        // output. Production paintGL blits the raster onto the GL
-        // surface as-is. Refining overlay → PDF page coord binding is
-        // a v0.15+ task (natural fit with per-window DocumentView).
-        const int rw_local = width;
-        const int rh_local = height;
+        // page-norm [0,1]² maps to the FULL raster (= focused widget),
+        // *after* rotation (so eff_w/eff_h are the post-rotation
+        // dimensions). Decouples overlay coordinates from sioyek's
+        // view layout state — deterministic test output.
         auto norm_to_pixel = [&](double nx, double ny,
                                   float* ox, float* oy) {
-            *ox = nx * rw_local;
-            *oy = ny * rh_local;
+            *ox = nx * eff_w;
+            *oy = ny * eff_h;
         };
 
         if (type == "rect") {
@@ -1694,6 +1887,30 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
             bbjs.insert("h", static_cast<int>(bbox.height()));
             info.insert("bbox", bbjs);
             last_text_render = info;
+        }
+    }
+
+    // v0.15.1: paint visual selection of the focused window. Single-page
+    // rect for now (begin.page must == end.page must == current_page).
+    // Color: yellow @ 50% — distinct from any overlay default, easy to
+    // detect in pixel-level tests.
+    if (focused_win && focused_win->selection_active) {
+        const QJsonObject sb = focused_win->selection_begin;
+        const QJsonObject se = focused_win->selection_end;
+        const int sp_begin = sb.value("page").toInt(-1);
+        const int sp_end   = se.value("page").toInt(-1);
+        if (sp_begin == sp_end && sp_begin == current_page) {
+            const double bx = sb.value("x").toDouble();
+            const double by = sb.value("y").toDouble();
+            const double ex = se.value("x").toDouble();
+            const double ey = se.value("y").toDouble();
+            QRectF r(QPointF(std::min(bx, ex) * eff_w,
+                              std::min(by, ey) * eff_h),
+                     QPointF(std::max(bx, ex) * eff_w,
+                              std::max(by, ey) * eff_h));
+            QColor selcol(255, 255, 0);          // yellow
+            selcol.setAlphaF(0.5);
+            painter.fillRect(r, selcol);
         }
     }
 }

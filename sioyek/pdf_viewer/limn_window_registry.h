@@ -54,6 +54,18 @@ struct LimnWindow {
     QString  modeline_middle;
     QString  modeline_right;
 
+    // v0.15.1 visual selection state. Per-window, page-relative norm
+    // coords (matches the view/overlays wire contract — easy to set
+    // from Lisp without knowing sioyek's AbsoluteDocumentPos space).
+    // selection_text caches what wire view/selection-get returns; we
+    // recompute it on every -set rather than chasing every doc-state
+    // change.
+    bool        selection_active = false;
+    QJsonObject selection_begin;   // {:|page| n :|x| f :|y| f}
+    QJsonObject selection_end;
+    QString     selection_mode = "char";
+    QString     selection_text;
+
     QJsonObject to_json() const;
 };
 

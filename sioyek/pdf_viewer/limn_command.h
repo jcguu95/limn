@@ -50,9 +50,13 @@ private:
     void cmd_bridge_win_float_resize(const QString& id, const QJsonObject& msg);
 
     // ─── view/* ───────────────────────────────────────────────────────
-    void cmd_view_set     (const QString& id, const QJsonObject& msg);
-    void cmd_view_get     (const QString& id, const QJsonObject& msg);
-    void cmd_view_overlays(const QString& id, const QJsonObject& msg);
+    void cmd_view_set             (const QString& id, const QJsonObject& msg);
+    void cmd_view_get             (const QString& id, const QJsonObject& msg);
+    void cmd_view_overlays        (const QString& id, const QJsonObject& msg);
+    // v0.15.1 visual selection (page-relative norm coords; per-window)
+    void cmd_view_selection_set   (const QString& id, const QJsonObject& msg);
+    void cmd_view_selection_get   (const QString& id, const QJsonObject& msg);
+    void cmd_view_selection_clear (const QString& id, const QJsonObject& msg);
 
     // ─── buffer/* ─────────────────────────────────────────────────────
     void cmd_buffer_open         (const QString& id, const QJsonObject& msg);
