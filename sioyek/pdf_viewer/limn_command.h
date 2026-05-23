@@ -124,7 +124,8 @@ private:
     // Helpers
     QJsonObject build_open_data(const QString& buffer_id, Document* doc);
     QJsonObject collect_view_state(const QString& win_id);
-    void        emit_buffer_opened(const QString& buffer_id, Document* doc);
+    void        emit_buffer_opened(const QString& buffer_id, Document* doc,
+                                    const QString& engine);
     void        emit_buffer_closed(const QString& buffer_id);
 
     LimnBridge*         bridge;
