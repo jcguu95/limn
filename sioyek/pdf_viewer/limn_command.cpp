@@ -209,7 +209,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
         win->dark_mode     = false;
         win->rotation      = 0;
         win->overlay_count = 0;
-        win->overlays      = QJsonArray();   // v0.14: state reset on engine-load
+        win->overlays      = QJsonArray();   /* v0.14 */ rebuild_overlay_raster(overlay_raster.width(), overlay_raster.height());
 
         QJsonObject data;
         data.insert("buffer-id", tid);
@@ -266,6 +266,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     win->rotation      = 0;
     win->overlay_count = 0;
     win->overlays      = QJsonArray();      // v0.14: state reset on engine-load
+    rebuild_overlay_raster(overlay_raster.width(), overlay_raster.height());
     main_widget->opengl_widget()->set_dark_mode(false);
 
     QJsonObject data;
@@ -955,7 +956,7 @@ void LimnCommand::cmd_buffer_open(const QString& id, const QJsonObject& msg) {
         fw->dark_mode     = false;
         fw->rotation      = 0;
         fw->overlay_count = 0;
-        fw->overlays      = QJsonArray();   // v0.14
+        fw->overlays      = QJsonArray();   /* v0.14 */ rebuild_overlay_raster(overlay_raster.width(), overlay_raster.height());
     }
     main_widget->opengl_widget()->set_dark_mode(false);
 
@@ -1522,6 +1523,15 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
     Document* doc    = dv ? dv->get_document() : nullptr;
     if (!dv || !doc) return;
 
+    // v0.14: page filter — only render layers whose :page matches the
+    // focused window's current page. Layers on other pages exist in
+    // state but don't paint until you navigate to that page.
+    int current_page = 0;
+    if (windows) {
+        const QString fid = windows->focused_id();
+        if (LimnWindow* fw = windows->get(fid)) current_page = fw->page;
+    }
+
     QPainter painter(&overlay_raster);
     painter.setRenderHint(QPainter::Antialiasing,         false);
     painter.setRenderHint(QPainter::TextAntialiasing,     false);
@@ -1534,6 +1544,7 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         const QString type  = l.value("type").toString();
         const int     page  = l.value("page").toInt(-1);
         if (page < 0 || page >= doc->num_pages()) continue;
+        if (page != current_page) continue;            // v0.14 page filter
 
         const QString colstr = l.value("color").toString();
         if (colstr.length() != 7 || !colstr.startsWith('#')) continue;
@@ -1544,18 +1555,19 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         if (opacity > 1.0) opacity = 1.0;
         col.setAlphaF(opacity);
 
-        const float pw = doc->get_page_width(page);
-        const float ph = doc->get_page_height(page);
-        if (pw <= 0 || ph <= 0) continue;
-
+        // v0.14 overlay coord contract for the side-raster:
+        // page-norm [0,1]² maps to the FULL raster (= focused widget).
+        // This decouples overlay coordinates from sioyek's view layout
+        // state (offset/zoom/pagination), giving deterministic test
+        // output. Production paintGL blits the raster onto the GL
+        // surface as-is. Refining overlay → PDF page coord binding is
+        // a v0.15+ task (natural fit with per-window DocumentView).
+        const int rw_local = width;
+        const int rh_local = height;
         auto norm_to_pixel = [&](double nx, double ny,
-                                  float* ox, float* oy) -> bool {
-            fz_rect fr; fr.x0=0; fr.y0=0; fr.x1=pw; fr.y1=ph;
-            DocumentRect dr(fr, page);
-            WindowRect wr = dv->document_to_window_irect(dr);
-            *ox = wr.x0 + nx * (wr.x1 - wr.x0);
-            *oy = wr.y0 + ny * (wr.y1 - wr.y0);
-            return true;
+                                  float* ox, float* oy) {
+            *ox = nx * rw_local;
+            *oy = ny * rh_local;
         };
 
         if (type == "rect") {
@@ -1826,18 +1838,14 @@ void LimnCommand::cmd_test_page_pixel_rect(const QString& id,
     // Build a DocumentRect covering the whole page, ask sioyek to
     // project it into widget pixels. Same conversion path as click
     // handling (so coords are consistent across overlay / click).
-    fz_rect fr;
-    fr.x0 = 0;
-    fr.y0 = 0;
-    fr.x1 = pw;
-    fr.y1 = ph;
-    DocumentRect dr(fr, page);
-    WindowRect wr = dv->document_to_window_irect(dr);
+    // v0.14: must match rebuild_overlay_raster's coord contract —
+    // page-norm fills the full raster (= widget). Return the raster
+    // dimensions directly (origin 0,0).
     QJsonObject data;
-    data.insert("x", wr.x0);
-    data.insert("y", wr.y0);
-    data.insert("w", wr.x1 - wr.x0);
-    data.insert("h", wr.y1 - wr.y0);
+    data.insert("x", 0);
+    data.insert("y", 0);
+    data.insert("w", overlay_raster.width());
+    data.insert("h", overlay_raster.height());
     bridge->send_ok(id, data);
 }
 

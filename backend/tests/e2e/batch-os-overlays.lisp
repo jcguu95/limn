@@ -147,7 +147,6 @@
     (let ((pr (page-pixel-rect)))
       (if (null pr)
           (check "Ω2 — page-pixel-rect returns data" nil)
-          ;; Sample 3 points inside the rect
           (dolist (nxy '((0.3 0.3) (0.5 0.5) (0.7 0.7)))
             (multiple-value-bind (px py)
                 (norm-to-px-xy (car nxy) (cadr nxy) pr)
