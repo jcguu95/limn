@@ -315,11 +315,15 @@ drag 鏈條從未走過 OS-level。
 意外綠：所有 SPEC §5.4 對 set-text / set-prompt 的契約都已 honour。
 set-prompt 在關閉的 minibuffer 上呼叫也正確回 ok=false（§5.4 規定）。
 
-*** Batch 5：Lisp runtime OS-level coverage          ~半天
+*** Batch 5：Lisp runtime OS-level coverage          ~半天 ✓ DONE
 
-- [ ] K2   hook on event/key 真的 fires
-- [ ] K3   describe-key 對 demo binding 回對
-- [ ] O1   bridge/capabilities returns expected
+- [X] K2   hook on event/key 真的 fires             batch-os-lisp-runtime.lisp
+- [X] K3   describe-key 對 demo binding 回對        同上
+- [X] O1   bridge/capabilities returns expected      同上
+
+0 bug——hook system、introspection、capabilities 都已 honour SPEC。
+batch 1 系列（hook 抓 event）跟 batch 8 batch 10 (introspect) 設計
+時做對了、coverage backfill 釘住而已。
 
 *** Batch 6：Visual regression infra + 首批視覺測試   ~1 天
 
