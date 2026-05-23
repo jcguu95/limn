@@ -401,3 +401,182 @@
                             :|pos| (10.0 10.0) :|text| ""
                             :|color| "#000000" :|size| 12.0 :|opacity| 1.0)))))
       (assert-true (member (getf r :|ok|) '(t :false)) "responded"))))
+
+;;; ════════════════════════════════════════════════════════════════════════
+;;; v0.14 — overlay state queryable via view/get
+;;;
+;;; Before v0.14, C++ only stored overlay_count and discarded the layers.
+;;; The v0.14 contract: view/get's response includes :overlays (the full
+;;; layer list as last set, in original order) and :overlay-count. This
+;;; round-trip ability is the foundation for user-land overlay-driven
+;;; features (search highlight, bookmark marker, annotation, etc.) — they
+;;; need to query "what's currently shown" without keeping a parallel
+;;; cache in Lisp.
+;;; ════════════════════════════════════════════════════════════════════════
+
+(deftest test-overlays-get-empty-fresh-window
+  "v0.14: fresh window's view/get returns empty :overlays."
+  (with-buffer (buf)
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (overlays (json-get* r :|data| :|overlays|))
+           (count    (json-get* r :|data| :|overlay-count|)))
+      (assert-ok r)
+      (assert-true (or (null overlays)
+                       (and (listp overlays) (zerop (length overlays))))
+                   "fresh window has no overlays")
+      (assert-equal 0 count "overlay-count is 0"))))
+
+(deftest test-overlays-get-after-single-rect
+  "v0.14: after setting one rect, view/get returns it in :overlays."
+  (with-buffer (buf)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "rect" :|page| 0
+                              :|rect| (0.1 0.1 0.3 0.3)
+                              :|color| "#FFD700" :|opacity| 0.5)))
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (overlays (json-get* r :|data| :|overlays|))
+           (count    (json-get* r :|data| :|overlay-count|)))
+      (assert-ok r)
+      (assert-equal 1 count "overlay-count is 1")
+      (assert-true (and (listp overlays) (= 1 (length overlays)))
+                   "overlays list has one item")
+      ;; The item itself should preserve its fields
+      (let ((layer (first overlays)))
+        (assert-equal "rect" (getf layer :|type|))
+        (assert-equal 0 (getf layer :|page|))
+        (assert-equal "#FFD700" (getf layer :|color|))))))
+
+(deftest test-overlays-get-after-multiple-mixed
+  "v0.14: rect + line + text round-trip with order preserved."
+  (with-buffer (buf)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers|
+           (list '(:|type| "rect" :|page| 0
+                    :|rect| (0.0 0.0 0.5 0.5)
+                    :|color| "#FF0000" :|opacity| 0.4)
+                 '(:|type| "line" :|page| 0
+                    :|from| (0.0 0.0) :|to| (1.0 1.0)
+                    :|color| "#00FF00" :|width| 2 :|opacity| 1.0)
+                 '(:|type| "text" :|page| 0
+                    :|pos| (0.5 0.5) :|text| "Note"
+                    :|color| "#0000FF" :|size| 12.0 :|opacity| 1.0)))
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (overlays (json-get* r :|data| :|overlays|))
+           (count    (json-get* r :|data| :|overlay-count|)))
+      (assert-ok r)
+      (assert-equal 3 count "overlay-count is 3")
+      (assert-equal 3 (length overlays) "overlays list has 3 items")
+      (assert-equal "rect" (getf (nth 0 overlays) :|type|) "0th is rect")
+      (assert-equal "line" (getf (nth 1 overlays) :|type|) "1st is line")
+      (assert-equal "text" (getf (nth 2 overlays) :|type|) "2nd is text"))))
+
+(deftest test-overlays-get-empty-clears
+  "v0.14: sending empty layers array clears state — view/get reflects it."
+  (with-buffer (buf)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "rect" :|page| 0
+                              :|rect| (0.0 0.0 0.5 0.5)
+                              :|color| "#FF0000" :|opacity| 0.5)))
+    (send! "view/overlays" :|win-id| "w1" :|layers| nil)
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (count (json-get* r :|data| :|overlay-count|))
+           (overlays (json-get* r :|data| :|overlays|)))
+      (assert-equal 0 count "overlay-count back to 0 after clear")
+      (assert-true (or (null overlays) (zerop (length overlays)))
+                   "overlays list empty after clear"))))
+
+(deftest test-overlays-get-set-replaces-not-appends
+  "v0.14: a second view/overlays REPLACES, doesn't append (set semantics)."
+  (with-buffer (buf)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "rect" :|page| 0
+                              :|rect| (0.0 0.0 0.5 0.5)
+                              :|color| "#FF0000" :|opacity| 0.5)
+                           '(:|type| "rect" :|page| 0
+                              :|rect| (0.5 0.5 1.0 1.0)
+                              :|color| "#00FF00" :|opacity| 0.5)))
+    ;; Now set only one (replaces both)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "rect" :|page| 0
+                              :|rect| (0.2 0.2 0.4 0.4)
+                              :|color| "#0000FF" :|opacity| 0.5)))
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (count (json-get* r :|data| :|overlay-count|))
+           (overlays (json-get* r :|data| :|overlays|)))
+      (assert-equal 1 count "count after replace is 1 not 3")
+      (assert-equal 1 (length overlays))
+      (assert-equal "#0000FF" (getf (first overlays) :|color|)
+                    "the single remaining layer is the new blue one"))))
+
+(deftest test-overlays-get-per-window-isolation
+  "v0.14: overlays set on w1 don't appear in w2's view/get."
+  (with-buffer (buf)
+    (send! "bridge/win-split" :|orient| "horizontal")
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "rect" :|page| 0
+                              :|rect| (0.0 0.0 0.5 0.5)
+                              :|color| "#FF0000" :|opacity| 0.5)))
+    (let* ((r2 (send! "view/get" :|win-id| "w2"))
+           (count2    (json-get* r2 :|data| :|overlay-count|))
+           (overlays2 (json-get* r2 :|data| :|overlays|)))
+      (assert-equal 0 count2 "w2's overlay-count is 0")
+      (assert-true (or (null overlays2) (zerop (length overlays2)))
+                   "w2's overlays list empty"))))
+
+(deftest test-overlays-get-roundtrip-rect-fields
+  "v0.14: rect overlay fully round-trips (type/page/rect/color/opacity)."
+  (with-buffer (buf)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "rect" :|page| 3
+                              :|rect| (0.111 0.222 0.333 0.444)
+                              :|color| "#ABCDEF" :|opacity| 0.75)))
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (l (first (json-get* r :|data| :|overlays|))))
+      (assert-equal "rect" (getf l :|type|))
+      (assert-equal 3      (getf l :|page|))
+      (assert-equal "#ABCDEF" (getf l :|color|))
+      (let ((rect (getf l :|rect|)))
+        (assert-true (= 4 (length rect)) "rect has 4 numbers")))))
+
+(deftest test-overlays-get-roundtrip-line-fields
+  "v0.14: line overlay round-trips (type/page/from/to/color/width/opacity)."
+  (with-buffer (buf)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "line" :|page| 2
+                              :|from| (0.1 0.2) :|to| (0.8 0.9)
+                              :|color| "#123456" :|width| 3 :|opacity| 1.0)))
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (l (first (json-get* r :|data| :|overlays|))))
+      (assert-equal "line" (getf l :|type|))
+      (assert-equal 2 (getf l :|page|))
+      (assert-equal "#123456" (getf l :|color|))
+      (assert-true (= 2 (length (getf l :|from|))))
+      (assert-true (= 2 (length (getf l :|to|)))))))
+
+(deftest test-overlays-get-roundtrip-text-fields
+  "v0.14: text overlay round-trips (type/page/pos/text/color/size/opacity)."
+  (with-buffer (buf)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "text" :|page| 7
+                              :|pos| (0.4 0.6) :|text| "你好"
+                              :|color| "#FEDCBA" :|size| 18.0 :|opacity| 0.9)))
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (l (first (json-get* r :|data| :|overlays|))))
+      (assert-equal "text" (getf l :|type|))
+      (assert-equal 7 (getf l :|page|))
+      (assert-equal "你好" (getf l :|text|))
+      (assert-equal "#FEDCBA" (getf l :|color|)))))
+
+(deftest test-overlays-get-reset-on-engine-load
+  "v0.14: loading a new PDF resets overlays (auto-cleanup contract)."
+  (with-buffer (buf)
+    (send! "view/overlays" :|win-id| "w1"
+           :|layers| (list '(:|type| "rect" :|page| 0
+                              :|rect| (0.0 0.0 0.5 0.5)
+                              :|color| "#FF0000" :|opacity| 0.5)))
+    ;; Re-load the same fixture as a new engine-load — should reset state
+    (send! "bridge/engine-load"
+           :|engine| "mupdf" :|path| *fixture-pdf* :|win-id| "w1")
+    (let* ((r (send! "view/get" :|win-id| "w1"))
+           (count (json-get* r :|data| :|overlay-count|)))
+      (assert-equal 0 count "engine-load resets overlays"))))

@@ -43,6 +43,7 @@
                  "suites/bridge.lisp"
                  "suites/view.lisp"
                  "suites/overlays.lisp"
+                 "suites/overlays-paint.lisp"
                  "suites/buffer.lisp"
                  "suites/events.lisp"
                  "suites/test-mode.lisp"
