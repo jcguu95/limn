@@ -305,12 +305,15 @@ drag 鏈條從未走過 OS-level。
 
 為什麼這時：7 個 entry、各自獨立、低風險、跑完信心很高。
 
-*** Batch 4：Minibuffer state primitives             ~半天
+*** Batch 4：Minibuffer state primitives             ~半天 ✓ DONE
 
-- [ ] E3   minibuffer/set-text
-- [ ] E4   minibuffer/set-prompt
-- [ ] E6   type 1000 chars
-- [ ] E7   C-g vs printable g during minibuffer open
+- [X] E3   minibuffer/set-text                  batch-os-minibuffer-state.lisp
+- [X] E4   minibuffer/set-prompt                同上
+- [X] E6   type 1000 chars                      （已被 1.7 ξ2 蓋過）
+- [X] E7   C-g vs printable g during open       （batch-os-cg + -keys 組合）
+
+意外綠：所有 SPEC §5.4 對 set-text / set-prompt 的契約都已 honour。
+set-prompt 在關閉的 minibuffer 上呼叫也正確回 ok=false（§5.4 規定）。
 
 *** Batch 5：Lisp runtime OS-level coverage          ~半天
 
