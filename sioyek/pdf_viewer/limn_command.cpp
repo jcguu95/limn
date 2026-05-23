@@ -196,6 +196,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
         win->dark_mode     = false;
         win->rotation      = 0;
         win->overlay_count = 0;
+        win->overlays      = QJsonArray();   // v0.14: state reset on engine-load
 
         QJsonObject data;
         data.insert("buffer-id", tid);
@@ -251,6 +252,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     win->dark_mode     = false;
     win->rotation      = 0;
     win->overlay_count = 0;
+    win->overlays      = QJsonArray();      // v0.14: state reset on engine-load
     main_widget->opengl_widget()->set_dark_mode(false);
 
     QJsonObject data;
@@ -865,6 +867,9 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
         if (!err.isEmpty()) { bridge->send_fail(id, err); return; }
     }
 
+    // v0.14: persist the full layers array (not just the count). paintGL
+    // reads from win->overlays; view/get returns it for Lisp introspect.
+    win->overlays      = layers;
     win->overlay_count = layers.size();
     main_widget->opengl_widget()->update();
     bridge->send_ok(id);
@@ -927,6 +932,7 @@ void LimnCommand::cmd_buffer_open(const QString& id, const QJsonObject& msg) {
         fw->dark_mode     = false;
         fw->rotation      = 0;
         fw->overlay_count = 0;
+        fw->overlays      = QJsonArray();   // v0.14
     }
     main_widget->opengl_widget()->set_dark_mode(false);
 
@@ -1141,6 +1147,14 @@ QJsonObject LimnCommand::collect_view_state(const QString& win_id) {
     ep.insert("dark-mode", win->dark_mode);
     ep.insert("rotation",  win->rotation);
     data.insert("engine-params", ep);
+
+    // v0.14: expose overlay state so Lisp can introspect what's currently
+    // displayed without keeping a parallel cache. :overlays is the full
+    // layers array as last set via view/overlays (or empty after clear /
+    // fresh window / engine-load). :overlay-count == overlays.size()
+    // is kept as a fast scalar for callers that only care about presence.
+    data.insert("overlays",      win->overlays);
+    data.insert("overlay-count", win->overlays.size());
     return data;
 }
 

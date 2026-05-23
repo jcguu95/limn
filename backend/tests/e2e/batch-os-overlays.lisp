@@ -385,7 +385,7 @@
 
     (format t "~%── Ω13: bridge/win-split — w2 doesn't see w1's overlays ──~%")
     (clear-ov) (sleep 0.2)
-    (limn:call "bridge/win-split" :|orient| "horizontal")
+    (limn:call "bridge/win-split" :|win-id| "w1" :|dir| "h")
     (sleep 0.3)
     (limn:call "view/overlays" :|win-id| "w1"
                 :|layers| (list '(:|type| "rect" :|page| 0

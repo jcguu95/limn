@@ -511,7 +511,7 @@
 (deftest test-overlays-get-per-window-isolation
   "v0.14: overlays set on w1 don't appear in w2's view/get."
   (with-buffer (buf)
-    (send! "bridge/win-split" :|orient| "horizontal")
+    (send! "bridge/win-split" :|win-id| "w1" :|dir| "h")
     (send! "view/overlays" :|win-id| "w1"
            :|layers| (list '(:|type| "rect" :|page| 0
                               :|rect| (0.0 0.0 0.5 0.5)

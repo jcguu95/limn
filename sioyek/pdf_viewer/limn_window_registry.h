@@ -40,6 +40,14 @@ struct LimnWindow {
     int      rotation      = 0;          // 0/90/180/270
     int      overlay_count = 0;
 
+    // v0.14: full overlay layer specs (the JSON `layers` array as sent
+    // by view/overlays). Persisted here so paintGL can read them, so
+    // view/get can round-trip them back to Lisp, and so test harness
+    // can introspect overlay state. overlay_count must remain in sync
+    // (it's just overlays.size(), but we keep both for back-compat
+    // with v0.7 test/snapshot which still reports the scalar).
+    QJsonArray overlays;
+
     // Modeline content (SPEC §5.6). Three text segments displayed at the
     // window's bottom status line. v0.7 stores only — no widget yet.
     QString  modeline_left;
