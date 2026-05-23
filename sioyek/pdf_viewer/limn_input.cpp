@@ -19,8 +19,17 @@ QString key_to_string(QKeyEvent* ev) {
     // Ctrl-d gives ASCII 0x04, not "d". Without this fallback the bridge
     // would report key="<key-68>" mods=["ctrl"] and the user's "C-d"
     // binding could never match.
+    //
+    // For letters: if Shift is held, return uppercase so it round-trips
+    // through case_encodes_shift logic in modifiers_to_array. Without
+    // this, C-M-S-x would silently drop the shift (key="x" + mods strips
+    // shift via case_encodes_shift → S- disappears). v0.10 A12 caught it.
     if (ev->key() >= Qt::Key_A && ev->key() <= Qt::Key_Z) {
-        return QString(QChar(ev->key())).toLower();
+        QChar c(ev->key());     // Qt::Key_A..Z is 0x41..0x5A = 'A'..'Z'
+        if (ev->modifiers() & Qt::ShiftModifier) {
+            return QString(c);                  // already uppercase
+        }
+        return QString(c).toLower();
     }
     if (ev->key() >= Qt::Key_0 && ev->key() <= Qt::Key_9) {
         return QString(QChar(ev->key()));
@@ -99,6 +108,25 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
     switch (ev->type()) {
         case QEvent::KeyPress: {
             auto* kev = static_cast<QKeyEvent*>(ev);
+
+            // Skip bare modifier presses. When the user types C-x C-f,
+            // X11 / Qt deliver THREE KeyPress events: bare Ctrl, then
+            // Ctrl+x, then bare Ctrl (release-press cycle?), then
+            // Ctrl+f. The bare Ctrl events have no character payload —
+            // they're just modifier-being-held notifications. If we
+            // forward them as 'key' events, the backend's prefix-key
+            // accumulator (limn::*key-prefix*) sees an unbound spec
+            // like "C-<key-16777249>" and resets, killing any in-flight
+            // multi-key sequence. OS-level e2e test batch-os-prefix
+            // (v0.10 A6) caught this.
+            int qk = kev->key();
+            if (qk == Qt::Key_Control || qk == Qt::Key_Alt    ||
+                qk == Qt::Key_Shift   || qk == Qt::Key_Meta   ||
+                qk == Qt::Key_AltGr   || qk == Qt::Key_Super_L ||
+                qk == Qt::Key_Super_R) {
+                break;
+            }
+
             QString k = key_to_string(kev);
             QJsonArray mods = modifiers_to_array(kev->modifiers(), k);
             // Diagnostic: stderr-log every captured key. Lets us tell, from

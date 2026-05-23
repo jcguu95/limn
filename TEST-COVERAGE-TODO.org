@@ -17,12 +17,21 @@ v0.7 / v0.8 / v0.9 期間「先寫測試再寫 code」原則（=CONTRIBUTING.org
 每 batch ≈ 一個 commit、commit message 帶 entry 編號。
 完成的 entry 在下方 detailed sections 內標 =DONE= + commit hash。
 
-*** Batch 1：鍵盤完整 sweep                          ~半天
+*** Batch 1：鍵盤完整 sweep                          ~半天 ✓ DONE
 
-- [ ] A1   全鍵盤打字（字母 / 數字 / 符號）
-- [ ] A12  C-M-S-x 三 modifier 組合
-- [ ] A6   C-x C-f 真實 Emacs prefix
-- [ ] C5   PDF 檔名含中文字
+- [X] A1   全鍵盤打字（字母 / 數字 / 符號）        =batch-os-keys.lisp=
+- [X] A12  C-M-S-x 三 modifier 組合                =batch-os-mods.lisp=
+- [X] A6   C-x C-f 真實 Emacs prefix                =batch-os-prefix.lisp=
+- [X] C5   PDF 檔名含中文字                        =batch-os-cjk-path.lisp=
+
+順手抓到 2 個 C++ bug、一起修進這個 batch：
+- 裸 modifier 鍵當 key event 推到 backend、打斷 multi-key prefix
+  accumulation。修在 =limn_input.cpp= 的 KeyPress 分支：filter
+  Qt::Key_Control / Alt / Shift / Meta / Super / AltGr。
+- Shift + letter 非 printable 路徑（C-M-S-x）一律 lowercase 但
+  modifiers_to_array 仍 case-encodes-shift、剝掉 shift。結果 S- 被
+  silently dropped。修在 =key_to_string=：letter fallback 在 Shift
+  held 時回 uppercase。
 
 為什麼第一個：SPC 那種「char mapping 漏」class bug 最容易在這出現、
 抓到一個算一個、心理上 momentum 起來。
