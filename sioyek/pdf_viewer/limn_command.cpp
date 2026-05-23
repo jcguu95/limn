@@ -207,6 +207,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
         QJsonObject ev;
         ev.insert("frame-id",   "f1");
         ev.insert("buffer-id",  tid);
+        ev.insert("engine",     "text");
         ev.insert("page-count", 0);
         bridge->push_event("buffer-opened", ev);
         return;
@@ -264,7 +265,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     data.insert("supports", supports);
     bridge->send_ok(id, data);
 
-    emit_buffer_opened(buffer_id, doc);
+    emit_buffer_opened(buffer_id, doc, "mupdf");
 }
 
 // ─── bridge/win-list ──────────────────────────────────────────────────
@@ -593,6 +594,9 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     }
     if (!to_append.isEmpty()) {
         text_buffers["*minibuffer*"].append(to_append);
+        // SPEC §5.3: cursor advances with the inserted text. v0.10 batch
+        // 19 caught that OS-level typing append didn't update cursor.
+        text_cursors["*minibuffer*"] = text_buffers["*minibuffer*"].length();
         if (auto* c = chrome_of(main_widget))
             c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
         ev.insert("text", text_buffers["*minibuffer*"]);
@@ -874,7 +878,7 @@ void LimnCommand::cmd_buffer_open(const QString& id, const QJsonObject& msg) {
     main_widget->opengl_widget()->set_dark_mode(false);
 
     bridge->send_ok(id, build_open_data(buffer_id, doc));
-    emit_buffer_opened(buffer_id, doc);
+    emit_buffer_opened(buffer_id, doc, engine);
 }
 
 // ─── buffer/close ─────────────────────────────────────────────────────
@@ -1087,10 +1091,12 @@ QJsonObject LimnCommand::collect_view_state(const QString& win_id) {
     return data;
 }
 
-void LimnCommand::emit_buffer_opened(const QString& buffer_id, Document* doc) {
+void LimnCommand::emit_buffer_opened(const QString& buffer_id, Document* doc,
+                                      const QString& engine) {
     QJsonObject ev;
     ev.insert("frame-id",   "f1");
     ev.insert("buffer-id",  buffer_id);
+    ev.insert("engine",     engine);
     ev.insert("page-count", doc ? doc->num_pages() : 0);
     bridge->push_event("buffer-opened", ev);
 }
