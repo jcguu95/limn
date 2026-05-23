@@ -1209,6 +1209,61 @@ overlay、margin note、視覺 debugging 全部底下是這個 primitive。
 
 C++ 為主、Lisp 端薄薄一層 wrapper。
 
+**這個 release 動哪一層**（架構日後會變、本說明僅對 v0.14 有效）：
+
+Limn 整體分 Lisp backend / Bridge / Qt frontend 三層（見 §2）。
+Qt frontend 內部 v0.14 時刻可拆成五個子模組：
+
+#+begin_src
+  Bridge socket I/O ─┐
+                     ▼
+       ┌─────────────────────────────┐
+       │  LimnCommand                 │  wire cmd dispatcher
+       │  (limn_command.cpp)         │  view/* buffer/* test/* ...
+       └────┬────────────────────────┘
+            │ 讀寫
+            ▼
+       ┌─────────────────────────────┐
+       │  LimnWindow / WindowRegistry │  per-window state
+       │  (limn_window_registry.h)   │  page / zoom / overlay_count
+       └────┬────────────────────────┘
+            │ 被讀
+            ▼
+       ┌─────────────────────────────┐
+       │  PdfViewOpenGLWidget         │  真實渲染 widget
+       │  paintGL() (pdf_view_…)     │  QOpenGLWidget
+       └────┬────────────────────────┘
+            │ 用
+            ▼
+       ┌─────────────────────────────┐
+       │  MuPDF Engine                │  PDF 解析 + glyph 點陣化
+       │  (limn_engine_mupdf.cpp +   │  sioyek 帶來原本就會的
+       │   mupdf/*)                  │
+       └─────────────────────────────┘
+
+  LimnInputFilter (limn_input.cpp) — 攔 Qt KeyEvent / MouseEvent
+                                       推 wire event 回 Lisp
+#+end_src
+
+v0.14 各層動什麼：
+
+| 層 | v0.14 動嗎 | 為什麼 |
+|------------------+-----------+----------------------------------|
+| Lisp backend     | 零        | overlays 純 frontend 的事         |
+| Bridge transport | 零        | bridge 不管 cmd 內容、只搬 JSON   |
+| LimnCommand      | 改        | =cmd_view_overlays= 改成存 state、=collect_view_state= 加 =:overlays= / =:overlay-count=、加 5 個 =test/*= primitive |
+| LimnWindow       | 改        | 加 =QJsonArray overlays_state= slot |
+| paintGL          | 大改      | 核心：讀 overlays_state、用 QPainter 真實畫 rect / line / text |
+| LimnInputFilter  | 零        | overlays 跟輸入無關 |
+| MuPDF Engine     | 零        | overlays 在 PDF 之上、不經 MuPDF  |
+| Container infra  | 改        | 加 dejavu_fonts + fc-cache（font 渲染 deterministic 需要） |
+
+為什麼 overlays 不放進 MuPDF：對齊 philosophy.org「保留 sioyek
+做對的渲染引擎、砍掉 C++ hack 上層」原則。MuPDF = 引擎、不動；
+overlays = 引擎之上的 Lisp 控制視覺、放在 paintGL「pages 畫完後、
+widget 上」的夾層。將來換 engine（epub / web / image）overlays
+機制能直接沿用、不會跟著 engine 死綁。
+
 *** v0.15 per-window independent DocumentView ⏭ planned
 
 v0.8 真實 Qt 視窗分割 ship 時、兩個 pane 仍共享同一個底層
