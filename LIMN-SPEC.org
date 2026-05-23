@@ -1369,23 +1369,48 @@ batch-os-bookmark.lisp 6 Ω blocks；37/37 OS regression green。
 *** v0.18 frame system + VM workspace 測試 ⏭ planned
 
 §3.2 / §7.2 frame/ 落實。Frame = OS 視窗（vs window/pane = frame 內
-的分割單元）。
+的分割單元）。工作量大、拆兩波。
 
-C++ 端：
-- =frame/create= / =frame/close= / =frame/list= / =frame/focus= 等
-  wire command（細節 contract 本 release ship 時釘住）
-- 多 frame 同時運作、frame-id routing
-- 新事件：=frame-focus= / =frame-close= / =frame-workspace-change=
+**** v0.18.0 ✅ shipped — frame registry + wire commands + events
+
+涵蓋（abstract registry、no second Qt MainWindow 還沒；下一波加）：
+
+- =LimnFrame=  / =LimnFrameRegistry=（main.cpp 啟動時自動建 f1）
+- =LimnWindow.frame_id= 欄位（預設 "f1"）；bridge/win-list 每個 entry
+  都帶 :frame-id
+- Wire commands:
+  + =frame/list=    → {items: [{frame-id, focused, win-ids}, ...]}
+  + =frame/create=  → 配 fX、不建新 Qt window
+  + =frame/close=   → cascade 砍掉該 frame 的所有 LimnWindows；拒絕關
+    default f1 與 unknown
+  + =frame/focus=   → flip focused flag（v0.18.1 才實際 raise OS window）
+- =bridge/win-split= 加 optional :frame-id；缺則繼承 source window 的
+  frame_id；新窗只在 source.frame == target.frame 時才產生視覺 split
+  (其它 frame 等 v0.18.1 才有 visible 表現)
+- Events: =frame-create= / =frame-close= / =frame-focus=
+
+測試：Qt-tier suites/frame-v018.lisp 20 deftest；OS-tier
+batch-os-frame-v018.lisp 7 Ω blocks；38/38 OS regression green。
+
+**** v0.18.1 ⏭ planned — real second Qt MainWindow + workspace 測試
+
+收 v0.18.0 留下的視覺與環境部分：
+
+- 真正 instantiate 第二個 Qt =MainWindow= per frame
+- =frame/focus= 真的 raise OS-level window (activateWindow / raise)
+- 每個 frame 自己的 =DocumentView= isolation (per-frame focused DV)
+- 每個 frame 自己的 minibuffer / modeline (state already per-window、
+  visible chrome 仍 share = v0.18.1 work)
 
 VM workspace 測試（在 nix container 內、用 openbox X11 multi-desktop）：
 - 把 frame 切到 workspace 2、bridge call 仍通
 - xdotool 經 set_desktop_for_window 把 frame 拉回
 - 背景 workspace 的 frame 收到 key inject 路由正確
-- frame 跨 workspace 移動時、frame-workspace-change 事件 fire
+- frame 跨 workspace 移動時、=frame-workspace-change= 事件 fire
 - 多 frame 同時存在不同 workspace、各自 modeline / minibuffer 隔離
 
-依賴 v0.15 per-window DV — frame 內若再有 pane、pane 不能共享 DV、
-不然 v0.8 那個遺憾會在 frame 維度重演。
+依賴 v0.15 per-window DV（已 ship）— frame 內若再有 pane、pane 不能
+共享 DV、不然 v0.8 那個遺憾會在 frame 維度重演。
 
 C++ + container WM 設定為主。
 

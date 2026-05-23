@@ -20,6 +20,7 @@
 class LimnBridge;
 class LimnBufferRegistry;
 class LimnWindowRegistry;
+class LimnFrameRegistry;
 class MainWidget;
 class Document;
 struct LimnOptions;
@@ -30,6 +31,7 @@ public:
     LimnCommand(LimnBridge*         bridge,
                 LimnBufferRegistry* registry,
                 LimnWindowRegistry* windows,
+                LimnFrameRegistry*  frames,
                 MainWidget*         main_widget,
                 const LimnOptions&  options,
                 QObject*            parent = nullptr);
@@ -76,6 +78,12 @@ private:
     void cmd_bookmark_set    (const QString& id, const QJsonObject& msg);
     void cmd_bookmark_get    (const QString& id, const QJsonObject& msg);
     void cmd_bookmark_delete (const QString& id, const QJsonObject& msg);
+
+    // ─── frame/* (SPEC §3.2 §7.2, v0.18.0) ─────────────────────────
+    void cmd_frame_list    (const QString& id, const QJsonObject& msg);
+    void cmd_frame_create  (const QString& id, const QJsonObject& msg);
+    void cmd_frame_close   (const QString& id, const QJsonObject& msg);
+    void cmd_frame_focus   (const QString& id, const QJsonObject& msg);
 
 public:
     // ─── v0.17 bookmark store (public so anon-namespace helpers in the
@@ -177,6 +185,7 @@ private:
     LimnBridge*         bridge;
     LimnBufferRegistry* registry;
     LimnWindowRegistry* windows;
+    LimnFrameRegistry*  frames;  // v0.18
     MainWidget*         main_widget;
     bool                test_mode;
 

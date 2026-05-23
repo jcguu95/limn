@@ -91,8 +91,10 @@ int main(int argc, char* argv[]) {
     // ── Limn protocol layer ────────────────────────────────────────────
     LimnBufferRegistry  registry;
     LimnWindowRegistry  win_registry;
+    LimnFrameRegistry   frame_registry;     // v0.18: f1 auto-registered in ctor
     LimnBridge          bridge(opts.effective_socket_path());
-    LimnCommand         command(&bridge, &registry, &win_registry, &window, opts);
+    LimnCommand         command(&bridge, &registry, &win_registry,
+                                 &frame_registry, &window, opts);
     bridge.set_command_handler(&command);
 
     // v0.14: hand the opengl widget a back-pointer to LimnCommand so its

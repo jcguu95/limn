@@ -47,6 +47,7 @@
                  "suites/per-window.lisp"
                  "suites/cjk.lisp"
                  "suites/bookmark.lisp"
+                 "suites/frame-v018.lisp"
                  "suites/buffer.lisp"
                  "suites/events.lisp"
                  "suites/test-mode.lisp"

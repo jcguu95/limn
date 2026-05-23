@@ -51,6 +51,7 @@ std::wstring q_to_w(const QString& q) {
 LimnCommand::LimnCommand(LimnBridge*         bridge,
                          LimnBufferRegistry* registry,
                          LimnWindowRegistry* windows,
+                         LimnFrameRegistry*  frames,
                          MainWidget*         main_widget,
                          const LimnOptions&  options,
                          QObject*            parent)
@@ -58,6 +59,7 @@ LimnCommand::LimnCommand(LimnBridge*         bridge,
       bridge(bridge),
       registry(registry),
       windows(windows),
+      frames(frames),
       main_widget(main_widget),
       test_mode(options.test_mode) {
     // SPEC §1.2: bootstrap the three reserved text-engine buffers that
@@ -138,6 +140,12 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "bookmark/set")         { cmd_bookmark_set        (id, msg); return; }
     if (cmd == "bookmark/get")         { cmd_bookmark_get        (id, msg); return; }
     if (cmd == "bookmark/delete")      { cmd_bookmark_delete     (id, msg); return; }
+
+    // frame/* (SPEC §3.2 §7.2, v0.18.0)
+    if (cmd == "frame/list")           { cmd_frame_list   (id, msg); return; }
+    if (cmd == "frame/create")         { cmd_frame_create (id, msg); return; }
+    if (cmd == "frame/close")          { cmd_frame_close  (id, msg); return; }
+    if (cmd == "frame/focus")          { cmd_frame_focus  (id, msg); return; }
 
     // test/* — only available when --test-mode was set on startup
     if (cmd.startsWith("test/")) {
@@ -353,7 +361,8 @@ void LimnCommand::cmd_bridge_win_list(const QString& id, const QJsonObject&) {
 void LimnCommand::cmd_bridge_win_split(const QString& id, const QJsonObject& msg) {
     const QString win_id = msg.value("win-id").toString();
     const QString dir    = msg.value("dir").toString();
-    if (!windows->has(win_id)) {
+    LimnWindow* src = windows->get(win_id);
+    if (!src) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
@@ -361,10 +370,22 @@ void LimnCommand::cmd_bridge_win_split(const QString& id, const QJsonObject& msg
         bridge->send_fail(id, QString("invalid 'dir' (expected 'h' or 'v'): %1").arg(dir));
         return;
     }
+    // v0.18: :frame-id optional. Defaults to the source window's frame
+    // (which itself defaults to "f1"). Explicit :frame-id puts the new
+    // window in a different frame — useful for "move pane to other
+    // monitor" style workflows once v0.18.1 lands real second windows.
+    QString target_frame = msg.value("frame-id").toString();
+    if (target_frame.isEmpty()) target_frame = src->frame_id;
+    if (frames && !frames->has(target_frame)) {
+        bridge->send_fail(id, QString("unknown frame-id: %1").arg(target_frame));
+        return;
+    }
     const QString new_id = windows->allocate_id();
-    windows->add_tiled(new_id);
-    // SPEC v0.5 §5.1 — produce real visible split in GUI mode.
-    if (main_widget) {
+    LimnWindow* w = windows->add_tiled(new_id);
+    if (w) w->frame_id = target_frame;
+    // SPEC v0.5 §5.1 — visible split only when new window is in the
+    // current frame (other-frame splits don't show on the focused widget).
+    if (main_widget && target_frame == src->frame_id) {
         main_widget->add_split_pane(dir);
     }
     QJsonObject data;
@@ -2696,4 +2717,88 @@ void LimnCommand::cmd_buffer_render_region(const QString& id, const QJsonObject&
     } catch (const std::exception& e) {
         bridge->send_fail(id, QString::fromUtf8(e.what()));
     }
+}
+
+// ─── frame/* (SPEC §3.2 §7.2, v0.18.0) ────────────────────────────────
+//
+// v0.18.0 ships the registry + wire commands + events. v0.18.1 will
+// actually instantiate a second Qt MainWindow per frame. For now,
+// frames are abstract: they own LimnWindows by frame_id, fire events
+// when created/closed/focused, but only the f1 frame has a visible
+// MainWidget.
+
+void LimnCommand::cmd_frame_list(const QString& id, const QJsonObject&) {
+    QJsonArray items;
+    for (const QString& fid : frames->all_ids()) {
+        LimnFrame* f = frames->get(fid);
+        QJsonObject o;
+        o.insert("frame-id", fid);
+        // Only emit :focused when true — same rationale as LimnWindow::to_json:
+        // CL clients often count-if on this and CL's :false keyword is truthy.
+        if (f && f->focused) o.insert("focused", true);
+        // Collect win-ids belonging to this frame.
+        QJsonArray wids;
+        for (const QString& wid : windows->all_ids()) {
+            LimnWindow* w = windows->get(wid);
+            if (w && w->frame_id == fid) wids.append(wid);
+        }
+        o.insert("win-ids", wids);
+        items.append(o);
+    }
+    QJsonObject data;
+    data.insert("items", items);
+    bridge->send_ok(id, data);
+}
+
+void LimnCommand::cmd_frame_create(const QString& id, const QJsonObject&) {
+    const QString new_id = frames->allocate_id();
+    frames->add(new_id);
+    QJsonObject ev;
+    ev.insert("frame-id", new_id);
+    bridge->push_event("frame-create", ev);
+    QJsonObject data;
+    data.insert("frame-id", new_id);
+    bridge->send_ok(id, data);
+}
+
+void LimnCommand::cmd_frame_close(const QString& id, const QJsonObject& msg) {
+    const QString fid = msg.value("frame-id").toString();
+    if (fid.isEmpty()) {
+        bridge->send_fail(id, "missing 'frame-id'");
+        return;
+    }
+    if (!frames->has(fid)) {
+        bridge->send_fail(id, QString("unknown frame-id: %1").arg(fid));
+        return;
+    }
+    if (frames->count() <= 1) {
+        bridge->send_fail(id, "cannot close the last frame");
+        return;
+    }
+    // Cascade: drop all LimnWindows in this frame. We do this BEFORE
+    // removing the frame entry so per-window cleanup (buffer-id
+    // detachment, etc.) sees consistent state.
+    for (const QString& wid : windows->all_ids()) {
+        LimnWindow* w = windows->get(wid);
+        if (w && w->frame_id == fid) windows->remove(wid);
+    }
+    frames->remove(fid);
+    QJsonObject ev;
+    ev.insert("frame-id", fid);
+    bridge->push_event("frame-close", ev);
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_frame_focus(const QString& id, const QJsonObject& msg) {
+    const QString fid = msg.value("frame-id").toString();
+    if (!frames->has(fid)) {
+        bridge->send_fail(id, QString("unknown frame-id: %1").arg(fid));
+        return;
+    }
+    frames->set_focused(fid);
+    // v0.18.1 will also raise the corresponding Qt MainWindow here.
+    QJsonObject ev;
+    ev.insert("frame-id", fid);
+    bridge->push_event("frame-focus", ev);
+    bridge->send_ok(id);
 }

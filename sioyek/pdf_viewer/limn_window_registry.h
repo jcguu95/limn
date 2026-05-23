@@ -24,6 +24,10 @@ struct LimnWindow {
     QString  type      = "tiled";   // "tiled" or "float"
     QString  buffer_id;              // empty if none loaded
     bool     focused   = false;
+    // v0.18: which frame (OS-level window) this LimnWindow belongs to.
+    // Defaults to "f1" (the bootstrap frame); reassigned via win-split
+    // :frame-id or by being created inside an explicit frame.
+    QString  frame_id  = "f1";
 
     // Floating-window placement (only meaningful when type == "float")
     int      x         = 0;
@@ -99,4 +103,38 @@ public:
 private:
     QList<LimnWindow> windows;
     int               next_seq = 2;    // w1 is allocated in ctor
+};
+
+// ─── LimnFrame / LimnFrameRegistry (v0.18) ─────────────────────────────
+//
+// A "frame" is an OS-level top window. v0.18.0 implements the registry,
+// wire commands, and events; v0.18.1 will actually instantiate a second
+// Qt MainWindow per frame. For now every frame is registered abstractly
+// but only f1 has an actual visible MainWidget.
+
+struct LimnFrame {
+    QString frame_id;
+    bool    focused = false;
+};
+
+class LimnFrameRegistry {
+public:
+    LimnFrameRegistry();              // creates default f1 (focused)
+
+    bool        has(const QString& fid) const;
+    LimnFrame*  get(const QString& fid);
+    int         count() const { return frames.size(); }
+
+    QString     allocate_id();        // returns fresh "fN"
+    LimnFrame*  add(const QString& fid);
+    bool        remove(const QString& fid);
+
+    void        set_focused(const QString& fid);
+    QString     focused_id() const;
+
+    QStringList all_ids() const;
+
+private:
+    QList<LimnFrame> frames;
+    int              next_seq = 2;
 };
