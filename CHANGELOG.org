@@ -1,9 +1,173 @@
-* v0.1.0-baseline
+#+TITLE: Limn / Sioyek-Core CHANGELOG
+#+OPTIONS: toc:2
+
+每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
+而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
+
+* v0.13.1 — windowkill cleanup（cumulative-state flake 殺到 0）
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+v0.13 ship 時誠實標 mouse-extras 還有 ~25% intermittent flake、本來
+推給「per-driver fresh Xvfb」infra 重寫。實測發現不用：root cause
+是 driver process 死了、X window 卻沒馬上從 X server 消失（openbox
+close handshake 有 hundreds-of-ms 延遲）。
+
+修：=cleanup_between_drivers= 加 =xdotool windowkill= loop + poll
+確認真消失。
+
+驗證：4 連跑 33/33 全綠。
+
+* v0.13.0 — CJK minibuffer + stronger-3 fix + minibuffer/get cursor
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+了結 v0.12 ship 時誠實標的兩個 follow-up + 抓到 1 個 API gap：
+
+- batch 23 CJK in minibuffer (9/9 全綠)
+- stronger-3 π1 加 stop-session — cumulative-state flake root cause
+- =cmd_minibuffer_get= 補回 =:cursor= 欄位（SPEC §6 introspection gap、
+  v0.7 SPEC 寫死合約）
+- =run-os-e2e.sh= 設 LANG=C.UTF-8（沒這個 xdotool 拒 CJK 輸入）
+
+寫 CJK driver 時才發現 =minibuffer/get= 從來沒回 cursor、batch 20
+加的所有 cursor-aware 編輯邏輯沒辦法 introspect —— 補上 :cursor 才
+把編輯狀態真正暴露出來。
+
+* v0.12.0 — minibuffer editing + numeric prefix arg
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+把先前標 feature-blocked 的三個維度 TDD 全程走完：
+
+- *A2 minibuffer BackSpace* at cursor（v0.7 前只能 append、刪字得整
+  段蓋掉）
+- *A4 minibuffer cursor 移動* (Left/Right/Home/End)
+- *A5 numeric prefix arg* (=5g= → page 5、Emacs convention)
+
++ batch 22 integration driver 把三個串起來跑真實 user flow（=s= 開
+搜尋 → 打字 typo → 方向鍵修正 → submit；=5g= 真的跳第 5 頁）。
+
+順手把 =run-os-e2e.sh= 從每 driver sbcl 跑兩次改成一次 + per-driver
+cleanup + 失敗 retry-once，大幅減少 cumulative-state flake。
+
+對應 SPEC contract 補在 v0.7 SPEC bump。
+
+* v0.11.0 — OS-level coverage continuation
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+延續 v0.10 backfill、再加 12 個 OS-level driver、把 coverage 延伸到
+v0.10 沒覆蓋的維度：
+
+mouse extras、concurrency、error edge、mode behavior、user flow、perf
+baseline、nav keys、multi-PDF、broken init、mode precedence、chrome
+modeline、buffer-edit primitives、hot reload。
+
+抓 + 修 2 個 silent bug：
+- =emit_buffer_opened= 缺 =:engine= 欄位 → SPEC §9.1 engine-load
+  trigger engine-default-mode 的 invariant 從未被落實
+- buffer-edit primitives 邊界 case
+
+* v0.10.0 — OS-level test coverage backfill
+:PROPERTIES:
+:DATE: 2026-05-22
+:END:
+
+「先寫測試再寫 code」原則回歸 —— v0.7 ~ v0.9 寫的 code 補上對應
+OS-level 測試。
+
+7 batch + 3 recursive 強化 batch、~140 個 sub-assertion 全綠。
+
+抓 + 修 10 個 C++/Lisp bug：mouse-click 缺 =:mods=、scroll 缺 =:mods=、
+drag wire feature 漏實作、error path crash、等等。文件化 2 個 Xvfb
+infra limitation。
+
+* v0.9.1 — OS-level e2e coverage 擴充 + space input bug fix
+:PROPERTIES:
+:DATE: 2026-05-22
+:END:
+
+v0.9.0 後續：
+
+新 OS-level driver：
+- =batch-os-type.lisp= 連續字串輸入（xdotool type）
+- =batch-os-click.lisp= 真實滑鼠點擊 + page resolution
+
+抓 + 修：space 鍵在連續打字時被 swallow（key_to_string 對 "SPC" 沒
+特殊處理）。
+
+* v0.9.0 — OS-level e2e infrastructure
+:PROPERTIES:
+:DATE: 2026-05-22
+:END:
+
+下一個版本之前先把測試補齊：container (nix-based Debian) 內 Xvfb +
+xdotool 真實 X11 注入。新 e2e tier 跟既有 unit / integration / qt-e2e
+並列。
+
+實機驗證 4 層全綠：
+| tier        | result      |
+|-------------+-------------|
+| unit        | 315/315     |
+| integration | 1001/1001   |
+| qt-e2e      | green       |
+| os-e2e      | (first run) |
+
+* v0.8.0 — Qt 版 Emacs 骨架成立
+:PROPERTIES:
+:DATE: 2026-05-22
+:END:
+
+第一個版本「使用者能透過 init.lisp 自訂 Limn 行為，不必改 framework
+source code」。
+
+核心新增：
+- Mode keymap stack 真實 dispatch（minor → major → global，§9.1）
+- =defcommand "s"= 真接 minibuffer round-trip（透過 bridge
+  =minibuffer/open= + 等 =minibuffer-submit= 事件，§9.2）
+- =keyboard-quit= command + global / minibuffer-mode keymap 綁 C-g
+- Init file 自動載入（§9.3：=$LIMN_INIT= → =~/.limn/init.lisp= →
+  =~/.config/limn/init.lisp=）
+- Introspection (§9.4)：=describe-key= / =describe-command= /
+  =where-is-command= / =list-modes=
+- C++ buffer editing primitives（cursor / insert / delete）、真實 Qt
+  window split、mouse coord → page mapping
+
+第一份 demo init.lisp 含 vim-style 翻頁 + =/= minibuffer 搜尋。
+
+* v0.7.0 — Mode + Chrome primitives 第一輪
+:PROPERTIES:
+:DATE: 2026-05-22
+:END:
+
+實作 SPEC v0.4 §1.2 chrome primitives 跟 §9.1 mode 系統 backend 骨架。
+
+包含：
+- Backend Mode 系統 (=limn-mode.lisp=)：major / minor、:on-enter /
+  :on-exit hook
+- =defcommand= + interactive 規範 (=limn-cmd.lisp=)
+- Frontend：text engine (QPlainTextEdit-based 最小實作)
+- Frontend：minibuffer / echo area / modeline widget + 三個保留
+  chrome buffer
+
+刻意還沒做（留給 v0.8）：=view/overlays= 真接 paintGL、init file 載入、
+introspection、=defcommand "s"= 真接 minibuffer round-trip。
+
+* v0.1.0-baseline — Sioyek Core 抽出
+:PROPERTIES:
+:DATE: 2026-05-19
+:END:
 
 從 Sioyek 擷取最小可運行的 PDF 渲染核心。
 
-移除所有上層（設定系統、鍵盤輸入、觸控 UI、SyncTeX），僅保留：
-MuPDF 解析 → GLSL 渲染 → Qt OpenGL 視窗。
+移除所有上層（設定系統、鍵盤輸入、觸控 UI、SyncTeX），僅保留：MuPDF
+解析 → GLSL 渲染 → Qt OpenGL 視窗。
 
-新增薄層封裝：透過 Unix socket（=/tmp/sioyek-core=）接收 JSON 指令——
-=open=、=scroll=、=zoom=、=goto-page=、=dark-mode=——供外部程式（如 Lisp 控制層）驅動。
+新增薄層封裝：透過 Unix socket (=/tmp/sioyek-core=) 接收 JSON 指令——
+=open=、=scroll=、=zoom=、=goto-page=、=dark-mode= —— 供外部程式（如
+Lisp 控制層）驅動。

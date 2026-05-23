@@ -1108,7 +1108,7 @@ backend 可以用 hook 接這個事件做 logging、profiling、debugging。
 刻意還沒做（留給 v0.8）：=view/overlays= 真接 paintGL、init file 載入、
 introspection、defcommand 的 ='s'= 真接 minibuffer round-trip。
 
-*** v0.8 底層補完 + 第一個使用者 demo
+*** v0.8 底層補完 + 第一個使用者 demo ✅ shipped
 
 底層 (C++)：
 - Generic buffer editing primitives (§5.3 後段)：cursor / insert / delete。
@@ -1137,21 +1137,85 @@ Backend Lisp infrastructure：
 完成之後，「Qt 版 Emacs」骨架算成立——使用者能透過 init.lisp 自訂行為、
 不再需要改 framework code。
 
-*** 未來 milestone（待排序）
+*** v0.9 OS-level e2e 測試基礎建設 ✅ shipped
 
-以下功能 SPEC 已釘住輪廓、實作時機未定。版本號暫不寫死、做完後依序
-打 tag。
+- Linux container (Xvfb + xdotool + openbox WM) — host macOS 跑 docker、
+  在 container 內真實 inject keystroke / mouse event 進 Limn binary。
+- e2e tier 跟既有 unit / integration / qt-e2e tier 並列、新層級。
+- v0.9.1 順手做：xdotool 連續打字 + 滑鼠點擊 driver、抓到一個 C++ bug。
+
+說明：testing 基礎建設不算 contract 變動、SPEC §1~§11 不動。
+
+*** v0.10 OS-level test coverage backfill ✅ shipped
+
+「先寫測試再寫 code」原則回歸。7 個 batch + 3 個 recursive 強化 batch、
+~50 個 driver assertion 全綠。期間抓到 4 個 C++ bug（mouse-click 缺
+=:mods=、scroll 缺 =:mods=、drag wire feature 漏實作、error path crash），
+全部修掉。
+
+*** v0.11 OS-level coverage continuation ✅ shipped
+
+12 個追加 batch、把 OS-level coverage 延伸到 v0.10 沒覆蓋的維度：
+mouse extras、concurrency、error edge、mode behavior、user flow、
+perf baseline、nav keys、multi-PDF、broken init、mode precedence、
+chrome modeline、buffer-edit primitives、hot reload。
+
+抓到 2 個 bug：=emit_buffer_opened= 缺 =:engine= 欄位（破 §9.1 engine-load
+→ engine-default-mode invariant）、buffer-edit primitives 邊界 case。
+
+*** v0.12 落實 minibuffer editing + numeric prefix arg ✅ shipped
+
+把先前標 feature-blocked 的三個維度 TDD 全程走完：
+
+- Minibuffer 編輯 (§5.4 / §6 v0.7 contract)：BS、Left、Right、Home、End
+  在 cursor 位置運作。typing 從 append 改成 insert-at-cursor。
+- Numeric prefix arg (§9.2 v0.7 contract)：=5g= → =*prefix-arg*= = 5、
+  accumulator 在 framework 端、:interactive "p" 自動拿。
+- Integration driver 串新 + 舊 feature 驗無 regression。
+
+順手把 OS-level runner 加 per-driver cleanup + retry-once、大幅降
+cumulative-state flake。
+
+*** v0.13 / v0.13.1 CJK minibuffer + stronger-3 fix + flake 殺到 0 ✅ shipped
+
+- batch 23 CJK in minibuffer (9/9 全綠) — 寫 driver 時暴露
+  =minibuffer/get= 從來沒回 =:cursor= 的 SPEC §5.4 API gap、補上
+  （此補洞在 v0.7 SPEC contract 已記）。
+- stronger-3 π1 加 stop-session — driver SIGKILL Limn 後該 process-wait
+  + 等 X window 消失的步驟漏掉、cumulative-state flake root cause。
+- container locale 設 C.UTF-8 — 沒這個 xdotool 拒 CJK 輸入。
+- v0.13.1 windowkill cleanup — 觀察到 mouse-extras 等 driver 殘留
+  flake，root cause 是 driver 結束後 X window 仍滯留 ~hundreds-of-ms。
+  cleanup_between_drivers 加 windowkill loop、4/4 stability 確認 0 flake。
+
+到此 33 OS-level driver、~280 assertion 全綠且穩定。
+
+*** 未來 milestone（待排序、淨化版）
+
+以下功能 SPEC 已釘住輪廓或哲學上預設、實作時機未定。v0.13.1 後重新
+排序：
 
 協議擴充：
-- Per-window independent =DocumentView=（v0.8 split 後 panes 共享 DV、
-  滾一個另一個跟）
-- Frame 系統（多 OS 視窗，§3.2 / §7.2 frame/）
-- Engine-specific default mode（=mupdf= engine → =pdf-mode= 內建鍵綁，
-  v0.8 暫時用 fundamental-mode placeholder）
-- Undo 模型（待立 §11；雙層 command-level + buffer-primitive）
-- Bridge primitive registry + introspection（待立 §12）
-- Keymap UX 完工（=limn:bind :mode=、=limn:define-key keymap=；§9.1 修訂）
-- =view/overlays= 真接 paintGL（annotation / search highlight / hint 都靠它）
+- *Per-window independent =DocumentView=*（v0.8 split 後 panes 共享 DV、
+  滾一個另一個跟。需動 C++、中等成本）
+- *Frame 系統*（多 OS 視窗，§3.2 / §7.2 frame/、長期目標）
+- *Keymap UX 完工*（=limn:bind :mode=、=limn:define-key keymap=；§9.1
+  修訂、純 Lisp 改、小成本、user 寫 init.lisp 真正會用到）
+- *=view/overlays= 真接 paintGL*（annotation / search highlight / hint
+  都靠它；philosophy 核心；C++ paintGL、中等成本）
+- *Bookmark persistence + wire commands*（user-visible feature、對應
+  philosophy 「PDF state dump 成可讀資料流」目標、全棧、中等成本）
+- *SPEC §11.5 drift detector 落實*（spec 已寫只是沒做；dogfood、自己
+  抓自己漏的；純 Lisp + 一點 C++、小成本）
+- *真實 CJK IME 整合*（container 加 fcitx + Limn 接 Qt IME 事件；對
+  中文用戶必要；container infra 變動大）
+- *Surrogate-pair CJK 在 cursor 計數*（v0.7 :cursor 用 QString-index、
+  BMP 內 CJK 對得上、emoji 等 non-BMP 會差；小成本）
+
+已 shipped、從本 list 移除（歷史備忘）：
+- ~~Engine-specific default mode~~（v0.11 batch 11 修 emit_buffer_opened :engine 缺欄位時順手做、現在 mupdf engine 有 fundamental-mode placeholder、=pdf-mode= 正式版要實作待 paintGL）
+- ~~Undo 模型~~（SPEC §10 已立、實作 limn-undo.lisp 已 ship）
+- ~~Bridge primitive registry + introspection~~（SPEC §11 已立、實作已 ship、只剩 §11.5 drift detector 那一塊）
 
 開發過程 / 測試基礎建設不在 SPEC 範圍——見 =CONTRIBUTING.org=。
 
