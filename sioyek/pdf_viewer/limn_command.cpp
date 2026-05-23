@@ -594,6 +594,9 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     }
     if (!to_append.isEmpty()) {
         text_buffers["*minibuffer*"].append(to_append);
+        // SPEC §5.3: cursor advances with the inserted text. v0.10 batch
+        // 19 caught that OS-level typing append didn't update cursor.
+        text_cursors["*minibuffer*"] = text_buffers["*minibuffer*"].length();
         if (auto* c = chrome_of(main_widget))
             c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
         ev.insert("text", text_buffers["*minibuffer*"]);
