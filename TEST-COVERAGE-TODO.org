@@ -1,6 +1,124 @@
 #+TITLE: OS-level 測試擴充 TODO
 #+OPTIONS: toc:3
 
+* v0.10 sprint 計畫：coverage backfill
+
+** 為什麼這個 sprint 存在
+
+v0.7 / v0.8 / v0.9 期間「先寫測試再寫 code」原則（=CONTRIBUTING.org=
+§3.1、=LIMN-SPEC.org= §10 開頭）被部分倒置：當時不知道 OS-level 可
+做、寫了 unit / integration / qt-e2e。v0.9 開出 OS-level 工具後、回
+頭把已有 code 對應的 OS-level test 補齊、再前進。
+
+不寫新 feature、純測試補完。新 feature 留 v0.11+。
+
+** 7 batch 拆法（按執行順序）
+
+每 batch ≈ 一個 commit、commit message 帶 entry 編號。
+完成的 entry 在下方 detailed sections 內標 =DONE= + commit hash。
+
+*** Batch 1：鍵盤完整 sweep                          ~半天
+
+- [ ] A1   全鍵盤打字（字母 / 數字 / 符號）
+- [ ] A12  C-M-S-x 三 modifier 組合
+- [ ] A6   C-x C-f 真實 Emacs prefix
+- [ ] C5   PDF 檔名含中文字
+
+為什麼第一個：SPC 那種「char mapping 漏」class bug 最容易在這出現、
+抓到一個算一個、心理上 momentum 起來。
+
+*** Batch 2：滑鼠完整 sweep                          ~半天
+
+- [ ] B1   right/middle click (button 2/3)
+- [ ] B2   double click
+- [ ] B3   scroll wheel up/down
+- [ ] B6   drag mousedown/move/up
+
+為什麼這時：mouse-click 只測過 left click on one position；B6 整條
+drag 鏈條從未走過 OS-level。
+
+*** Batch 3：window event + error path 安全網         ~半天
+
+- [ ] D1   resize event
+- [ ] H1   開不存在 PDF
+- [ ] H2   unbound key noop
+- [ ] H4   C-g 沒 minibuffer 時 noop
+- [ ] H6   unknown wire cmd error
+- [ ] H8   損壞 PDF
+- [ ] E2   minibuffer 空 submit
+
+為什麼這時：7 個 entry、各自獨立、低風險、跑完信心很高。
+
+*** Batch 4：Minibuffer state primitives             ~半天
+
+- [ ] E3   minibuffer/set-text
+- [ ] E4   minibuffer/set-prompt
+- [ ] E6   type 1000 chars
+- [ ] E7   C-g vs printable g during minibuffer open
+
+*** Batch 5：Lisp runtime OS-level coverage          ~半天
+
+- [ ] K2   hook on event/key 真的 fires
+- [ ] K3   describe-key 對 demo binding 回對
+- [ ] O1   bridge/capabilities returns expected
+
+*** Batch 6：Visual regression infra + 首批視覺測試   ~1 天
+
+- [ ] F1   截圖比對 baseline 框架
+- [ ] F2   zoom visual change
+
+為什麼這時：前 5 batch 把所有非視覺 entry 都做完、剩下都依賴
+screenshot infra。infra 一次蓋完、F3/F4/F5（未來）都靠這套。
+
+*** Batch 7：Stress / perf baseline                  ~半天
+
+- [ ] I2   1000 keystroke 不 drop
+- [ ] I5   5 個 limn instance 各自獨立
+- [ ] I3   long session memleak watch (1 hour run)
+
+為什麼最後：這層發現的問題是「scale 才出來」、不適合 dev loop；最後
+跑一輪確認 baseline 對。
+
+** 合計
+
+| Batch | Entries | 時間 |
+|-------+---------+------|
+| 1     | 4       | ~0.5 天 |
+| 2     | 4       | ~0.5 天 |
+| 3     | 7       | ~0.5 天 |
+| 4     | 4       | ~0.5 天 |
+| 5     | 3       | ~0.5 天 |
+| 6     | 2       | ~1 天 |
+| 7     | 3       | ~0.5 天 |
+| Total | 27      | ~5 天 |
+
+最後 merge =feature/v0.10-coverage-backfill= → main (=--no-ff=)、tag
+=v0.10.0=。
+
+** 進行中可能遇到的三種狀況
+
+每寫一個測試會發生：
+
+1. **綠** ✓ — code 對、信心 +1、直接收進 batch
+2. **紅 / bug** — 像 SPC 那種、修一起 commit（fix 跟 test 同 batch ok）
+3. **紅 / 功能未實作** — 標 =EXPECTED-FAIL=、留給 v0.11+ feature
+   sprint。**不要當下實作**、那就偷渡 feature work 進測試 sprint。
+
+第三類進「= v0.11+ 留待」section（在這檔末尾）。
+
+** v0.11+ 留待（等對應 feature 才能做）
+
+不在 v0.10 sprint 內、但 backlog 上有：
+
+- A2 / A4 / A5（BS / cursor / prefix-arg in minibuffer——是新功能）
+- K1（keymap UX :mode binding——SPEC v0.6 §9.1 待實作）
+- F5（overlay paintGL——待 v0.10 後續或 v0.11）
+- M1 / M2 / M3（§11 bridge introspection——SPEC v0.6 §11 待實作）
+- C1–C4（IME setup——container 加 fcitx 才能做）
+- G3 / G5（bookmark / hot reload——對應功能未實作）
+
+這些是「feature 進來時順手寫 OS-level test」的、不是這個 sprint 該背的。
+
 * 為什麼這個檔存在
 
 v0.9.1 完成後 OS-level 測試只有 4 個 driver（=batch-os-cg=、=batch-os-demo=、
