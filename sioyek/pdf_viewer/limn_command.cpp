@@ -25,6 +25,8 @@
 #include <QMouseEvent>
 #include <QPointF>
 #include <QApplication>
+#include <QCryptographicHash>
+#include <climits>
 #include <cmath>
 #include <stdexcept>
 
@@ -144,6 +146,12 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
         if (cmd == "test/widget-tree")        { cmd_test_widget_tree       (id, msg); return; }
         if (cmd == "test/inject-qt-key")      { cmd_test_inject_qt_key     (id, msg); return; }
         if (cmd == "test/inject-qt-mouse-click") { cmd_test_inject_qt_mouse_click(id, msg); return; }
+        // v0.14 pixel-level test primitives
+        if (cmd == "test/sample-pixel")       { cmd_test_sample_pixel      (id, msg); return; }
+        if (cmd == "test/region-bbox")        { cmd_test_region_bbox       (id, msg); return; }
+        if (cmd == "test/region-hash")        { cmd_test_region_hash       (id, msg); return; }
+        if (cmd == "test/page-pixel-rect")    { cmd_test_page_pixel_rect   (id, msg); return; }
+        if (cmd == "test/last-text-render")   { cmd_test_last_text_render  (id, msg); return; }
         bridge->send_fail(id, QString("unknown test command: %1").arg(cmd));
         return;
     }
@@ -1459,6 +1467,241 @@ void LimnCommand::cmd_test_grab_window(const QString& id, const QJsonObject& msg
         data.insert("win-id", msg.value("win-id").toString());
     }
     bridge->send_ok(id, data);
+}
+
+// ─── v0.14: pixel-level test primitives ─────────────────────────────────
+//
+// These exist to support strict deterministic paint testing without
+// transporting whole PNG framebuffers back to Lisp. Each command does
+// the heavy work server-side and returns at most a few dozen bytes.
+//
+// Pattern: grab the MainWidget once (offscreen-deterministic via Qt's
+// QWidget::grab() + QT_QPA_PLATFORM=offscreen) into a QImage, then do
+// whatever per-pixel scan the caller asked for.
+
+namespace {
+
+QImage grab_widget_image(QWidget* w) {
+    if (!w) return QImage();
+    // Flush pending paint so the grab reflects current state. Same
+    // rationale as cmd_test_grab_window.
+    QCoreApplication::processEvents();
+    return w->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+}
+
+// Parse "#RRGGBB" → (r,g,b). Returns false on malformed input.
+bool parse_hex_color(const QString& hex, int* r, int* g, int* b) {
+    if (hex.length() != 7 || !hex.startsWith('#')) return false;
+    bool ok1=false, ok2=false, ok3=false;
+    *r = hex.mid(1,2).toInt(&ok1, 16);
+    *g = hex.mid(3,2).toInt(&ok2, 16);
+    *b = hex.mid(5,2).toInt(&ok3, 16);
+    return ok1 && ok2 && ok3;
+}
+
+// Clamp (x0,y0)-(x1,y1) to image bounds, returns false if degenerate.
+bool clamp_region(const QImage& img, int& x0, int& y0, int& x1, int& y1) {
+    x0 = std::max(0, std::min(img.width(),  x0));
+    y0 = std::max(0, std::min(img.height(), y0));
+    x1 = std::max(0, std::min(img.width(),  x1));
+    y1 = std::max(0, std::min(img.height(), y1));
+    if (x1 <= x0 || y1 <= y0) return false;
+    return true;
+}
+
+}  // anonymous namespace
+
+// ── test/sample-pixel ───────────────────────────────────────────────────
+//
+// Args: :x :y (widget pixel coords)
+// Returns: { r, g, b, a } each 0..255
+//
+// 4 bytes of payload semantically. Use to spot-check known coordinates
+// after setting an overlay.
+
+void LimnCommand::cmd_test_sample_pixel(const QString& id,
+                                         const QJsonObject& msg) {
+    if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
+    const int x = msg.value("x").toInt(-1);
+    const int y = msg.value("y").toInt(-1);
+    QImage img = grab_widget_image(main_widget);
+    if (img.isNull()) { bridge->send_fail(id, "grab failed"); return; }
+    if (x < 0 || y < 0 || x >= img.width() || y >= img.height()) {
+        bridge->send_fail(id,
+            QString("pixel out of bounds: (%1,%2) in %3x%4")
+                .arg(x).arg(y).arg(img.width()).arg(img.height()));
+        return;
+    }
+    const QRgb px = img.pixel(x, y);
+    QJsonObject data;
+    data.insert("r", qRed(px));
+    data.insert("g", qGreen(px));
+    data.insert("b", qBlue(px));
+    data.insert("a", qAlpha(px));
+    bridge->send_ok(id, data);
+}
+
+// ── test/region-bbox ────────────────────────────────────────────────────
+//
+// Args: :x0 :y0 :x1 :y1 :match-color "#RRGGBB"
+// Returns: { x, y, w, h } of pixels matching the color (per-channel
+//           tolerance ±8) OR null if no match.
+//
+// Used to verify "the overlay actually painted in the right pixel rect"
+// without averaging.
+
+void LimnCommand::cmd_test_region_bbox(const QString& id,
+                                        const QJsonObject& msg) {
+    if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
+    int x0 = msg.value("x0").toInt();
+    int y0 = msg.value("y0").toInt();
+    int x1 = msg.value("x1").toInt();
+    int y1 = msg.value("y1").toInt();
+    const QString color = msg.value("match-color").toString();
+    int mr, mg, mb;
+    if (!parse_hex_color(color, &mr, &mg, &mb)) {
+        bridge->send_fail(id,
+            QString("invalid match-color: %1").arg(color));
+        return;
+    }
+    QImage img = grab_widget_image(main_widget);
+    if (img.isNull()) { bridge->send_fail(id, "grab failed"); return; }
+    if (!clamp_region(img, x0, y0, x1, y1)) {
+        bridge->send_fail(id, "degenerate region after clamp");
+        return;
+    }
+    const int TOL = 8;
+    int min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
+    bool any = false;
+    for (int y = y0; y < y1; ++y) {
+        const QRgb* row = reinterpret_cast<const QRgb*>(img.constScanLine(y));
+        for (int x = x0; x < x1; ++x) {
+            const QRgb p = row[x];
+            if (std::abs(qRed(p)   - mr) <= TOL &&
+                std::abs(qGreen(p) - mg) <= TOL &&
+                std::abs(qBlue(p)  - mb) <= TOL) {
+                any = true;
+                if (x < min_x) min_x = x;
+                if (y < min_y) min_y = y;
+                if (x > max_x) max_x = x;
+                if (y > max_y) max_y = y;
+            }
+        }
+    }
+    if (!any) {
+        bridge->send_ok(id, QJsonObject());     // null bbox = empty data
+        return;
+    }
+    QJsonObject data;
+    data.insert("x", min_x);
+    data.insert("y", min_y);
+    data.insert("w", max_x - min_x + 1);
+    data.insert("h", max_y - min_y + 1);
+    bridge->send_ok(id, data);
+}
+
+// ── test/region-hash ────────────────────────────────────────────────────
+//
+// Args: :x0 :y0 :x1 :y1
+// Returns: { sha256 } hex string of the raw RGBA bytes in the region.
+//
+// Used for golden-image comparison without storing PNGs. Deterministic
+// across runs when Qt rendering knobs are locked.
+
+void LimnCommand::cmd_test_region_hash(const QString& id,
+                                        const QJsonObject& msg) {
+    if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
+    int x0 = msg.value("x0").toInt();
+    int y0 = msg.value("y0").toInt();
+    int x1 = msg.value("x1").toInt();
+    int y1 = msg.value("y1").toInt();
+    QImage img = grab_widget_image(main_widget);
+    if (img.isNull()) { bridge->send_fail(id, "grab failed"); return; }
+    if (!clamp_region(img, x0, y0, x1, y1)) {
+        bridge->send_fail(id, "degenerate region after clamp");
+        return;
+    }
+    QCryptographicHash h(QCryptographicHash::Sha256);
+    for (int y = y0; y < y1; ++y) {
+        const uchar* row = img.constScanLine(y);
+        // 4 bytes per pixel (Format_ARGB32), slice the row to [x0, x1)
+        h.addData(reinterpret_cast<const char*>(row + x0 * 4),
+                  (x1 - x0) * 4);
+    }
+    QJsonObject data;
+    data.insert("sha256", QString::fromLatin1(h.result().toHex()));
+    data.insert("w",      x1 - x0);
+    data.insert("h",      y1 - y0);
+    bridge->send_ok(id, data);
+}
+
+// ── test/page-pixel-rect ────────────────────────────────────────────────
+//
+// Args: :win-id :page
+// Returns: { x, y, w, h } widget pixel rect of where PAGE of WIN-ID is
+//          currently rendered; OR empty {} if page is not currently
+//          visible (or no document loaded).
+//
+// Tests use this to translate page-norm (0..1) overlay coords into the
+// widget pixel coords they should land on, so sample-pixel / region-bbox
+// can be aimed correctly without baking in any zoom / offset assumption.
+
+void LimnCommand::cmd_test_page_pixel_rect(const QString& id,
+                                            const QJsonObject& msg) {
+    Q_UNUSED(msg);
+    if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
+    DocumentView* dv = main_widget->document_view();
+    Document* doc    = dv ? dv->get_document() : nullptr;
+    if (!dv || !doc) {
+        // No doc loaded — return empty (not error; tests can decide
+        // whether that's the expected state).
+        bridge->send_ok(id, QJsonObject());
+        return;
+    }
+    const int page = msg.value("page").toInt(0);
+    if (page < 0 || page >= doc->num_pages()) {
+        bridge->send_ok(id, QJsonObject());
+        return;
+    }
+    const float pw = doc->get_page_width(page);
+    const float ph = doc->get_page_height(page);
+    if (pw <= 0 || ph <= 0) {
+        bridge->send_ok(id, QJsonObject());
+        return;
+    }
+    // Build a DocumentRect covering the whole page, ask sioyek to
+    // project it into widget pixels. Same conversion path as click
+    // handling (so coords are consistent across overlay / click).
+    fz_rect fr;
+    fr.x0 = 0;
+    fr.y0 = 0;
+    fr.x1 = pw;
+    fr.y1 = ph;
+    DocumentRect dr(fr, page);
+    WindowRect wr = dv->document_to_window_irect(dr);
+    QJsonObject data;
+    data.insert("x", wr.x0);
+    data.insert("y", wr.y0);
+    data.insert("w", wr.x1 - wr.x0);
+    data.insert("h", wr.y1 - wr.y0);
+    bridge->send_ok(id, data);
+}
+
+// ── test/last-text-render ───────────────────────────────────────────────
+//
+// Args: (none)
+// Returns: { font-family, pixel-size, weight, italic, glyphs-substituted,
+//            bbox: {x, y, w, h} }
+//
+// Populated by paintGL each time a text overlay is drawn. Lets tests
+// confirm:
+//   (a) Qt actually used the font we asked for (not silent fallback)
+//   (b) glyphs-substituted == 0 → no missing-glyph fallback
+//   (c) bbox dimensions match font metrics ("I" < "M" in proportional)
+
+void LimnCommand::cmd_test_last_text_render(const QString& id,
+                                             const QJsonObject&) {
+    bridge->send_ok(id, last_text_render);
 }
 
 // ─── test/widget-tree ───────────────────────────────────────────────────

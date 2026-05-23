@@ -86,6 +86,14 @@ private:
     void cmd_test_inject_qt_key     (const QString& id, const QJsonObject& msg);
     void cmd_test_inject_qt_mouse_click(const QString& id, const QJsonObject& msg);
 
+    // ─── v0.14 pixel-level test primitives ──────────────────────────
+    // Tiny payloads — server-side scans, no PNG transport.
+    void cmd_test_sample_pixel      (const QString& id, const QJsonObject& msg);
+    void cmd_test_region_bbox       (const QString& id, const QJsonObject& msg);
+    void cmd_test_region_hash       (const QString& id, const QJsonObject& msg);
+    void cmd_test_page_pixel_rect   (const QString& id, const QJsonObject& msg);
+    void cmd_test_last_text_render  (const QString& id, const QJsonObject& msg);
+
     // ─── modeline/* (SPEC §5.6) ─────────────────────────────────────
     void cmd_modeline_set           (const QString& id, const QJsonObject& msg);
     void cmd_modeline_get           (const QString& id, const QJsonObject& msg);
@@ -159,4 +167,11 @@ private:
     // currently shown? what's the prompt prefix?
     bool     minibuffer_open = false;
     QString  minibuffer_prompt;
+
+    // ─── v0.14 last-text-render introspection ──────────────────────
+    // paintGL writes here each time a text overlay is drawn. Tests
+    // use test/last-text-render to verify the QFont that Qt actually
+    // ended up using (catches silent font fallback). Empty / NIL
+    // when no text overlay has been drawn yet (or after engine-load).
+    QJsonObject last_text_render;
 };
