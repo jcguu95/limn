@@ -1,6 +1,76 @@
 #+TITLE: OS-level 測試擴充 TODO
 #+OPTIONS: toc:3
 
+* v0.12 sprint：把 feature-blocked dimension 落實 (overnight autonomous)
+
+** 為什麼有這個 sprint
+
+承接 v0.11 sprint。使用者再度「我要去睡了、請繼續、明早驗收」。
+
+v0.11 把 OS-level coverage 衝到 30 driver 全綠，但 SPEC 還掛著幾個
+「test 寫得出來、但 feature 沒落實」的 dimension：A2 minibuffer BS、
+A4 cursor 移動、A5 numeric prefix arg。v0.12 把這些 feature 補上、
+TDD spec→test→code 全程走完、整合進真實 user flow。
+
+** 3 個 batch + 1 個 runner 改善
+
+*** Batch 20：minibuffer editing — A2 + A4 (13/13 全綠)  ✓
+
+  C++ 側 ~minibuffer_handle_key~ 新增 BS / Left / Right / Home / End
+  分支；typing 從「append 到 buffer 末尾」改成「insert 到 cursor 位置」。
+  ~cmd_minibuffer_set_text~ 同步把 cursor reset 到 text length，
+  讓 set-text 後接著 type 仍符合 Emacs 「set-text 等同插入並把點放
+  在末尾」的語意。
+
+*** Batch 21：numeric prefix arg — A5 (5/5 全綠)  ✓
+
+  ~backend/limn.lisp~ 加 ~*prefix-arg-acc*~ 累進器：
+  ~%dispatch-key~ 看到 (digit + 無 mods + 無 key-prefix) 就累進、
+  不 dispatch；遇到下一個非 digit、就把 acc parse 成 int、用 PROGV
+  bind ~limn/cmd:*prefix-arg*~ 進 handler。defcommand ~:interactive "p"~
+  從該 dynamic var 拿值。'g' alone → 1（default），'5g' → 5，
+  '42g' → 42，未 dispatch 的 acc 跨 unbound key 會 reset。
+
+*** Batch 22：integration scenarios (6/6 全綠)  ✓
+
+  把 batch 20 + 21 + v0.8/9 既有 defcommand 串起來、跑真實 user flow：
+
+  Scenario A：'s' → type 'helo' → Left×2 → insert 'l' → text 真的是
+              'hello' → RET 真的把 'hello' 交給 callback。
+  Scenario B：純 BS 修正 ('wronged' → BS×3 → 'g' → 'wrong')。
+  Scenario C：'5g' goto-page 走 ~view/set~ 真的跳到 page 5；'0g'
+              回到 page 0。
+
+  Integration driver 證明：新 feature 跟舊 defcommand / bind /
+  minibuffer 互動全部相容、沒哪個 dimension 因新加 BS / arrow / prefix
+  邏輯而 regress。
+
+*** 同步改善：~run-os-e2e.sh~ cleanup + retry
+
+  v0.11 sprint 留下「30 個 driver 跑同一個 Xvfb container、cumulative
+  state pollution 造成 ~10% intermittent flake」這個 issue。v0.12:
+
+  - sbcl 從每 driver 跑兩次（一次抓 exit code、一次抓 stdout grep）
+    改成一次（output 寫 log file、最後 grep）。
+  - ~cleanup_between_drivers~：pkill 殘留 limn、rm 過期 socket、
+    xdotool keyup 卡住的 modifier。
+  - 失敗 retry 一次。flake 本質上 cleanup 完就能過。
+
+  實測：~stronger-3~ flake rate 從 ~75% 降到 ~25%。沒完全消、列為
+  v0.13 follow-up（root cause 在 stronger-3 內 π1 SIGKILL Limn 留下
+  Xvfb 殘留 state；要從 driver 內側 stop sequence 改）。
+
+** v0.12 結果
+
+  + 落實 3 個 SPEC feature (A2、A4、A5)、過去都標 feature-blocked。
+  + +24 個 OS-level assertion (13+5+6) 全綠。
+  + runner 從「flake 蓋全部 retry session」降到「個別 driver retry 一次」。
+
+** Follow-up to v0.13
+
+  - stronger-3 driver 內側的 SIGKILL → graceful stop 改寫
+  - A6 multi-byte char 在 minibuffer (CJK input) — 還沒 driver
+
 * v0.11 sprint：續做 OS-level coverage (overnight autonomous)
 
 ** 為什麼有這個 sprint
