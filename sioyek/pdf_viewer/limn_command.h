@@ -15,6 +15,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QHash>
+#include <QImage>
 
 class LimnBridge;
 class LimnBufferRegistry;
@@ -94,6 +95,7 @@ private:
     void cmd_test_page_pixel_rect   (const QString& id, const QJsonObject& msg);
     void cmd_test_last_text_render  (const QString& id, const QJsonObject& msg);
 
+
     // ─── modeline/* (SPEC §5.6) ─────────────────────────────────────
     void cmd_modeline_set           (const QString& id, const QJsonObject& msg);
     void cmd_modeline_get           (const QString& id, const QJsonObject& msg);
@@ -127,6 +129,12 @@ public:
     // Used by LimnInputFilter's MouseButtonPress branch.
     bool widget_to_page_norm(int widget_x, int widget_y,
                               int* out_page, double* out_nx, double* out_ny);
+
+    // ─── v0.14 paintGL integration accessors (public) ───────────────
+    // Called from PdfViewOpenGLWidget::paintGL each frame.
+    QJsonArray         focused_window_overlays() const;
+    void               record_text_render(const QJsonObject& info) {
+                            last_text_render = info; }
 private:
 
     // Helpers
@@ -169,9 +177,31 @@ private:
     QString  minibuffer_prompt;
 
     // ─── v0.14 last-text-render introspection ──────────────────────
-    // paintGL writes here each time a text overlay is drawn. Tests
-    // use test/last-text-render to verify the QFont that Qt actually
-    // ended up using (catches silent font fallback). Empty / NIL
-    // when no text overlay has been drawn yet (or after engine-load).
+    // Tests use test/last-text-render to verify the QFont that Qt
+    // actually ended up using (catches silent font fallback). Empty /
+    // NIL when no text overlay has been drawn yet (or after engine-load).
     QJsonObject last_text_render;
+
+    // ─── v0.14 deterministic overlay raster ────────────────────────
+    // Rendering overlays into a separate QImage rather than relying
+    // on QOpenGLWidget::grabFramebuffer() gives us:
+    //   (a) Independence from GPU/driver availability (Xvfb has none).
+    //   (b) Independence from QOpenGLWidget init/show timing.
+    //   (c) Byte-exact deterministic output across runs and machines.
+    //
+    // The raster is "overlays on an opaque white background" — tests
+    // verifying overlay color/opacity/geometry sample against a known
+    // white substrate, decoupling overlay correctness from whatever
+    // the PDF page rendered as.
+    //
+    // For production display, paintGL still composes the raster onto
+    // the GL framebuffer on top of the PDF — same QPainter calls,
+    // same outcome, just running once into the QImage and then blitted.
+    QImage overlay_raster;
+public:
+    // Rebuild raster from current focused window's overlays. Called
+    // by cmd_view_overlays (so tests can sample right after state
+    // mutates) and by paintGL (for production display blit).
+    void rebuild_overlay_raster(int width, int height);
+    const QImage& current_overlay_raster() const { return overlay_raster; }
 };

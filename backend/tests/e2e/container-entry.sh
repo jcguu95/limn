@@ -36,6 +36,19 @@ openbox --sm-disable > /tmp/openbox.log 2>&1 &
 OPENBOX_PID=$!
 sleep 0.3
 
+# v0.14: rebuild fontconfig cache so freshly-installed fonts (DejaVu Sans
+# etc) are findable by Qt's font matching at runtime. Without this, Qt
+# silently falls back and any test requesting a specific font sees
+# glyphs-substituted > 0 even though the font is on disk.
+fc-cache -f > /tmp/fc-cache.log 2>&1 || true
+
+# v0.14: force software OpenGL. Xvfb has no GPU, libglvnd alone can't
+# render anything; we need mesa's swrast / llvmpipe driver. Without
+# this, QOpenGLWidget::grabFramebuffer() returns a null/zero image
+# and overlay paint tests can't sample any pixels.
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+
 # Optional x11vnc for live debug (map -p 5900:5900 on host).
 if [ "${X11VNC:-0}" = "1" ]; then
   x11vnc -display "${DISPLAY}" -nopw -forever -shared \

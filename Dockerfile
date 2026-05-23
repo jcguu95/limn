@@ -48,7 +48,9 @@ RUN nix-env -iA \
       nixpkgs.dejavu_fonts \
       nixpkgs.bash \
       nixpkgs.coreutils \
-      nixpkgs.fontconfig
+      nixpkgs.fontconfig \
+      nixpkgs.mesa \
+      nixpkgs.mesa-demos
 
 # Build Limn using the flake dev shell.
 RUN cd sioyek && \

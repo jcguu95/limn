@@ -106,6 +106,14 @@ public:
     };
 
     ColorPalette get_current_color_mode();
+    // v0.14: wired in by main.cpp after construction. Used by paintGL
+    // to read overlay state for the focused LimnWindow and to record
+    // last-text-render metadata for the test introspection wire.
+    void set_limn_command(class LimnCommand* lc) { limn_command = lc; }
+private:
+    void render_overlays(class QPainter* painter);   // v0.14
+public:
+    // (forward-back to original section)
 private:
     static OpenGLSharedResources shared_gl_objects;
 
@@ -115,6 +123,7 @@ private:
     ScratchPad* scratchpad = nullptr;
     PdfRenderer* pdf_renderer = nullptr;
     ConfigManager* config_manager = nullptr;
+    class LimnCommand* limn_command = nullptr;   // v0.14, optional
     std::vector<SearchResult> search_results;
     int current_search_result_index = -1;
     std::mutex search_results_mutex;

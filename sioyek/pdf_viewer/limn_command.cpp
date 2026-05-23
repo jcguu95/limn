@@ -26,6 +26,11 @@
 #include <QPointF>
 #include <QApplication>
 #include <QCryptographicHash>
+#include <QPainter>
+#include <QPen>
+#include <QFont>
+#include <QFontInfo>
+#include <QFontMetricsF>
 #include <climits>
 #include <cmath>
 #include <stdexcept>
@@ -879,6 +884,16 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
     // reads from win->overlays; view/get returns it for Lisp introspect.
     win->overlays      = layers;
     win->overlay_count = layers.size();
+    // Rebuild the deterministic side-raster IMMEDIATELY so test pixel
+    // sampling sees up-to-date overlays without waiting for a real
+    // paintGL cycle. Use opengl_widget's current size (fall back to a
+    // sane default if widget not yet sized in headless).
+    int rw = 1200, rh = 900;
+    if (auto* gl = main_widget->opengl_widget()) {
+        if (gl->width()  > 0) rw = gl->width();
+        if (gl->height() > 0) rh = gl->height();
+    }
+    rebuild_overlay_raster(rw, rh);
     main_widget->opengl_widget()->update();
     bridge->send_ok(id);
 }
@@ -1469,6 +1484,144 @@ void LimnCommand::cmd_test_grab_window(const QString& id, const QJsonObject& msg
     bridge->send_ok(id, data);
 }
 
+// ─── v0.14: focused window overlays accessor (for paintGL) ──────────────
+
+QJsonArray LimnCommand::focused_window_overlays() const {
+    if (!windows) return QJsonArray();
+    const QString fid = windows->focused_id();
+    if (fid.isEmpty()) return QJsonArray();
+    // const-cast is fine here — get() doesn't mutate the registry,
+    // it just returns a pointer; the registry's API isn't const-correct.
+    LimnWindow* w = const_cast<LimnWindowRegistry*>(windows)->get(fid);
+    if (!w) return QJsonArray();
+    return w->overlays;
+}
+
+// ─── v0.14: rebuild overlay raster (single source of truth) ─────────────
+//
+// Renders all overlays for the focused window into LimnCommand::overlay_raster
+// using QPainter on a software-backed QImage. White background. Same code
+// path that PdfViewOpenGLWidget::paintGL blits onto the GL surface.
+
+void LimnCommand::rebuild_overlay_raster(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        overlay_raster = QImage();
+        return;
+    }
+    if (overlay_raster.width()  != width ||
+        overlay_raster.height() != height ||
+        overlay_raster.format() != QImage::Format_ARGB32) {
+        overlay_raster = QImage(width, height, QImage::Format_ARGB32);
+    }
+    overlay_raster.fill(QColor(255, 255, 255));      // opaque white substrate
+
+    QJsonArray layers = focused_window_overlays();
+    if (layers.isEmpty()) return;
+
+    DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
+    Document* doc    = dv ? dv->get_document() : nullptr;
+    if (!dv || !doc) return;
+
+    QPainter painter(&overlay_raster);
+    painter.setRenderHint(QPainter::Antialiasing,         false);
+    painter.setRenderHint(QPainter::TextAntialiasing,     false);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+
+    for (const QJsonValue& lv : layers) {
+        if (!lv.isObject()) continue;
+        const QJsonObject l = lv.toObject();
+        const QString type  = l.value("type").toString();
+        const int     page  = l.value("page").toInt(-1);
+        if (page < 0 || page >= doc->num_pages()) continue;
+
+        const QString colstr = l.value("color").toString();
+        if (colstr.length() != 7 || !colstr.startsWith('#')) continue;
+        QColor col(colstr);
+        if (!col.isValid()) continue;
+        double opacity = l.value("opacity").toDouble(1.0);
+        if (opacity < 0.0) opacity = 0.0;
+        if (opacity > 1.0) opacity = 1.0;
+        col.setAlphaF(opacity);
+
+        const float pw = doc->get_page_width(page);
+        const float ph = doc->get_page_height(page);
+        if (pw <= 0 || ph <= 0) continue;
+
+        auto norm_to_pixel = [&](double nx, double ny,
+                                  float* ox, float* oy) -> bool {
+            fz_rect fr; fr.x0=0; fr.y0=0; fr.x1=pw; fr.y1=ph;
+            DocumentRect dr(fr, page);
+            WindowRect wr = dv->document_to_window_irect(dr);
+            *ox = wr.x0 + nx * (wr.x1 - wr.x0);
+            *oy = wr.y0 + ny * (wr.y1 - wr.y0);
+            return true;
+        };
+
+        if (type == "rect") {
+            const QJsonArray ra = l.value("rect").toArray();
+            if (ra.size() != 4) continue;
+            float x0, y0, x1, y1;
+            norm_to_pixel(ra[0].toDouble(), ra[1].toDouble(), &x0, &y0);
+            norm_to_pixel(ra[2].toDouble(), ra[3].toDouble(), &x1, &y1);
+            QRectF r(QPointF(std::min(x0, x1), std::min(y0, y1)),
+                     QPointF(std::max(x0, x1), std::max(y0, y1)));
+            painter.fillRect(r, col);
+        }
+        else if (type == "line") {
+            const QJsonArray from = l.value("from").toArray();
+            const QJsonArray to   = l.value("to").toArray();
+            if (from.size() != 2 || to.size() != 2) continue;
+            float ax, ay, bx, by;
+            norm_to_pixel(from[0].toDouble(), from[1].toDouble(), &ax, &ay);
+            norm_to_pixel(to[0].toDouble(),   to[1].toDouble(),   &bx, &by);
+            const int width = l.value("width").toInt(1);
+            QPen pen(col);
+            pen.setWidth(width);
+            pen.setCapStyle(Qt::FlatCap);
+            painter.setPen(pen);
+            painter.drawLine(QPointF(ax, ay), QPointF(bx, by));
+        }
+        else if (type == "text") {
+            const QJsonArray pos = l.value("pos").toArray();
+            if (pos.size() != 2) continue;
+            float px, py;
+            norm_to_pixel(pos[0].toDouble(), pos[1].toDouble(), &px, &py);
+            const double size_pt = l.value("size").toDouble(12.0);
+            if (size_pt <= 0) continue;
+            const QString text   = l.value("text").toString();
+            const QString family = l.value("font").toString(
+                                       QStringLiteral("DejaVu Sans"));
+            QFont f(family);
+            f.setPixelSize(static_cast<int>(size_pt));
+            f.setHintingPreference(QFont::PreferNoHinting);
+            painter.setFont(f);
+            painter.setPen(QPen(col));
+            painter.drawText(QPointF(px, py), text);
+
+            QFontInfo fi(painter.font());
+            QFontMetricsF fm(painter.font());
+            const QRectF bbox = fm.tightBoundingRect(text);
+            QJsonObject info;
+            info.insert("font-family",  fi.family());
+            info.insert("pixel-size",   fi.pixelSize());
+            info.insert("weight",       fi.weight());
+            info.insert("italic",       fi.italic());
+            const int sub =
+                (fi.family().compare(family, Qt::CaseInsensitive) == 0)
+                    ? 0 : static_cast<int>(text.length());
+            info.insert("glyphs-substituted", sub);
+            QJsonObject bbjs;
+            bbjs.insert("x", static_cast<int>(px + bbox.x()));
+            bbjs.insert("y", static_cast<int>(py + bbox.y()));
+            bbjs.insert("w", static_cast<int>(bbox.width()));
+            bbjs.insert("h", static_cast<int>(bbox.height()));
+            info.insert("bbox", bbjs);
+            last_text_render = info;
+        }
+    }
+}
+
 // ─── v0.14: pixel-level test primitives ─────────────────────────────────
 //
 // These exist to support strict deterministic paint testing without
@@ -1481,12 +1634,13 @@ void LimnCommand::cmd_test_grab_window(const QString& id, const QJsonObject& msg
 
 namespace {
 
-QImage grab_widget_image(QWidget* w) {
-    if (!w) return QImage();
-    // Flush pending paint so the grab reflects current state. Same
-    // rationale as cmd_test_grab_window.
-    QCoreApplication::processEvents();
-    return w->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+// v0.14: pixel-level test primitives read from LimnCommand::overlay_raster
+// (the deterministic side QImage rendered by rebuild_overlay_raster).
+// We DON'T use QWidget::grab() or QOpenGLWidget::grabFramebuffer() —
+// those depend on GL context / widget show timing which is flaky in
+// headless container environments. The raster is always deterministic.
+const QImage& test_image_source(const LimnCommand* lc) {
+    return lc->current_overlay_raster();
 }
 
 // Parse "#RRGGBB" → (r,g,b). Returns false on malformed input.
@@ -1524,7 +1678,7 @@ void LimnCommand::cmd_test_sample_pixel(const QString& id,
     if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
     const int x = msg.value("x").toInt(-1);
     const int y = msg.value("y").toInt(-1);
-    QImage img = grab_widget_image(main_widget);
+    const QImage & img = overlay_raster;
     if (img.isNull()) { bridge->send_fail(id, "grab failed"); return; }
     if (x < 0 || y < 0 || x >= img.width() || y >= img.height()) {
         bridge->send_fail(id,
@@ -1564,7 +1718,7 @@ void LimnCommand::cmd_test_region_bbox(const QString& id,
             QString("invalid match-color: %1").arg(color));
         return;
     }
-    QImage img = grab_widget_image(main_widget);
+    const QImage & img = overlay_raster;
     if (img.isNull()) { bridge->send_fail(id, "grab failed"); return; }
     if (!clamp_region(img, x0, y0, x1, y1)) {
         bridge->send_fail(id, "degenerate region after clamp");
@@ -1615,7 +1769,7 @@ void LimnCommand::cmd_test_region_hash(const QString& id,
     int y0 = msg.value("y0").toInt();
     int x1 = msg.value("x1").toInt();
     int y1 = msg.value("y1").toInt();
-    QImage img = grab_widget_image(main_widget);
+    const QImage & img = overlay_raster;
     if (img.isNull()) { bridge->send_fail(id, "grab failed"); return; }
     if (!clamp_region(img, x0, y0, x1, y1)) {
         bridge->send_fail(id, "degenerate region after clamp");

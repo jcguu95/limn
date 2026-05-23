@@ -7,6 +7,7 @@
 #include <mupdf/fitz.h>
 
 #include "main_widget.h"
+#include "pdf_view_opengl_widget.h"
 #include "limn_options.h"
 #include "limn_bridge.h"
 #include "limn_buffer_registry.h"
@@ -93,6 +94,13 @@ int main(int argc, char* argv[]) {
     LimnBridge          bridge(opts.effective_socket_path());
     LimnCommand         command(&bridge, &registry, &win_registry, &window, opts);
     bridge.set_command_handler(&command);
+
+    // v0.14: hand the opengl widget a back-pointer to LimnCommand so its
+    // paintGL can read the focused window's overlays and record last
+    // text-render metadata. Optional — widget no-ops if unset.
+    if (window.opengl_widget()) {
+        window.opengl_widget()->set_limn_command(&command);
+    }
 
     // ── Input event capture (forwards Qt events as Limn events) ────────
     // Filter holds a back-pointer to LimnCommand so it can route printable
