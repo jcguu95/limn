@@ -1036,11 +1036,12 @@ QString validate_sel_pos(const QJsonValue& v) {
     if (!o.value("y").isDouble())    return "begin/end :y must be number";
     return QString();
 }
-// Build a synthetic, deterministic text string from the selection
-// coords. v0.15.1 punts on real sioyek text extraction (would require
-// page-norm → AbsoluteDocumentPos conversion + get_text_selection
-// call). Tests only need :|text| to be a string and to differ when
-// selections differ — synth handles both.
+// v0.15.2: extract the actual selected text via sioyek's
+// DocumentView::get_text_selection. Converts our page-norm coords
+// (x,y ∈ [0,1] of the page rect) into the AbsoluteDocumentPos space
+// sioyek wants. Falls back to a synthetic string if the extraction
+// turns up empty (e.g., selection over a graphics-only region — still
+// gives tests something deterministic to compare).
 QString synth_sel_text(const QJsonObject& begin, const QJsonObject& end) {
     return QString("[sel p%1:%2,%3→p%4:%5,%6]")
         .arg(begin.value("page").toInt())
@@ -1049,6 +1050,42 @@ QString synth_sel_text(const QJsonObject& begin, const QJsonObject& end) {
         .arg(end.value("page").toInt())
         .arg(end.value("x").toDouble(), 0, 'f', 3)
         .arg(end.value("y").toDouble(), 0, 'f', 3);
+}
+
+// Translate page-norm (page, nx, ny) → AbsoluteDocumentPos using
+// the loaded Document's page geometry. Returns false if doc/page is
+// invalid (caller should fall back to synth text).
+bool page_norm_to_absolute(Document* doc, int page, double nx, double ny,
+                            AbsoluteDocumentPos* out) {
+    if (!doc) return false;
+    if (page < 0 || page >= doc->num_pages()) return false;
+    DocumentPos dp;
+    dp.page = page;
+    dp.x = static_cast<float>(nx * doc->get_page_width(page));
+    dp.y = static_cast<float>(ny * doc->get_page_height(page));
+    *out = dp.to_absolute(doc);
+    return true;
+}
+
+// Extract real text via sioyek's get_text_selection. Empty string on
+// any failure (caller decides whether to fall back to synth).
+QString extract_selection_text(DocumentView* dv, Document* doc,
+                                const QJsonObject& begin,
+                                const QJsonObject& end,
+                                const QString& mode) {
+    if (!dv || !doc) return QString();
+    AbsoluteDocumentPos bp, ep;
+    if (!page_norm_to_absolute(doc, begin.value("page").toInt(),
+                                begin.value("x").toDouble(),
+                                begin.value("y").toDouble(), &bp)) return QString();
+    if (!page_norm_to_absolute(doc, end.value("page").toInt(),
+                                end.value("x").toDouble(),
+                                end.value("y").toDouble(), &ep)) return QString();
+    std::deque<AbsoluteRect> rects;
+    std::wstring text;
+    const bool is_word = (mode == "word");
+    dv->get_text_selection(bp, ep, is_word, rects, text);
+    return QString::fromStdWString(text);
 }
 }
 
@@ -1069,8 +1106,22 @@ void LimnCommand::cmd_view_selection_set(const QString& id, const QJsonObject& m
     win->selection_end    = msg.value("end").toObject();
     win->selection_mode   = msg.value("mode").toString("char");
     win->selection_active = true;
-    win->selection_text   = synth_sel_text(win->selection_begin,
-                                           win->selection_end);
+    // v0.15.2: try real sioyek extraction first. Only works for the
+    // focused window (since extraction goes through the live DV's
+    // document). For non-focused windows we fall back to synth text,
+    // which is still deterministic + distinguishable across coords.
+    QString real_text;
+    if (windows->focused_id() == win_id) {
+        DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
+        Document* doc    = dv ? dv->get_document() : nullptr;
+        real_text = extract_selection_text(dv, doc,
+                                            win->selection_begin,
+                                            win->selection_end,
+                                            win->selection_mode);
+    }
+    win->selection_text = real_text.isEmpty()
+        ? synth_sel_text(win->selection_begin, win->selection_end)
+        : real_text;
 
     // If this window is focused, the visible raster needs to redraw
     // (so the selection rect appears immediately for pixel sampling).
