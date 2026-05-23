@@ -36,7 +36,7 @@ v0.7 / v0.8 / v0.9 期間「先寫測試再寫 code」原則（=CONTRIBUTING.org
 為什麼第一個：SPC 那種「char mapping 漏」class bug 最容易在這出現、
 抓到一個算一個、心理上 momentum 起來。
 
-*** Batch 1.5：強化測試（基於 batch 1 抓到的 meta-pattern）  ~半天
+*** Batch 1.5：強化測試（基於 batch 1 抓到的 meta-pattern）  ~半天 ✓ DONE
 
 **為什麼有這個 batch**：
 
@@ -62,18 +62,32 @@ dimension 上加 assertion。
 
 **entries**：
 
-- [ ] γ1   Ctrl + click → mouse-click event 應該帶 mods=["ctrl"]    ★★★
-- [ ] γ2   Shift + click → 同上、mods=["shift"]                       ★★★
-- [ ] β1   裸 modifier press → 後端應**沒**收到 key event             ★★
-- [ ] α2   path A / path B post-condition cross-check                  ★★
+- [X] γ1   Ctrl + click → mouse-click event 應該帶 mods=["ctrl"]    ★★★
+- [X] γ2   Shift + click → 同上、mods=["shift"]                       ★★★
+- [X] β1   裸 modifier press → 後端應**沒**收到 key event             ★★
+- [X] α2   path A / path B post-condition cross-check                  ★★
             (a no-mod、A shift only、a ctrl、A ctrl+shift、
              a ctrl+alt、A ctrl+alt+shift 六種組合一次 sweep、
              斷言 case + mods 完全對齊 SPEC convention)
-- [ ] δ1   modifier 提早 release 中斷 prefix                          ★★
+- [X] δ1   modifier 提早 release 中斷 prefix                          ★★
             (keydown ctrl、key x、keyup ctrl、key f → 應該不觸發 C-x C-f)
-- [ ] γ3   Ctrl+drag → mouse-drag event 帶 mods                       ★
-- [ ] γ4   Ctrl+scroll → scroll event 帶 mods                          ★
-- [ ] ε1   bind + inject + where-is-command 全 sweep                  ★
+- [⊘] γ3   Ctrl+drag → mouse-drag event 帶 mods                       ★
+            EXPECTED-FAIL：drag wire 只接 test/inject-mouse-drag 模擬
+            路徑、實際 X11 MouseMove with button held → mouse-drag
+            event 那條沒做。推 v0.11+ 當新 feature 處理。
+- [X] γ4   Ctrl+scroll → scroll event 帶 mods                          ★
+- [X] ε1   bind + inject + where-is-command 全 sweep                  ★
+
+順手抓到 + 修的 C++ bug：
+
+- γ1/γ2：MouseButtonPress emit 的 mouse-click event **完全沒** :mods
+  欄位。讀 limn_input.cpp 就看得到、但沒人測過。修 1 行：
+  =e.insert("mods", modifiers_to_array(mev->modifiers(), QString()));=
+- γ4：QEvent::Wheel emit 的 scroll event **完全沒** :mods 欄位。同
+  類修 1 行。
+
+預期完全準：γ 系列必紅、修完綠；β/α/δ/ε 應該綠（守剛修完 batch 1
+的 invariant）；γ3 是 feature gap、EXPECTED-FAIL。
 
 **為什麼這幾個 stronger**：
 

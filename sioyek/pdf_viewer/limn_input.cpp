@@ -175,6 +175,10 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
                 e.insert("y",    mev->position().y());
             }
             e.insert("button", button_id(mev->button()));
+            // SPEC §6: mouse-click carries modifier state so users can
+            // bind C-mouse-1 / S-mouse-1 / etc. Previously missing —
+            // v0.10 batch 1.5 γ1 caught it.
+            e.insert("mods", modifiers_to_array(mev->modifiers(), QString()));
             bridge->push_event("mouse-click", e);
             break;
         }
@@ -185,6 +189,9 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             e.insert("win-id",   "w1");
             e.insert("dx",       wev->angleDelta().x());
             e.insert("dy",       wev->angleDelta().y());
+            // SPEC §6: scroll carries modifier state (Ctrl-scroll = zoom
+            // convention etc). v0.10 batch 1.5 γ4 caught the omission.
+            e.insert("mods", modifiers_to_array(wev->modifiers(), QString()));
             bridge->push_event("scroll", e);
             break;
         }
