@@ -1,0 +1,984 @@
+#+TITLE: OS-level 測試擴充 TODO
+#+OPTIONS: toc:3
+
+* 為什麼這個檔存在
+
+v0.9.1 完成後 OS-level 測試只有 4 個 driver（=batch-os-cg=、=batch-os-demo=、
+=batch-os-type=、=batch-os-click=），覆蓋鍵盤打字、單鍵綁定、minibuffer
+cancel、單一滑鼠點擊。距離「全自動驗證真實使用者鏈條」還有非常大的空間。
+
+這個檔記錄**還能做的 OS-level 測試**，按類別整理，每個 entry 有：
+
+- =怎麼測=：具體 xdotool 指令、Lisp 端 assertion、依賴的 fixture
+- =為什麼測=：抓什麼 bug 類別、覆蓋哪段協議
+- =難度=：估計工作量（半小時 / 一兩小時 / 半天 / 一天+）
+- =★=：high-value low-cost、優先做
+
+放在 repo root（不在 =backend/tests/= 內）是因為這檔的角色是「開發 backlog /
+腦力激盪結果」、不是測試本體。放 tests 裡會被當測試忽略、寫測試時也不會
+回看這。放 root 跟 =LIMN-SPEC.org= / =CONTRIBUTING.org= 並列、地位等同。
+
+** 已完成（不要重做、列在這當對照基準）
+
+| Driver                     | 測什麼                                |
+|----------------------------+---------------------------------------|
+| =batch-os-cg.lisp=         | 觸發鍵 + C-g 取消 in-flight defcommand |
+| =batch-os-demo.lisp=       | demo init.lisp 11-check 全套           |
+| =batch-os-type.lisp=       | xdotool type 連續字串輸入              |
+| =batch-os-click.lisp=      | xdotool click → mouse-click event      |
+
+** 抓到的 bug（已修、紀念）
+
+- =minibuffer SPC 被吃掉=：=key_to_string= 把 Space 譯成 "SPC" 命名 key，
+  =minibuffer_handle_key= 只 accept printable 單字 char，兩條規則對撞、
+  空格永遠進不了 minibuffer text。所有 Qt-level / integration test 都
+  抓不到（用 explicit =:key "x"= 字串繞過 X11 keycode→char translation）。
+  =batch-os-type= 用 =xdotool type "hello world"= 立刻爆。
+
+這就是 OS-level 測試的 value——這類 bug 在 Qt-level 抹殺不到。
+
+* A. 鍵盤層
+
+** ★ A1. 全鍵盤打字 sweep
+
+怎麼測：
+  1. 開 minibuffer (=xdotool key slash=)
+  2. =xdotool type "abcdefghijklmnopqrstuvwxyz"= → 驗 minibuffer text
+  3. =xdotool type "ABCDEFGHIJKLMNOPQRSTUVWXYZ"= → 驗大寫
+  4. =xdotool type "0123456789"= → 驗數字
+  5. =xdotool type "!@#$%^&*()_+-=[]{};':\",./<>?"= → 驗符號
+  6. submit、驗 defcommand 收到完整字串
+
+為什麼測：
+  每個 char 的 X11 keycode 不同、shift modifier 是否被正確 handle、
+  Qt key_to_string 的 fallback 分支是否漏掉了某些。空格 bug 那種類型
+  的問題、很可能還有同類藏在某個符號上（例如 =`= 變 "BACKTICK"、
+  =;= 變 "SEMICOLON" 之類）。
+
+難度：1 小時。
+
+** A2. Backspace 在 minibuffer 刪字
+
+怎麼測：
+  1. =xdotool key slash= → open minibuffer
+  2. =xdotool type "hellp"=（故意打錯）
+  3. =xdotool key BackSpace= 一次
+  4. =xdotool type "o"=
+  5. submit → 驗 query = "hello"
+
+為什麼測：
+  =minibuffer_handle_key= 目前對 BS / TAB / 方向鍵都 =return false=
+  讓事件走 global keymap fallback。這代表現在按 BS 在 minibuffer 內**沒
+  作用**——這是設計遺漏、不是 by design。應該 BS 刪最後一字、minibuffer-
+  input event 帶縮短後的 text。
+
+難度：1 小時。但需要先決定/實作 backend 行為（是 SPEC 補充 + C++ 改）。
+
+** ★ A3. Tab 在 minibuffer（completion 預留）
+
+怎麼測：
+  1. open minibuffer
+  2. =xdotool key Tab=
+  3. 驗 backend 收到 minibuffer-tab event（暫無、需新增 wire event）
+
+為什麼測：
+  Tab 對應「completion 觸發」、SPEC §5.4 留了位但沒實作。寫測試先釘
+  契約、實作補上。
+
+難度：半天（含 SPEC 補 §5.4、wire event 設計）。
+
+** ★ A4. 方向鍵在 minibuffer 移 cursor
+
+怎麼測：
+  1. open minibuffer
+  2. =xdotool type "helo"=（漏 l）
+  3. =xdotool key Left=（3 次到 e 後面）
+  4. =xdotool type "l"=
+  5. submit → query = "hello"
+
+為什麼測：
+  =buffer/cursor-set= primitive 已有（v0.8 batch 3）、但 minibuffer 內
+  方向鍵是否真接到 cursor 還沒驗。如果沒接、就是「primitives 蓋好了
+  但沒接線」狀態、要釘住。
+
+難度：1–2 小時。可能需要 C++ 端在 minibuffer_handle_key 加 Left/Right
+處理。
+
+** ★ A5. 數字 prefix arg
+
+怎麼測：
+  1. 載入 demo init.lisp（j 綁 next-page）
+  2. =xdotool type "5"=
+  3. =xdotool key j=
+  4. 驗 page 從 0 跳到 5（不是 1）
+
+為什麼測：
+  SPEC §9.2 寫 =:interactive "p"= 接收 prefix arg、Emacs convention 是
+  輸入數字後下個 command 拿到 numeric prefix。今天的 dispatcher 沒這
+  機制——5 按下去只觸發 unbound key、然後 j 跳 1 頁。要驗「我們的 p
+  interactive spec 真實能用」就要做這條。
+
+難度：半天（涉及 dispatcher 累積 prefix state + 限定機制）。
+
+** ★ A6. Real Emacs-style multi-key prefix C-x C-f
+
+怎麼測：
+  1. =(limn:bind "C-x C-f" 'open-file-prompt)=（自定 defcommand）
+  2. =xdotool key ctrl+x=
+  3. =xdotool key ctrl+f=
+  4. 驗 minibuffer 開 prompt "Open file: "
+
+為什麼測：
+  我們測過 =g g=（無 modifier 兩鍵 prefix），但**沒測** =C-x C-f= 這種
+  「prefix 加 modifier」的常見 Emacs binding。limn/keys lookup-sequence
+  應該 handle、但沒實測過。
+
+難度：1 小時。
+
+** A7. Function keys F1–F12
+
+怎麼測：=xdotool key F1= → 驗 backend 收 key event 帶 key="<F1>" 或對等。
+
+為什麼測：F-keys 在 Qt 走特殊 enum、key_to_string 的 default branch
+回 "<key-NNN>" 可能讓使用者 bind 不到。
+
+難度：1 小時。
+
+** A8. PageUp / PageDown / Home / End
+
+怎麼測：對應 xdotool key Page_Up / Page_Down / Home / End。
+
+為什麼測：使用者翻頁的另一條入口（除了 j/k）。
+
+難度：1 小時。
+
+** A9. Key repeat / 高頻 input
+
+怎麼測：=xdotool key --repeat 100 --delay 10 j=、驗 page 走 100 次都對。
+
+為什麼測：dispatcher 在快速連發下不能掉 event、不能 reorder。pump
+thread 是否 keep up。
+
+難度：1–2 小時。
+
+** A10. 快速交替 jjjkjkjk
+
+怎麼測：=for i in j j j k j k j k; do xdotool key $i; done=、驗
+page 在這串後落在預期位置。
+
+為什麼測：A9 是「同一鍵連發」、這是「不同鍵交錯」、再加一層 cancel/
+context 切換的壓力。
+
+難度：1 小時。
+
+** A11. Meta key (macOS Cmd / Linux Alt) 語意對齊
+
+怎麼測：=xdotool key alt+x=、驗 backend 收到 mods=["alt"] 或 mods=
+["meta"]（看 Limn 怎麼設）。
+
+為什麼測：SPEC 沒明確規範 "meta"、"alt"、"super" 在不同平台對應誰。
+Linux X11 上 Alt 是 Mod1、macOS Cmd 是別的。Limn 內部約定 vs OS
+真實事件、要對齊。
+
+難度：半天（含 SPEC §6 補充 modifier naming 規範）。
+
+** A12. 三 modifier 組合 C-M-S-x
+
+怎麼測：=xdotool key ctrl+alt+shift+x=、驗 mods 陣列含三者、key="x"。
+
+為什麼測：=key_to_string= / =modifiers_to_array= 在多 modifier 下表
+現對不對；特別是 shift 跟 isPrint 的特殊邏輯（v0.8 batch 4 處理過）。
+
+難度：半小時。
+
+** A13. Caps Lock toggle 行為
+
+怎麼測：=xdotool key Caps_Lock=（toggle on）、=xdotool type "abc"=、
+驗 minibuffer text = "ABC"。
+
+為什麼測：Caps Lock 是 toggle state、不是 modifier。Qt 對它的處理
+可能跟一般 modifier 不同。
+
+難度：1 小時。
+
+** A14. Numpad keys
+
+怎麼測：=xdotool key KP_0/KP_1/.../KP_Add/KP_Enter=、驗 key strings
+對。
+
+為什麼測：Numpad 跟 main row 數字鍵 keycode 不同；如果 key_to_string
+fallback 走 "<key-NNN>"、使用者 bind "1" 抓不到 numpad 1。
+
+難度：半小時。
+
+* B. 滑鼠層
+
+我們只測過 left click 一個位置。整片 mouse 行為樹空白。
+
+** ★ B1. Right click / Middle click
+
+怎麼測：=xdotool click 3= 跟 =xdotool click 2=、驗 mouse-click event
+帶 button=3 / 2。
+
+為什麼測：=button_id= 在 =limn_input.cpp= 寫了三個 button、但只有 1
+被測過。
+
+難度：半小時。
+
+** ★ B2. Double click
+
+怎麼測：=xdotool click --repeat 2 --delay 100 1=、驗 backend 收到
+兩個 mouse-click event 還是一個 mouse-double-click event（看 SPEC
+怎麼定）。
+
+為什麼測：double click 是 text-select / annotation 標準入口。如果
+backend 沒 double click 概念、SPEC 要補。
+
+難度：1–2 小時（含 SPEC 確認）。
+
+** ★ B3. Scroll wheel up / down
+
+怎麼測：
+  1. 載 PDF
+  2. =xdotool click 5= (scroll down) 5 次
+  3. =limn:call "view/get"= 驗 offset-y 變大
+  4. =xdotool click 4= (scroll up) 5 次
+  5. 驗 offset-y 變小
+
+為什麼測：SPEC §6 有 =scroll= event、wire 端有實作，但 OS-level
+沒驗過真實 scroll wheel 路徑。
+
+難度：1 小時。
+
+** ★ B4. Horizontal scroll
+
+怎麼測：=xdotool click 6= / =xdotool click 7=（X11 button 6/7 =
+horiz scroll）、驗 backend 收 scroll event 帶 dx 不為 0。
+
+為什麼測：trackpad 兩指水平滑、Mac 環境很常見。Qt 上是同樣 wheel
+event 不同 angleDelta 方向。
+
+難度：1 小時。
+
+** ★ B5. Ctrl + scroll = zoom
+
+怎麼測：
+  1. =xdotool keydown ctrl=
+  2. =xdotool click 4= (scroll up)
+  3. =xdotool keyup ctrl=
+  4. 驗 =view/get= 的 zoom 增加
+
+為什麼測：Ctrl-scroll 是 zoom convention。Limn 有沒有 hook 這條？
+還是只走 scroll event？SPEC 該明訂。
+
+難度：1–2 小時。
+
+** ★ B6. Drag from A to B
+
+怎麼測：
+  1. =xdotool mousedown 1=
+  2. =xdotool mousemove 200 200=（拖到別處）
+  3. =xdotool mouseup 1=
+  4. 驗 backend 收到 mouse-drag event 帶 from/to coords（SPEC §6 有）
+
+為什麼測：drag 是 annotation 畫框、文字選取的入口。基礎 mouse-drag
+event 路徑要先打通。
+
+難度：1–2 小時。
+
+** B7. Hover 1 秒
+
+怎麼測：=xdotool mousemove X Y=、=sleep 1=、驗某種 hover event 或
+tooltip 出現。
+
+為什麼測：未來 hint mode、tooltip 都靠 hover。目前 SPEC 沒 hover
+event——要嗎？
+
+難度：1 天（涉及 SPEC 新 event type）。
+
+** B8. Click 不同 widget 區域
+
+怎麼測：
+  - click 中央（PDF viewport）→ mouse-click event 含 page+coord
+  - click 視窗最底（chrome bar）→ ？（應該不該 emit 同 event）
+  - click splitter handle → ？
+
+為什麼測：event filter 跟 widget hit-test 互動。chrome bar 上的 click
+不應該以為「在 PDF 上點」。
+
+難度：1 小時。
+
+** B9. Triple click
+
+怎麼測：=xdotool click --repeat 3 1=。
+
+為什麼測：選整段慣例。
+
+難度：半小時（同 B2 模式）。
+
+** B10. 快速連點同位置
+
+怎麼測：=for i in 1 2 3 4 5; do xdotool click 1; done= 在 50ms 內。
+
+為什麼測：debounce / race / 重複事件 drop 機制。
+
+難度：1 小時。
+
+** B11. Click 邊界 / 邊角
+
+怎麼測：絕對座標 (0,0)、(0, height-1)、splitter handle 上等。
+
+為什麼測：crash bug 常藏在 unusual coord 上。
+
+難度：1 小時。
+
+** B12. Drag splitter handle 改 pane 比例
+
+怎麼測：先 =bridge/win-split=、找 QSplitter handle 視覺位置、=mousedown
+=、=mousemove=、=mouseup=、驗 splitter sizes 改變。
+
+為什麼測：split 後使用者操作、目前完全沒測。
+
+難度：1 天（含 query splitter 幾何）。
+
+* C. IME 與國際化
+
+** ★ C1. 中文輸入（拼音透過 fcitx）
+
+怎麼測：
+  1. container 加 =nixpkgs.fcitx5= + =fcitx5-chinese-addons=
+  2. 設環境 =GTK_IM_MODULE=fcitx XMODIFIERS=@im=fcitx QT_IM_MODULE=fcitx=
+  3. 啟 fcitx daemon
+  4. =xdotool type "nihao"= 或用 IM 拼音 API 送「你好」
+  5. 驗 minibuffer text = "你好"
+  6. 驗 ime-commit event 觸發
+
+為什麼測：Limn 自我定位「Qt 版 Emacs」、Emacs IME 是痛點、Limn 要好。
+SPEC §6 有 ime-commit event、wire 端有寫、OS-level 沒驗。
+
+難度：1 天（IME setup 是大工程）。
+
+** C2. 日文輸入（mozc）
+** C3. 韓文輸入（hangul）
+
+同 C1 但換 IME。先做 C1、後兩個是 same pattern。
+
+** C4. Emoji input
+
+怎麼測：=xdotool type "$(echo '\u{1f600}')"= 或用 Unicode keycode。
+
+為什麼測：Qt 對多 codepoint Unicode 的處理。
+
+難度：1 小時。
+
+** ★ C5. PDF 檔名含中文字
+
+怎麼測：
+  1. =cp test.pdf "/tmp/你好世界.pdf"=
+  2. =(limn:call "bridge/engine-load" :|path| "/tmp/你好世界.pdf")=
+  3. 驗載入成功、view/get 回對
+
+為什麼測：filesystem encoding 經過 JSON → C++ QString → mupdf
+fz_open_document，是否全程 UTF-8 lossless。
+
+難度：1 小時。
+
+** C6. PDF 內含 CJK / 阿拉伯文 / RTL 文字
+
+怎麼測：用真 CJK PDF / 阿拉伯文 PDF、=buffer/text= 拿頁文字、驗
+Unicode 正確。
+
+為什麼測：mupdf 端 codepoint 正確、bridge JSON encode 正確。
+
+難度：半天（含 fixture PDF 準備）。
+
+** C7. 複製貼上 Unicode
+
+怎麼測：未來 select+copy 實作後、=xdotool key ctrl+c=、driver 從
+clipboard 讀回、驗 Unicode 對。
+
+為什麼測：clipboard event chain。
+
+難度：1 天（要先有 select/copy 功能）。
+
+* D. 視窗 / Frame 層
+
+** ★ D1. Resize window → resize event
+
+怎麼測：
+  1. =xdotool windowsize $WID 800 600=
+  2. drain events、看 resize event 是否到、帶 width=800 height=600
+
+為什麼測：SPEC §6 有 resize event、wire 端有實作、沒驗 OS-level。
+使用者拖視窗角時的真實路徑。
+
+難度：1 小時。
+
+** ★ D2. win-split 後鍵路由到 active window
+
+怎麼測：
+  1. =(limn:call "bridge/win-split" :|win-id| "w1" :|dir| "h")=（變兩 pane）
+  2. xdotool key j（按下時哪個 pane active？）
+  3. 驗只有 active pane 的 view 改變、另一個沒動
+
+為什麼測：v0.8 batch 5 做了 split 視覺、但「鍵走哪個 pane」
+完全沒驗。可能根本壞——共享 DocumentView 表示按 j 兩 pane 都動。
+這個測試會把這個 bug 釘出來。
+
+難度：1–2 小時。
+
+** D3. 多 OS window（v0.10 frame 系統）
+
+留到 frame 真實實作後。
+
+** D4. Window focus change
+
+怎麼測：start 兩個 Limn instance、=xdotool windowactivate $WID2=、
+驗 frame-focus / frame-blur event。
+
+為什麼測：SPEC §6 有 focus event。
+
+難度：1 小時。
+
+** D5. Minimize / maximize / restore
+
+怎麼測：=xdotool key alt+F9= 或 =wmctrl -r limn -b add,hidden=、看
+backend 怎麼反應。
+
+為什麼測：使用者真實操作、SPEC 沒明訂、要不要 emit event。
+
+難度：1 天（含 SPEC 設計）。
+
+* E. Minibuffer 進階
+
+** ★ E1. Type → BS → submit
+
+(同 A2、放這也合理)
+
+** ★ E2. 空 submit
+
+怎麼測：=xdotool key slash=、不打字、=xdotool key Return=、驗
+defcommand 收到空字串。
+
+為什麼測：empty input 是 valid edge case、不該 crash 或 hang。
+Emacs 行為：空 submit 給 nil 或 ""？我們是什麼？
+
+難度：半小時。
+
+** E3. set-text 從外部設值
+
+怎麼測：=minibuffer/open=、=minibuffer/set-text :text "prefill"=、
+驗 minibuffer 顯示 "prefill"、=xdotool type "X"=、驗 text = "prefillX"。
+
+為什麼測：completion 回填、history recall 都靠這條。
+
+難度：1 小時。
+
+** E4. set-prompt 開啟中切換
+
+怎麼測：=minibuffer/open :prompt "/"= → =minibuffer/set-prompt :prompt
+"Search: "=、視覺確認 prompt 換了（用截圖 or =minibuffer/get=）。
+
+為什麼測：dynamic prompt、SPEC §5.4 有命令。
+
+難度：半小時。
+
+** E5. 連續開兩次 minibuffer
+
+怎麼測：=minibuffer/open=、再 =minibuffer/open=（第二次）。應該怎麼
+反應？覆蓋？拒絕？SPEC 沒明訂。
+
+為什麼測：搞清楚 nested minibuffer 行為。
+
+難度：1 小時（含 SPEC 設計）。
+
+** E6. Type 1000 chars
+
+怎麼測：=xdotool type "$(python -c 'print("x"*1000)')"=、看
+minibuffer 是否 handles 長 text 不爆。
+
+為什麼測：buffer 累積上限、render 性能。
+
+難度：半小時。
+
+** E7. C-g 跟 printable g 在 minibuffer 開時的分歧
+
+怎麼測：
+  1. minibuffer open
+  2. =xdotool key g= → 應該 append "g" 到 text
+  3. =xdotool key ctrl+g= → 應該 cancel（走 global keymap）
+
+為什麼測：minibuffer_handle_key 的「modifier combo 走 global」邏輯
+是否真的對；之前的 test-modifier-combo-still-emits-key-event 是
+integration-level、現在 OS-level 補。
+
+難度：半小時。
+
+* F. 視覺驗證（screenshot-based）
+
+** ★ F1. test/grab-window 截圖比基準
+
+怎麼測：
+  1. 開固定 fixture PDF、設固定 page/zoom
+  2. =test/grab-window= 拿 PNG
+  3. 跟 =backend/tests/fixtures/golden/p0-z1.png= 比對
+  4. 差超過 threshold 紅
+
+為什麼測：visual regression、任何 paint code 改動會立刻看見。
+
+難度：半天（含 baseline image 產生 + 比對 helper）。
+
+** ★ F2. zoom 改變視覺真的反映
+
+怎麼測：=view/set zoom=1= 截圖 A、=view/set zoom=2= 截圖 B、驗 B 內
+PDF 內容比 A 大（簡單 pixel histogram 或 PNG size proxy）。
+
+為什麼測：zoom wire 命令真的影響渲染、不只改 state。
+
+難度：1 小時。
+
+** F3. Modeline 內容顯示正確
+
+怎麼測：=modeline/set :left "test"=、=test/grab-window=、OCR 或
+crop 比對「test」字樣出現在底部。
+
+為什麼測：v0.7 chrome widget 真的渲染、不只 state。
+
+難度：半天（含 OCR 或精確 crop 比對）。
+
+** F4. Echo area 訊息顯示
+
+怎麼測：=message/echo :text "hello"=、截圖、驗 echo area 區出現
+"hello"。
+
+為什麼測：同 F3、不同 chrome region。
+
+難度：半天。
+
+** F5. Overlay 在頁面上畫出來
+
+怎麼測：=view/overlays :overlays [{type: rect, page: 0, rect: [...]}]=、
+截圖、驗那塊區域有色塊。
+
+為什麼測：v0.10 計畫把 view/overlays 真接 paintGL、這是該功能的
+acceptance test。
+
+難度：1 天（v0.10 paintGL 接好之後才能跑）。
+
+* G. Multi-step 真使用者 scenarios
+
+** ★ G1. 開 PDF → j 翻 5 頁 → / search → 打字 → submit → echo 顯示 query
+
+怎麼測：（demo init.lisp 已有 / search-here 接 echo）
+  1. 載 PDF
+  2. =xdotool key j= ×5 → 驗 page = 5
+  3. =xdotool key slash=
+  4. =xdotool type "hello"=
+  5. =xdotool key Return=
+  6. =message/get= 或 =buffer/text :buffer-id "*messages*"= → 驗含
+     "Searching for: hello"
+
+為什麼測：串連多個 wire 命令、看「真實使用者一條 user story」是否
+真實能跑通。
+
+難度：1–2 小時。
+
+** ★ G2. init.lisp 定義 → 按鍵 → 動作 → introspection 找得到
+
+怎麼測：custom init.lisp 定義 =foo-cmd=、bind 到 "F"、xdotool key F、
+驗動作發生、=describe-command 'foo-cmd= 返回非 nil。
+
+為什麼測：使用者真實 customization 鏈條。
+
+難度：1 小時。
+
+** G3. Bookmark 持久化跨 session
+
+怎麼測：開 PDF、設 bookmark、close、reopen、驗 bookmark 還在。
+
+為什麼測：sqlite persistence、SPEC §5.3 metadata。
+
+難度：1 天（含 bookmark wire 命令確認）。
+
+** G4. 多 PDF 切換、各自狀態保留
+
+怎麼測：
+  1. 載 a.pdf 到 w1
+  2. 設 page = 3
+  3. 載 b.pdf 到 w1（換 buffer）
+  4. 載回 a.pdf
+  5. 驗 page 還是 3
+
+為什麼測：buffer state vs 視圖 state 分離是否正確。
+
+難度：1 小時。
+
+** ★ G5. Hot reload init.lisp
+
+怎麼測：載入 init A 版（bind "x" 印 A）、xdotool key x → 印 A、
+動態 =(load init-B)=（bind "x" 印 B）、xdotool key x → 印 B。
+
+為什麼測：runtime customization 的核心承諾、Emacs-style dev loop。
+
+難度：半天（含確認 limn:bind 真的能 override）。
+
+** G6. Init.lisp 內 error 不讓 Limn 開壞
+
+怎麼測：init.lisp 第一行寫 =(error "intentional")=、=limn:start= 應
+loud 拋 error 而不是默默繼續。
+
+為什麼測：「broken init 不該靜默」（commit comment 寫過）。
+
+難度：半小時。
+
+* H. Error / edge
+
+** ★ H1. 開不存在的 PDF
+
+怎麼測：=(limn:call "bridge/engine-load" :|path| "/nonexistent.pdf")=、
+應該 ok=false、error 訊息明確。
+
+為什麼測：error path 第一個 sanity；不該 crash、不該 hang。
+
+難度：半小時。
+
+** ★ H2. 按 unbound key 不該有 side effect
+
+怎麼測：drain events、=xdotool key F11=（沒綁），sleep、再 query
+view/get 狀態未變、沒 stray event 在 hook 內。
+
+為什麼測：dispatcher 對未綁定的 key 應該安靜。
+
+難度：半小時。
+
+** H3. Multiple C-g in rapid succession
+
+怎麼測：minibuffer open、=xdotool key ctrl+g= ×5 在 100ms 內、驗
+backend 沒堆積 cancellation、第二次以後 no-op。
+
+為什麼測：cancellation race。
+
+難度：1 小時。
+
+** H4. C-g 在沒 minibuffer 時 = no-op
+
+怎麼測：沒開 minibuffer、=xdotool key ctrl+g=、驗無 error、無 event
+side effect。
+
+為什麼測：keyboard-quit 對沒 canceller 的情況的 noop 路徑。
+
+難度：半小時。
+
+** H5. Malformed JSON 進 socket
+
+怎麼測：直接 raw socket send "{this is not json}\n"、驗 backend 不
+crash、回 error response 或忽略。
+
+為什麼測：bridge resilience。
+
+難度：1 小時。
+
+** H6. Unknown wire command
+
+怎麼測：=(limn:call "foo/bar/nonexistent")=、驗 ok=false。
+
+為什麼測：dispatch 對未知 command 的 fallback。
+
+難度：半小時。
+
+** H7. Frontend kill 中途
+
+怎麼測：開測試、=kill -9 $LIMN_PID= 中途、驗 backend SBCL 收到 EOF
+優雅退出、不 hang。
+
+為什麼測：peer 異常斷線的 resilience。
+
+難度：1 小時。
+
+** H8. 損壞的 PDF
+
+怎麼測：=echo "garbage" > /tmp/bad.pdf=、engine-load、驗 ok=false。
+
+為什麼測：mupdf 對非 PDF 內容的處理。
+
+難度：半小時。
+
+* I. 壓力 / 性能
+
+** I1. 100MB PDF 滾動
+
+怎麼測：找/造 大 PDF、xdotool scroll 100 次、看 frame time 跟
+memory growth。
+
+為什麼測：大檔效能 baseline。
+
+難度：1 天（含 fixture 準備、效能量測 infra）。
+
+** I2. 快速 1000 keystroke 不 drop
+
+怎麼測：=for i in {1..1000}; do xdotool key j; done=、驗 page 最終
+值正確。
+
+為什麼測：dispatcher / pump thread 高頻不掉。
+
+難度：1 小時。
+
+** ★ I3. 長時間 session 記憶體不漏
+
+怎麼測：跑 1 小時的混合操作、用 =ps -o rss= 或 valgrind 看 RSS 是
+否單調成長。
+
+為什麼測：memory leak 是 long-lived editor 致命傷。
+
+難度：1 天。
+
+** I4. 多 buffer / 多 mode / 多 binding 性能
+
+怎麼測：load 1000 個 fake buffer、register 1000 個 binding、measure
+key dispatch latency。
+
+為什麼測：O(n) vs O(1) lookup、未來規模化前確認。
+
+難度：半天。
+
+** I5. 同時 5 個 limn binary 各自獨立
+
+怎麼測：用不同 socket path 起 5 個、各自跑測試、互不干擾。
+
+為什麼測：global state contamination 風險。
+
+難度：1 小時。
+
+* J. 持久化 / 狀態
+
+** J1. 關閉 → 重開、視圖位置記得
+
+怎麼測：開、=view/set page=3=、close、reopen、=view/get= 驗 page=3。
+
+為什麼測：sioyek 原本 sqlite 記 last position、Limn 有沒繼承？
+
+難度：1 小時。
+
+** J2. Bookmark / annotation 寫進 sqlite
+
+(G3 重複，並到那邊)
+
+** J3. session.lisp save + restore
+
+怎麼測：v0.6 SPEC 提的 session 概念尚未實作；占位 entry。
+
+難度：v0.10+ feature work。
+
+* K. Lisp runtime OS-level 驗證
+
+** ★ K1. 同 spec 不同 mode 有不同 binding
+
+怎麼測：
+  1. init.lisp: =(limn:bind "j" 'cmd-A :mode 'pdf-mode)= +
+     =(limn:bind "j" 'cmd-B :mode 'text-mode)=
+  2. 切到 PDF buffer、xdotool key j → cmd-A 跑
+  3. 切到 text buffer、xdotool key j → cmd-B 跑
+
+為什麼測：SPEC v0.6 §9.1 keymap UX 的核心 invariant、OS-level 釘住。
+
+難度：1–2 小時（需 v0.10 keymap UX 實作後才能跑）。
+
+** K2. Hook 在 OS event 路徑上真的觸發
+
+怎麼測：register hook on event/key、xdotool key x、hook 被呼叫。
+
+為什麼測：hook system 不只 mock-level 工作。
+
+難度：半小時。
+
+** ★ K3. describe-key on demo binding 回正確
+
+怎麼測：載 demo init.lisp、=(limn/introspect:describe-key "j")=、
+回 plist 含 :action = next-page binding、:layer = :global。
+
+為什麼測：introspection 真的看到 binding（v0.8 batch 10 unit-level
+測過、e2e 沒）。
+
+難度：半小時。
+
+** K4. 多 minor mode active 時 precedence
+
+怎麼測：activate 兩 minor mode、各 bind "j" 不同 cmd、驗 newest first
+prevails。
+
+為什麼測：mode keymap stack 真實 OS-level 驗證。
+
+難度：1 小時。
+
+* L. 並行 / async
+
+** L1. 大頁渲染 + 同時鍵盤
+
+怎麼測：載 PDF、=view/set page=50= 觸發 render、render 沒回前 xdotool
+key j、看兩動作是否都正確處理。
+
+為什麼測：render queue 不阻 input。
+
+難度：1 天。
+
+** L2. 多 wire calls 並行
+
+怎麼測：Lisp 端開多 thread 同時呼叫不同 wire commands、驗都得到正
+確 response、不交錯。
+
+為什麼測：dispatch 的 pump-thread 在競爭下行為。
+
+難度：1 天。
+
+** L3. Render 中切 buffer：舊 result 不污染新 buffer
+
+怎麼測：buffer A render page 5、立刻切 buffer B、A 的 render 完成
+後不該畫到 B。
+
+為什麼測：async race / buffer state mix-up。
+
+難度：1 天。
+
+** L4. Minibuffer open + 鍵盤注入：時序
+
+怎麼測：=minibuffer/open=、立刻 xdotool key x、驗 x 進 minibuffer
+（不在 open 完成前 race 走 global）。
+
+為什麼測：minibuffer state 設定跟 input filter 的同步。
+
+難度：半天。
+
+* M. Bridge introspection（v0.10 §11 後）
+
+** ★ M1. bridge/list-primitives ⊇ SPEC 列出的所有 cmd
+
+怎麼測：
+  1. parse SPEC §5/§6/§7 拿所有 wire cmd 名稱
+  2. =(limn:call "bridge/list-primitives")=
+  3. 集合差異 = ∅
+
+為什麼測：SPEC vs code drift detector、v0.6 SPEC §11.5 寫定的承諾。
+
+難度：1 天（含 SPEC parser）。
+
+** ★ M2. bridge/trace-enable 後每 dispatch emit trace
+
+怎麼測：=bridge/trace-enable=、=view/get=、drain events、驗有
+bridge-trace event 含 cmd="view/get" duration-ms numeric。
+
+為什麼測：tracing infra 真的工作。
+
+難度：半天。
+
+** M3. describe-primitive 對每 cmd 回 metadata
+
+怎麼測：foreach cmd in list-primitives：describe-primitive、驗 :doc
+:required :since 都在。
+
+為什麼測：introspection 完整性。
+
+難度：1 小時。
+
+* N. Mode-specific
+
+** ★ N1. pdf-mode binding 在 PDF buffer 有效、chrome 無效
+
+怎麼測：在 PDF buffer 按 j → 翻頁、切到 =*messages*= buffer 按 j →
+不翻頁（chrome buffer 沒 pdf-mode）。
+
+為什麼測：mode-buffer 隔離真實在 OS-level 工作。
+
+難度：1 小時（需切 buffer 機制）。
+
+** N2. *messages* buffer 上 j 不翻頁
+
+(同 N1)
+
+** ★ N3. Mode 切換觸發 on-enter / on-exit hook
+
+怎麼測：define-mode 帶 on-enter print A、on-exit print B、activate
+新 major mode、驗順序 B → A。
+
+為什麼測：mode hook 真的在 OS-level state change 觸發。
+
+難度：1 小時。
+
+** N4. 多 buffer 各自獨立 mode-buffer 狀態
+
+怎麼測：buffer A 啟 minor mode X、buffer B 不啟、切換驗 keymap
+stack 各自獨立。
+
+為什麼測：mode-buffer per-buffer scope。
+
+難度：1 小時。
+
+* O. Engine boundary（為未來鋪路）
+
+** O1. bridge/capabilities 回 mupdf 支援的 wire 列表
+
+怎麼測：=(limn:call "bridge/capabilities")=、驗 return 含 "view/set"、
+"buffer/text" 等。
+
+為什麼測：SPEC §7 engine capability declaration。
+
+難度：半小時。
+
+** O2. Engine load 失敗時優雅報錯
+
+怎麼測：未來 web engine 載 invalid URL、驗 error response。
+
+為什麼測：engine switch 容錯。
+
+難度：v0.11+ web engine 後。
+
+** O3. Engine 換用 / multi-engine
+
+怎麼測：載 mupdf 到 w1、切 text engine 同 w1（如果允許）。
+
+為什麼測：buffer engine 是否可 hot-swap、SPEC 怎麼規範。
+
+難度：v0.11+。
+
+* 建議優先順序 cluster
+
+** Tier 1：當下開始做（high-ROI、basics）
+
+10 個、加起來估約 1 天工作：
+
+| # | entry | 目的                      |
+|---+-------+---------------------------|
+| 1 | A1    | 全鍵盤打字（抓 SPC 那類 bug） |
+| 2 | A4    | 方向鍵在 minibuffer         |
+| 3 | A5    | 數字 prefix arg            |
+| 4 | A6    | C-x C-f 真實 Emacs prefix  |
+| 5 | B1    | Right / middle click       |
+| 6 | B3    | Scroll wheel               |
+| 7 | B6    | Drag mousedown/up          |
+| 8 | D1    | Resize event               |
+| 9 | H1    | 開不存在的 PDF             |
+|10 | H2    | Unbound key 安靜           |
+
+** Tier 2：feature-blocked、等對應 implementation
+
+| # | entry | 等待                          |
+|---+-------+-------------------------------|
+| K1 | mode-local bindings | v0.10 keymap UX     |
+| F5 | overlay 渲染        | v0.10 paintGL        |
+| M1 | drift detector      | v0.10 §11 registry   |
+| M2 | trace               | 同上                  |
+| C1 | 中文 IME            | container 加 fcitx setup |
+| G3 | bookmark 持久化     | bookmark wire commands |
+
+** Tier 3：高階壓力 / 視覺 / 並行
+
+留到 v0.10+ infra ready：
+
+- F1 截圖比對 baseline
+- I1 大 PDF 滾動 perf
+- I3 long session memleak
+- L1–L4 並行 race
+- D3 / D4 多 frame
+
+** Tier 4：未來 feature 才有意義
+
+C7、O2、O3、J3 等 — 對應功能還沒有、寫測試會變空殼。
