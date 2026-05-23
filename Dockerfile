@@ -34,13 +34,16 @@ COPY sioyek/  /limn/sioyek/
 COPY backend/ /limn/backend/
 
 # Add the OS-level tools the e2e flow needs but the dev shell doesn't
-# (Xvfb / xdotool / x11vnc / sbcl / fonts). Done as a fresh nix-env install
-# rather than amending flake.nix because they aren't macOS dev needs.
+# (Xvfb / xdotool / x11vnc / sbcl / fonts + a minimal window manager so
+# Qt's xcb backend gets ICCCM-conformant focus/mouse delivery). Done as
+# a fresh nix-env install rather than amending flake.nix because they
+# aren't macOS dev needs.
 RUN nix-env -iA \
       nixpkgs.xorg.xvfb \
       nixpkgs.xdotool \
       nixpkgs.x11vnc \
       nixpkgs.xorg.xdpyinfo \
+      nixpkgs.openbox \
       nixpkgs.sbcl \
       nixpkgs.dejavu_fonts \
       nixpkgs.bash \

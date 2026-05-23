@@ -582,8 +582,17 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
         return true;
     }
     // Printable single-character key → accumulate into text.
+    // "SPC" is the named form of space — key_to_string in limn_input.cpp
+    // always returns "SPC" not " " (so binding "SPC" → cmd works), so
+    // minibuffer typing has to translate it back to a real space.
+    QString to_append;
     if (key.size() == 1 && key.at(0).isPrint() && !key.at(0).isSpace()) {
-        text_buffers["*minibuffer*"].append(key);
+        to_append = key;
+    } else if (key == "SPC") {
+        to_append = " ";
+    }
+    if (!to_append.isEmpty()) {
+        text_buffers["*minibuffer*"].append(to_append);
         if (auto* c = chrome_of(main_widget))
             c->set_minibuffer(true, minibuffer_prompt, text_buffers["*minibuffer*"]);
         ev.insert("text", text_buffers["*minibuffer*"]);

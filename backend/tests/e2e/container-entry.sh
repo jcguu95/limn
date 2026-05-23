@@ -11,7 +11,7 @@
 set -u
 
 # Start Xvfb in the background.
-Xvfb "${DISPLAY}" -screen 0 1280x800x24 -ac +extension RANDR \
+Xvfb "${DISPLAY}" -screen 0 1280x1024x24 -ac +extension RANDR \
      > /tmp/xvfb.log 2>&1 &
 XVFB_PID=$!
 
@@ -28,6 +28,14 @@ if ! xdpyinfo > /dev/null 2>&1; then
   exit 3
 fi
 
+# Start openbox — minimal WM. Without one, Qt's xcb backend doesn't get
+# proper focus events and mouse delivery to child widgets gets weird
+# (we hit this with batch-os-click: mouse-click event never fired even
+# though Qt window was visible at right coords).
+openbox --sm-disable > /tmp/openbox.log 2>&1 &
+OPENBOX_PID=$!
+sleep 0.3
+
 # Optional x11vnc for live debug (map -p 5900:5900 on host).
 if [ "${X11VNC:-0}" = "1" ]; then
   x11vnc -display "${DISPLAY}" -nopw -forever -shared \
@@ -36,9 +44,11 @@ if [ "${X11VNC:-0}" = "1" ]; then
 fi
 
 cleanup() {
-  if [ -n "${XVFB_PID:-}" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
-    kill "$XVFB_PID" 2>/dev/null || true
-  fi
+  for pid in ${OPENBOX_PID:-} ${XVFB_PID:-}; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
 }
 trap cleanup EXIT
 
