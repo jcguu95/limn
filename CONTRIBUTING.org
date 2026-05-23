@@ -176,6 +176,26 @@ docker run --rm -it -p 5900:5900 -e X11VNC=1 limn-e2e bash
 # 然後在 host：finder → 連線到伺服器 → vnc://localhost:5900
 #+end_src
 
+**快參考：cache 與乾淨狀態的平衡**
+
+預設 invocation pattern 已經同時達到「不重下載」+「每次乾淨狀態」：
+
+| 動作             | 行為                                          | 重跑成本          |
+|------------------+-----------------------------------------------+-------------------|
+| =docker build=   | layer cache、flake.nix 沒變秒級命中           | 1 秒（cache）     |
+| =docker run --rm= | =--rm= 確保 container 跑完銷毀、下次 fresh    | 12 秒（一次性）   |
+| flake.nix 改動   | 只重 build nix-store layer (10 分鐘)、其它走 cache | 10 分鐘        |
+
+**從零重 build**（極少需要——懷疑 image corrupted、或驗證 reproducibility）：
+
+#+begin_src bash
+docker image rm limn-e2e          # 釋放 ~3.77GB
+docker builder prune --all        # 釋放 ~30GB build cache
+docker build -t limn-e2e .        # 從零 (~10 分鐘 + 全下載)
+#+end_src
+
+Docker Desktop 整個 Linux state 存在 =~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw=（sparse 60GB）。
+
 Macros / xdotool 命令參考見 =backend/tests/e2e/batch-os-*.lisp= 內的
 =xdotool= helper（=sb-ext:run-program= 包 xdotool key/mouse 等）。
 
