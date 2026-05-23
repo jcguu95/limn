@@ -128,50 +128,56 @@ EOF
 *** 3.2 跑哪些
 
 #+begin_src bash
-# unit (純 Lisp，秒級)
-nix develop --command sbcl --script backend/tests/unit/run-unit.lisp
+# 一鍵跑全部四層（推薦）
+bash backend/tests/run-all-tiers.sh
 
-# integration (跑 limn binary，30 秒級)
-nix develop --command bash backend/tests/run-tests.sh
+# 跳過最慢的 os-e2e（不需要 docker 起來時）
+bash backend/tests/run-all-tiers.sh --no-os
 
-# e2e (跑 limn binary + 真實 backend Lisp client，分鐘級)
-bash backend/tests/e2e/run-e2e.sh
+# 個別跑
+nix develop --command sbcl --script backend/tests/unit/run-unit.lisp   # 秒級
+nix develop --command bash backend/tests/run-tests.sh                  # 30 秒
+bash backend/tests/e2e/run-e2e.sh                                       # 30 秒
+docker run --rm limn-e2e                                                # 1 分鐘
 #+end_src
 
-三個都該綠才 commit。
+四個都該綠才 commit。
 
-**三層各自負責什麼**：
+**四層各自負責什麼**：
 
-| 層       | 驅動                         | 覆蓋                                       |
-|----------+------------------------------+--------------------------------------------|
-| unit     | mock client（in-memory FIFO） | 純 Lisp 邏輯、各 module 隔離               |
-| integration | 真 limn binary、raw JSON wire | C++ 端 + bridge 協議                       |
-| e2e      | 真 limn binary、真 backend Lisp client | 使用者實際走的鏈條（key → command → ...） |
+| 層          | 驅動                                | 覆蓋                                       |
+|-------------+-------------------------------------+--------------------------------------------|
+| unit        | mock client（in-memory FIFO）         | 純 Lisp 邏輯、各 module 隔離               |
+| integration | 真 limn binary、raw JSON wire        | C++ 端 + bridge 協議                       |
+| qt-e2e      | 真 limn binary、真 backend Lisp client、Qt-level inject | Qt event filter ↓ 整條 Lisp 鏈 |
+| os-e2e      | container 內、Xvfb + xdotool、real X11 events | 加上 OS HID → AppKit-equiv → Qt 那段     |
 
 unit + integration 都刻意避開 =limn.lisp / limn/cmd / limn/runtime=。
-e2e 補這個缺口。**新加跨模組功能時**寫一個 e2e driver，存到
-=backend/tests/e2e/batch*.lisp=（細節見該目錄 README）。
+qt-e2e 補這個缺口。os-e2e 再補「真實 OS keystroke」那層。**新加跨模組
+功能時**寫 e2e driver pair（=batch*-qt.lisp= + =batch*-os.lisp=），存到
+=backend/tests/e2e/=。細節見該目錄 README。
 
-**已知限制 + 下一步**：當前 e2e 用 =test/inject-qt-key= 走 Qt-level
-注入，覆蓋 Qt event filter 以下整條 Lisp 鏈，但 macOS HID → AppKit
-→ QApplication 那段沒測。macOS 上 OS-level 鍵盤注入需要 Accessibility
-授權（=osascript=、=cliclick=），不適合 default suite。
+**OS-level e2e 怎麼跑**：
 
-下一個 implementation milestone（v0.9）整個焦點放在這層補完：
+container 用 nix-based Debian image（=Dockerfile= 在 repo 根目錄）。
+=nixos/nix:latest= base + flake.nix 提供 Qt 6.11 / mupdf 1.27+，跟
+macOS dev shell 完全同版本。container 內 Xvfb + xdotool + sbcl 全
+nix-managed。
 
-- Debian slim container（最小、Qt6 兼容性穩）
-- Xvfb 虛擬 X server
-- =xdotool= 提供 zero-permission OS-level keyboard / mouse / hover /
-  scroll / window-focus 注入
-- 每個既有 =batch*-qt.lisp= 寫一個 =batch*-os.lisp= 對等版
-- =backend/tests/run-all-tiers.sh= 一鍵跑三層
+#+begin_src bash
+# build (~5-10 分鐘第一次、後續 layer cache)
+docker build -t limn-e2e .
 
-container 化的好處：dev local + 任何 Linux runner 用同一個 image、
-bit-exact 可重現。Local debug 可用 x11vnc 從 macOS Screen Sharing 連
-=localhost:5900= 看 container 內 Limn 視窗真的被 xdotool 按。
+# run e2e (~1 分鐘)
+docker run --rm limn-e2e
 
-注意：testing 基礎建設不在 LIMN-SPEC 範圍——SPEC 是產品合約（wire 協議、
-runtime 行為），這層是開發過程。兩件事分家。
+# live debug (看 container 內 Limn 視窗、xdotool 按下去你看得到)
+docker run --rm -it -p 5900:5900 -e X11VNC=1 limn-e2e bash
+# 然後在 host：finder → 連線到伺服器 → vnc://localhost:5900
+#+end_src
+
+Macros / xdotool 命令參考見 =backend/tests/e2e/batch-os-*.lisp= 內的
+=xdotool= helper（=sb-ext:run-program= 包 xdotool key/mouse 等）。
 
 *** 3.3 自驗 GUI 改動
 
