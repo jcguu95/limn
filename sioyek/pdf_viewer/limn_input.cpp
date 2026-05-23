@@ -164,6 +164,13 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             bridge->push_event("key", e);
             break;
         }
+        case QEvent::MouseButtonDblClick:
+            // Qt 把「短時間內第二次按鍵」合併成 MouseButtonDblClick、
+            // 不再 fire MouseButtonPress。為了讓 xdotool click --repeat
+            // 2 (或人類雙擊) 在 backend 看起來就是兩個 mouse-click event、
+            // 把 DblClick 直接 fall-through 到 Press 的處理。v0.10
+            // batch 2 B2 caught it.
+            [[fallthrough]];
         case QEvent::MouseButtonPress: {
             auto* mev = static_cast<QMouseEvent*>(ev);
             QJsonObject e;

@@ -254,12 +254,24 @@ scroll / resize）、其餘 ~11 個沒問。
 
 預估：2–3 entry fail + 修、其餘綠。半天工作。
 
-*** Batch 2：滑鼠完整 sweep                          ~半天
+*** Batch 2：滑鼠完整 sweep                          ~半天 ✓ DONE
 
-- [ ] B1   right/middle click (button 2/3)
-- [ ] B2   double click
-- [ ] B3   scroll wheel up/down
-- [ ] B6   drag mousedown/move/up
+- [X] B1   right/middle click (button 2/3)
+- [X] B2   double click
+- [X] B3   scroll wheel up/down
+- [X] B6   drag mousedown/move/up
+
+順手抓 + 修：
+
+- 【B2 修】QEvent::MouseButtonDblClick 沒接、雙連點只觸發 1 個
+  mouse-click event。修：fall-through 到 MouseButtonPress 處理，
+  雙擊 = 2 個 mouse-click event（符合直觀）。
+- 【B6 修】widget_to_page_norm 對 NaN coords 還 return true、害
+  下游 page-norm 計算出 NaN 序列化成 JSON null。修：std::isfinite
+  檢查、NaN 回 false、上游 fallback 到 pixel coords。
+- 【副作用】batch-os-click 之前依賴 NaN 矇混過去的 page>=0 assertion
+  現在正確失敗 → 改成 (integerp page) 不強求 >= 0（page=-1 是
+  Xvfb 下合法 fallback、不是 bug）。
 
 為什麼這時：mouse-click 只測過 left click on one position；B6 整條
 drag 鏈條從未走過 OS-level。
