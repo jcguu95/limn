@@ -11,6 +11,8 @@
 //   view/set, view/get
 //   buffer/open, buffer/close
 //
+#include "gap_buffer.h"
+
 #include <QObject>
 #include <QJsonObject>
 #include <QString>
@@ -210,8 +212,8 @@ private:
     // §1.2 says all chrome text surfaces are text-engine buffers; this
     // is where that promise materialises. ChromeBar (Qt widget) just
     // reads the strings via the helpers below.
-    QHash<QString, QString> text_buffers;
-    QHash<QString, int>     text_cursors;     // per-buffer cursor (offset)
+    QHash<QString, GapBuffer> text_buffers;
+    QHash<QString, int>       text_cursors;   // per-buffer cursor (UTF-16 offset)
     int                     next_text_seq = 1;
 
     // ─── minibuffer meta-state (SPEC §5.4) ─────────────────────────

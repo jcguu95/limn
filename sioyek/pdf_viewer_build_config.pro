@@ -45,6 +45,7 @@ HEADERS += \
     pdf_viewer/limn_options.h \
     pdf_viewer/limn_buffer_registry.h \
     pdf_viewer/limn_bridge.h \
+    pdf_viewer/gap_buffer.h \
     pdf_viewer/limn_command.h \
     pdf_viewer/limn_engine_mupdf.h \
     pdf_viewer/limn_input.h \
@@ -70,6 +71,7 @@ SOURCES += \
     pdf_viewer/limn_options.cpp \
     pdf_viewer/limn_buffer_registry.cpp \
     pdf_viewer/limn_bridge.cpp \
+    pdf_viewer/gap_buffer.cpp \
     pdf_viewer/limn_command.cpp \
     pdf_viewer/limn_engine_mupdf.cpp \
     pdf_viewer/limn_input.cpp \
