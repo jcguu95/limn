@@ -309,6 +309,17 @@
         (when (and tinstall (fboundp tinstall))
           (handler-case (funcall (symbol-function tinstall))
             (error () nil))))
+      ;; v0.30: wire buffer-modified events → marker fixup engine.
+      ;; Idempotent. If limn/marker isn't loaded, silently skip — the
+      ;; module is optional for binaries that don't track marker state.
+      (let* ((mpkg (find-package '#:limn/marker))
+             (minstall (and mpkg (find-symbol "INSTALL-BUFFER-MODIFIED-HANDLER"
+                                              mpkg))))
+        (when (and minstall (fboundp minstall))
+          (handler-case (funcall (symbol-function minstall))
+            (error (e)
+              (format *error-output*
+                      "limn: marker handler install failed: ~a~%" e)))))
       (when init-chrome (funcall init-chrome)))))
 
 (defun start (socket-path)

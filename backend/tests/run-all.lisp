@@ -73,7 +73,9 @@
                  ;; v0.25 face/theme
                  "suites/defface-v025.lisp"
                  ;; v0.27 pdf-mode
-                 "suites/pdf-mode-v027.lisp"))
+                 "suites/pdf-mode-v027.lisp"
+                 ;; v0.30 markers + buffer-local (wire round-trip)
+                 "suites/marker-v030.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)
