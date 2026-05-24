@@ -2,18 +2,18 @@
 ;;;;
 ;;;; Exercises the full advice pipeline end-to-end:
 ;;;;   1. Define a plain function (v025-test-fn) with an fdefinition.
-;;;;   2. Wrap it in a defcommand and bind to key "F9".
+;;;;   2. Wrap it in a defcommand and bind to key "z".
 ;;;;   3. Add :before / :after / :around advice that each push a
 ;;;;      keyword onto *v025-log*.
-;;;;   4. xdotool key F9 → Qt key event → bridge "key" event →
+;;;;   4. xdotool key z → Qt key event → bridge "key" event →
 ;;;;      background pump thread → Lisp dispatch → command → advised fn.
 ;;;;   5. Verify all advice keywords appear in *v025-log*.
-;;;;   6. advice-remove all three → inject F9 again → only :cmd
+;;;;   6. advice-remove all three → inject z again → only :cmd
 ;;;;      appears (bare fn still runs; no advice).
 ;;;;
 ;;;; Xvfb + xdotool required.
 ;;;;
-;;;; Ω1  :before advice fires (after F9 keypress)
+;;;; Ω1  :before advice fires (after z keypress)
 ;;;; Ω2  :after advice fires
 ;;;; Ω3  :cmd (bare fn body) fires
 ;;;; Ω4  :around advice fires
@@ -83,7 +83,7 @@
   ;;; ── define fn + command + key binding ────────────────────────────────
   ;;
   ;; v025-test-fn has a real fdefinition so advice-add can instrument it.
-  ;; The defcommand wraps it; limn:bind connects it to key "F9".
+  ;; The defcommand wraps it; limn:bind connects it to key "z".
   (defparameter *v025-log* nil)
 
   (defun v025-test-fn ()
@@ -92,7 +92,7 @@
   (limn/cmd:defcommand v025-advice-cmd (:interactive nil)
     (lambda () (v025-test-fn)))
 
-  (limn:bind "F9" 'v025-advice-cmd)
+  (limn:bind "z" 'v025-advice-cmd)
 
   ;;; ── install three advice types (keep refs for removal) ──────────────
   (defparameter *adv-before* (lambda ()       (push :before *v025-log*)))
@@ -103,9 +103,9 @@
   (limn/advice:advice-add 'v025-test-fn :after  *adv-after*)
   (limn/advice:advice-add 'v025-test-fn :around *adv-around*)
 
-  ;;; ── Ω1-Ω4: inject F9 and verify all advice fire ───────────────────────
-  (format t "~%── Ω1-Ω4: F9 keypress → advice pipeline ──~%")
-  (xdotool "key" "F9")
+  ;;; ── Ω1-Ω4: inject z and verify all advice fire ───────────────────────
+  (format t "~%── Ω1-Ω4: z keypress → advice pipeline ──~%")
+  (xdotool "key" "--clearmodifiers" "z")
   (sleep 0.4)    ; allow background pump to process the key event
 
   (check (format nil "Ω1 :before advice fired (log=~s)" *v025-log*)
@@ -118,13 +118,13 @@
          (member :around *v025-log*))
 
   ;;; ── Ω5: advice-remove all → only :cmd fires next time ─────────────────
-  (format t "~%── Ω5: advice-remove → no advice on next F9 ──~%")
+  (format t "~%── Ω5: advice-remove → no advice on next z ──~%")
   (limn/advice:advice-remove 'v025-test-fn *adv-before*)
   (limn/advice:advice-remove 'v025-test-fn *adv-after*)
   (limn/advice:advice-remove 'v025-test-fn *adv-around*)
 
   (let ((len-before (length *v025-log*)))
-    (xdotool "key" "F9")
+    (xdotool "key" "--clearmodifiers" "z")
     (sleep 0.4)
     (let ((delta (- (length *v025-log*) len-before)))
       ;; bare fn still runs → exactly one :cmd pushed, no :before/:after/:around

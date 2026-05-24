@@ -53,10 +53,13 @@
 (defun ok? (r) (eq (getf r :|ok|) t))
 (defun data (r) (getf r :|data|))
 
-;;; helper: find a face entry by name in a sync-faces-payload list
+;;; helper: find a face entry by name in a sync-faces-payload list.
+;;; NOTE: payload uses regular keywords (:name :foreground …), not the
+;;; case-preserving |name|-form used for JSON-decoded wire payloads —
+;;; sync-faces-payload is a *pre*-encode plist constructed in Lisp.
 (defun find-face-entry (payload name)
   (find name payload
-        :key (lambda (p) (getf p :|name|))
+        :key (lambda (p) (getf p :name))
         :test #'string=))
 
 (format t "~%=== batch-os-v025-face-sync ===~%")
@@ -100,7 +103,7 @@
            (and (listp payload)
                 (plusp (length payload))
                 (every (lambda (p)
-                         (and (listp p) (stringp (getf p :|name|))))
+                         (and (listp p) (stringp (getf p :name))))
                        payload)))
     (let* ((entry (find-face-entry payload "v025-test-face")))
       (check (format nil "Ω3b v025-test-face entry present in payload (got ~s)" entry)
@@ -124,19 +127,23 @@
          (entry   (find-face-entry payload "v025-test-face")))
     (check (format nil "Ω6a payload carries theme color \"#ff0000\" (entry=~s)" entry)
            (and entry
-                (equal (getf entry :|foreground|) "#ff0000")))
+                (equal (getf entry :foreground) "#ff0000")))
     (let ((r (limn:call "display/sync-faces" :|faces| payload)))
       (check (format nil "Ω6b display/sync-faces after enable-theme → ok (got ~s)"
                      (getf r :|ok|))
              (ok? r))))
 
   ;;; ── Ω7: disable-theme restores + final resync ─────────────────────────
+  ;; disable-theme reverts to *face-defaults* — that's the defface
+  ;; baseline ("#00ff00"), NOT the latest set-face-attribute value.
+  ;; This matches Emacs deftheme semantics: themes overlay defaults, and
+  ;; disabling pops the overlay back to the pristine defface state.
   (format t "~%── Ω7: disable-theme ──~%")
   (limn/face:disable-theme 'v025-test-theme)
 
   (let ((fg (limn/face:face-attribute 'v025-test-face :foreground)))
-    (check (format nil "Ω7a disable-theme restores :foreground → \"#0000ff\" (got ~s)" fg)
-           (equal fg "#0000ff")))
+    (check (format nil "Ω7a disable-theme restores to defface baseline \"#00ff00\" (got ~s)" fg)
+           (equal fg "#00ff00")))
 
   (let ((r (limn:call "display/sync-faces" :|faces| (limn/face:sync-faces-payload))))
     (check (format nil "Ω7b display/sync-faces after disable-theme → ok (got ~s)"
