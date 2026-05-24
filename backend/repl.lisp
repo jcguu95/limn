@@ -70,6 +70,11 @@
                 "limn-text-nav.lisp"
                 "limn-map-macro.lisp"
                 "limn-which-key.lisp"
+                ;; v0.30 markers + buffer-local vars (foundation for v0.32)
+                "limn-marker.lisp"
+                "limn-local.lisp"
+                ;; v0.32 current-buffer / save-excursion / narrow
+                "limn-excursion.lisp"
                 ;; bootstrap (last)
                 "limn.lisp"))
   (load (b/ file)))
