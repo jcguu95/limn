@@ -78,6 +78,9 @@
                 "limn-coding.lisp"
                 ;; v0.32 current-buffer / save-excursion / narrow
                 "limn-excursion.lisp"
+                ;; v0.35 file-notify + auto-revert + process I/O coding
+                "limn-file-notify.lisp"
+                "limn-auto-revert.lisp"
                 ;; bootstrap (last)
                 "limn.lisp"))
   (load (b/ file)))

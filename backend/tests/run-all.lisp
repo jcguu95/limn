@@ -79,7 +79,9 @@
                  ;; v0.31 syntax tables + coding systems (wire round-trip)
                  "suites/syntax-coding-v031.lisp"
                  ;; v0.32 current-buffer / save-excursion / narrow
-                 "suites/excursion-v032.lisp"))
+                 "suites/excursion-v032.lisp"
+                 ;; v0.35 file-notify + auto-revert + process-coding
+                 "suites/file-notify-v035.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)

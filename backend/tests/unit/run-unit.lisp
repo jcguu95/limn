@@ -82,7 +82,10 @@
                 "limn-syntax.lisp"
                 "limn-coding.lisp"
                 ;; v0.32 module
-                "limn-excursion.lisp"))
+                "limn-excursion.lisp"
+                ;; v0.35 modules
+                "limn-file-notify.lisp"
+                "limn-auto-revert.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -147,7 +150,11 @@
                 "syntax-v031.lisp"
                 "coding-v031.lisp"
                 ;; v0.32 RED tests — expected to fail until impl lands
-                "excursion-v032.lisp"))
+                "excursion-v032.lisp"
+                ;; v0.35 RED tests — expected to fail until impl lands
+                "file-notify-v035.lisp"
+                "auto-revert-v035.lisp"
+                "process-coding-v035.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

@@ -4,6 +4,101 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.35.0 — file-notify + auto-revert + process I/O coding
+:PROPERTIES:
+:DATE: 2026-05-24
+:END:
+
+把「外部世界變化」這條打通：檔案被別的程式改、subprocess 用不同
+編碼講話，現在都進得了 Limn 不會破。三件事全部純 Lisp、C++ 一行
+不改、只多 Dockerfile 一個 nix package（=inotify-tools=）。
+
+** §A file-notify — OS 檔案監視（=backend/limn-file-notify.lisp=）
+- API 對齊 Emacs =filenotify.el=：=file-notify-add-watch= /
+  =file-notify-rm-watch= / =file-notify-valid-p=
+- 兩條路徑：
+  - **OS helper subprocess** — 開機 probe =inotifywait=（Linux）/
+    =fswatch=（macOS），spawn 一個長住的 watcher、stdout 每行一個
+    event、parse 後 deliver 到對應 callback
+  - **Polling fallback** — 沒有 helper 時 =stat= mtime + size、
+    用 =dispatch-poll-tick= 推進；任一變化觸發 =:modified=
+- 五個 action keyword：=:created= =:deleted= =:modified= =:renamed=
+  =:attribute-changed=（=:attribute-change= flag 過濾後兩者以外的事件）
+- Helper 死了 reaper 重啟，watch 不丟（=helper-respawn-count= 可
+  inspect、=simulate-helper-exit= 是 test hook）
+- Callback 包在 =limn/error:%call-with-protection= 內，一個壞 cb
+  不會打斷整條 dispatcher
+- Directory watch：watch =/tmp/dir=、=/tmp/dir/file= 變化也派送
+  （Emacs 慣例）
+- 完整 vtable（=*file-notify-helper-spawn-fn*= /
+  =*file-notify-helper-probe-fn*= / =*file-notify-stat-fn*= /
+  =*file-notify-exists-p-fn*= / =*file-notify-now-fn*=）讓 unit
+  tests 完全不碰 OS
+
+** §B auto-revert-mode（=backend/limn-auto-revert.lisp=）
+- =(auto-revert-mode BUF)= toggle 單 buffer
+- =(global-auto-revert-mode 1)= 對所有 file-backed buffer 啟用、
+  =-1= 全關
+- =(auto-revert-tail-mode BUF)= log-tail 模式：revert 後 cursor
+  自動 =goto-char point-max=
+- 規則（與 Emacs 等價）：file-notify 報 =:modified= 或
+  =:attribute-changed= → 若 buffer **沒有未存改動** 自動
+  =revert-buffer :confirm nil=；**有 modified** → =message= 警告
+  但不動 buffer
+- =(tick)= reconciliation pass：dead buffer 自動拔 watch、global
+  mode 開時自動補新 file buffer
+- =*auto-revert-interval*= 預設 5 秒（無 file-notify 時 fallback
+  polling 用）
+- vtable：=*revert-buffer-fn*= / =*buffer-modified-p-fn*= /
+  =*visited-file-name-fn*= / =*buffer-list-fn*= /
+  =*file-notify-add-fn*= / =*file-notify-rm-fn*= 等，
+  全部可注入
+
+** §C process I/O coding（擴 =backend/limn-process.lisp=）
+- =make-process= 多三個 kwarg：
+  - =:coding-system 'utf-8= — 雙向
+  - =:decode-coding-system 'big5= — 只解 stdout
+  - =:encode-coding-system 'utf-8= — 只編 stdin
+- 全域：=*default-process-coding-system*= = ='(utf-8 . utf-8)=
+  （read . write）；spawn 沒指定 coding 時套用
+- buffer-local：=*buffer-process-coding-system*= placeholder
+  (when 一個 buffer 接到 process 時 layer 可優先讀)
+- 兩個新 accessor：=process-decode-coding= / =process-encode-coding=
+- 實作：底層 SBCL stream 仍 =:external-format :latin-1=（raw bytes
+  per-char），讀回時把 char-code 重新打包成
+  =(vector (unsigned-byte 8))=，走 v0.31 =limn/coding:decode-coding-string=
+  解；寫 stdin 反向。
+- **Decode failure 安全**：encode failure 升 error 給 caller；
+  decode failure（如 0xFF 餵 utf-8）lossless fallback 回 latin-1
+  字串（既有 =process-a7-non-utf8-bytes-do-not-crash= 仍綠）
+- 向下相容：不傳 coding kwarg 走 default utf-8 pair → ASCII 完全
+  不受影響（既有 116 process tests 全綠、0 regression）
+
+** §A+B 依賴鏈
+- v0.23 =limn/process= → 給 §A spawn 用 + 給 §C 直接擴
+- v0.24 =limn/file:revert-buffer= → 給 §B 重讀
+- v0.30 buffer-local vars → 給 §B *auto-revert-interval* 等
+- v0.31 =limn/coding:decode-coding-string= → 給 §C 換轉
+
+** Container
+- =Dockerfile= 加 =nixpkgs.inotify-tools=（容器多 ~2MB，給 OS-tier
+  的真 inotifywait 用）
+
+** 測試成績
+- **Unit-tier**: 2154 passed / 0 failed
+  - v0.35 新增 76 deftest（A 38 + B 22 + C 16）全綠
+  - 既有 2078 維持綠、0 regression
+- **Qt-tier**: =suites/file-notify-v035.lisp= 2 deftest（T1 auto-revert
+  真實檔案 round-trip / T2 process-coding CJK pipe）
+- **OS-tier**: =batch-os-v035-auto-revert.lisp= 6 Ω-checks
+  （inotifywait probe / 真 file-notify event / auto-revert e2e /
+  tail-mode cursor / utf-8 round-trip / big5 decode）
+
+** 不做的（與 SPEC 一致）
+- 不做 TRAMP（遠端檔案）
+- 不做 VC git diff hook
+- 不做 file-lock（=.#file=）—— 使用率低、留 v0.36+
+
 * v0.25.0 — Interaction & Introspection (defface / text-props / completion / history / help / advice / defcustom)
 :PROPERTIES:
 :DATE: 2026-05-23

@@ -57,7 +57,8 @@ RUN nix-env -iA \
       nixpkgs.fcitx5 \
       nixpkgs.kdePackages.fcitx5-chinese-addons \
       nixpkgs.wmctrl \
-      nixpkgs.xorg.xprop
+      nixpkgs.xorg.xprop \
+      nixpkgs.inotify-tools
 
 # Now copy the actual source. Only this and the build step below get
 # re-run on incremental changes.
