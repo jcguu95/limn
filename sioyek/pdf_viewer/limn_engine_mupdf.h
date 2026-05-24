@@ -29,6 +29,13 @@ QJsonObject extract_page_text    (Document* doc, int page);
 QJsonArray  extract_page_links   (Document* doc, int page);
 QJsonObject extract_metadata     (Document* doc);
 
+// v0.27: text search across all pages. Returns {"hits": [{page, rects}, ...]}.
+// case_sensitive == false: MuPDF's default needle-match is case-insensitive
+//                          for the ASCII subset; that's good enough for now.
+QJsonObject extract_search_hits  (Document* doc,
+                                   const QString& query,
+                                   bool case_sensitive);
+
 // ── Phase 5: rendering ───────────────────────────────────────────────────
 
 QJsonObject render_page_to_png   (Document* doc, int page, int dpi);

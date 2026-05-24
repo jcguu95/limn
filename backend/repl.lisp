@@ -24,10 +24,13 @@
 ;;; ── load all backend modules in dependency order ──────────────────────
 
 (dolist (file '("limn-hooks.lisp"
+                "limn-log.lisp"
+                "limn-error.lisp"
                 "limn-buffer.lisp"
                 "limn-bridge.lisp"
                 "limn-keys.lisp"
                 "limn-undo.lisp"
+                "limn-buffer-undo.lisp"
                 "limn-search.lisp"
                 "limn-client.lisp"
                 "limn-dispatch.lisp"
@@ -35,14 +38,13 @@
                 "limn-cmd.lisp"
                 "limn-runtime.lisp"
                 "limn-introspect.lisp"
+                "limn-custom.lisp"            ; v0.25 — pdf-mode defcustom needs it
+                "limn-history.lisp"           ; v0.25 — search-history integration
                 "limn-text-mode.lisp"
-                ;; v0.23
+                ;; v0.23 runtime core
                 "limn-process.lisp"
                 "limn-timer.lisp"
-                "limn-error.lisp"
-                "limn-buffer-undo.lisp"
-                "limn-log.lisp"
-                ;; v0.24
+                ;; v0.24 edit model
                 "limn-kill.lisp"
                 "limn-mark.lisp"
                 "limn-register.lisp"
@@ -51,17 +53,18 @@
                 "limn-auto-save.lisp"
                 "limn-backup.lisp"
                 "limn-recentf.lisp"
-                ;; v0.25
+                ;; v0.25 interaction (limn-custom / limn-history loaded above
+                ;; ahead of text-mode because pdf-mode defcustom needs them).
                 "limn-face.lisp"
                 "limn-text-props.lisp"
                 "limn-completion.lisp"
-                "limn-history.lisp"
                 "limn-help.lisp"
                 "limn-advice.lisp"
-                "limn-custom.lisp"
-                ;; v0.26
+                ;; v0.26 search UI
                 "limn-isearch.lisp"
                 "limn-occur.lisp"
+                ;; v0.27 pdf-mode (depends on v0.25 custom/history/completion)
+                "limn-pdf-mode.lisp"
                 "limn.lisp"))
   (load (b/ file)))
 
