@@ -75,7 +75,9 @@
                  ;; v0.27 pdf-mode
                  "suites/pdf-mode-v027.lisp"
                  ;; v0.30 markers + buffer-local (wire round-trip)
-                 "suites/marker-v030.lisp"))
+                 "suites/marker-v030.lisp"
+                 ;; v0.33 視覺系統：overlays + face wire + region
+                 "suites/overlays-v033.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)
