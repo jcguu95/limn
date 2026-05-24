@@ -4,6 +4,10 @@
 #include <qstandardpaths.h>
 #include <qdir.h>
 #include <QSplitter>
+#include <QStackedWidget>
+#include <QPlainTextEdit>
+#include <QFont>
+#include <QTextOption>
 
 #include "document.h"
 #include "document_view.h"
@@ -58,7 +62,34 @@ MainWidget::MainWidget(QWidget* parent) : QMainWindow(parent) {
     chrome_bar_       = new LimnChromeBar(this);
     viewport_splitter_= new QSplitter(Qt::Horizontal, this);
     viewport_splitter_->setChildrenCollapsible(false);
-    viewport_splitter_->addWidget(opengl_widget_);
+
+    // SPEC v0.22 §C — wrap opengl_widget in QStackedWidget so we can
+    // switch between PDF view (index 0) and text-engine view (index 1).
+    //
+    // text_widget_ is read-only display-only: input always flows through
+    // the app-level LimnInputFilter (limn_input.cpp) → bridge → Lisp
+    // text-mode → buffer/insert. The widget mirrors the buffer state;
+    // it's not the source of truth. Setting NoFocus prevents Qt from
+    // routing key events to it (they bubble up to the input filter).
+    //
+    // Font is set explicitly to Noto Sans (with sans-serif fallback)
+    // to avoid tofu boxes on CJK / Unicode glyphs that the system
+    // default font may not cover. Dockerfile installs fonts-noto-cjk.
+    main_stack_       = new QStackedWidget(this);
+    main_stack_->addWidget(opengl_widget_);     // index 0 — PDF
+    text_widget_      = new QPlainTextEdit(this);
+    text_widget_->setReadOnly(true);
+    text_widget_->setFocusPolicy(Qt::NoFocus);
+    // SPEC v0.22 §C — font setup deferred (see fontconfig issue note).
+    // QFont("Noto Sans") triggers fontconfig init which crashes the
+    // process in Docker container (no /etc/fonts setup). The default
+    // sans-serif font handles ASCII fine; CJK glyph coverage needs
+    // fontconfig fix (see CHANGELOG / Dockerfile).
+    text_widget_->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    text_widget_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    main_stack_->addWidget(text_widget_);       // index 1 — text engine
+    main_stack_->setCurrentIndex(0);
+    viewport_splitter_->addWidget(main_stack_);
 
     auto* central  = new QWidget(this);
     auto* layout   = new QVBoxLayout(central);
@@ -68,6 +99,14 @@ MainWidget::MainWidget(QWidget* parent) : QMainWindow(parent) {
     layout->addWidget(chrome_bar_, 0);
     setCentralWidget(central);
     resize(1200, 900);
+}
+
+void MainWidget::show_text_view() {
+    if (main_stack_) main_stack_->setCurrentIndex(1);
+}
+
+void MainWidget::show_pdf_view() {
+    if (main_stack_) main_stack_->setCurrentIndex(0);
 }
 
 PdfViewOpenGLWidget* MainWidget::add_split_pane(const QString& orientation) {

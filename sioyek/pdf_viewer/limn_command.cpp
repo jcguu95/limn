@@ -31,6 +31,13 @@
 #include <QFont>
 #include <QFontInfo>
 #include <QFontMetricsF>
+#include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
+#include <QTextStream>
+#include <QPlainTextEdit>
+#include <QTextCursor>
+#include <QStackedWidget>
 #include <climits>
 #include <cmath>
 #include <stdexcept>
@@ -133,6 +140,8 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "buffer/cursor-set")    { cmd_buffer_cursor_set   (id, msg); return; }
     if (cmd == "buffer/insert")        { cmd_buffer_insert       (id, msg); return; }
     if (cmd == "buffer/delete")        { cmd_buffer_delete       (id, msg); return; }
+    if (cmd == "buffer/load-file")     { cmd_buffer_load_file    (id, msg); return; }
+    if (cmd == "buffer/save")          { cmd_buffer_save         (id, msg); return; }
 
     // bookmark/* (SPEC §5.x, v0.17)
     if (cmd == "bookmark/list-native") { cmd_bookmark_list_native(id, msg); return; }
@@ -180,6 +189,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
         if (cmd == "test/region-hash")        { cmd_test_region_hash       (id, msg); return; }
         if (cmd == "test/page-pixel-rect")    { cmd_test_page_pixel_rect   (id, msg); return; }
         if (cmd == "test/last-text-render")   { cmd_test_last_text_render  (id, msg); return; }
+        if (cmd == "test/text-widget-snapshot") { cmd_test_text_widget_snapshot(id, msg); return; }
         bridge->send_fail(id, QString("unknown test command: %1").arg(cmd));
         return;
     }
@@ -240,6 +250,14 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
         supports.append("buffer/text");
         data.insert("supports", supports);
         bridge->send_ok(id, data);
+
+        // v0.22 §C — if this window is focused (or first ever), show the
+        // text widget. Same focus rule cmd_view_set uses.
+        const bool is_active = (windows->focused_id() == win_id);
+        if (is_active && main_widget) {
+            sync_text_widget(tid);
+            main_widget->show_text_view();
+        }
 
         QJsonObject ev;
         ev.insert("frame-id",   "f1");
@@ -333,6 +351,9 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     if (is_focused_load) {
         main_widget->opengl_widget()->set_dark_mode(false);
         rebuild_overlay_raster(overlay_raster.width(), overlay_raster.height());
+        // v0.22 §C — coming from a text buffer? switch the stacked widget
+        // back to the PDF view. Idempotent if already on PDF view.
+        main_widget->show_pdf_view();
     }
 
     QJsonObject data;
@@ -556,6 +577,22 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
     LimnWindow* win = windows->get(win_id);
     if (!win) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+
+    // SPEC v0.22 §C — text-engine window short-circuit.
+    // If this window's buffer is text-engine, the mupdf-specific path
+    // (val_doc, page-count validation, opengl widget) doesn't apply.
+    // page/zoom/offset are no-ops for text buffers (we accept and
+    // ignore them gracefully). Active text-engine windows switch the
+    // stacked widget to the text view.
+    if (text_buffers.contains(win->buffer_id)) {
+        const bool is_active = (windows->focused_id() == win_id);
+        if (is_active && main_widget) {
+            sync_text_widget(win->buffer_id);
+            main_widget->show_text_view();
+        }
+        bridge->send_ok(id);
         return;
     }
 
@@ -1414,6 +1451,7 @@ void LimnCommand::cmd_buffer_close(const QString& id, const QJsonObject& msg) {
         }
         text_buffers.remove(buffer_id);
         text_cursors.remove(buffer_id);
+        buffer_paths.remove(buffer_id);   // v0.22 §A
         for (const QString& wid : windows->all_ids()) {
             LimnWindow* w = windows->get(wid);
             if (w && w->buffer_id == buffer_id) w->buffer_id.clear();
@@ -1543,6 +1581,7 @@ void LimnCommand::cmd_buffer_insert(const QString& id, const QJsonObject& msg) {
     // insertion pushes cursor right by text's UTF-16 length; AFTER-cursor
     // insertion leaves cursor in place.
     if (qs_at <= cursor) cursor += text.length();
+    sync_text_widget(buf);   // v0.22 §C — keep display in sync
     bridge->send_ok(id);
 }
 
@@ -1571,7 +1610,174 @@ void LimnCommand::cmd_buffer_delete(const QString& id, const QJsonObject& msg) {
     int& cursor = text_cursors[buf];
     if (cursor >= qs_to)        cursor -= (qs_to - qs_from);  // shift left
     else if (cursor > qs_from)  cursor = qs_from;             // snap to start
+    sync_text_widget(buf);   // v0.22 §C — keep display in sync
     bridge->send_ok(id);
+}
+
+// ─── SPEC v0.22 §A — text-engine file I/O ──────────────────────────────
+//
+//   buffer/load-file  讀檔案 → replace buffer 內容 + cursor 歸零 +
+//                     記住 path 到 buffer_paths
+//   buffer/save       把 buffer 寫回 buffer_paths 綁定的 path
+//
+// 兩者均只對 text-engine buffer 有效（mupdf 走 resolve_text_buffer 的
+// "not supported" 路徑）。UTF-8 編解碼用 QFile + QTextStream，明確設
+// UTF-8 codec。
+
+void LimnCommand::cmd_buffer_load_file(const QString& id, const QJsonObject& msg) {
+    QString buf;
+    if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
+    const QString path = msg.value("path").toString();
+    if (path.isEmpty()) {
+        bridge->send_fail(id, "missing or empty 'path'");
+        return;
+    }
+    QFile f(path);
+    if (!f.exists()) {
+        bridge->send_fail(id, "file not found");
+        return;
+    }
+    if (!f.open(QIODevice::ReadOnly)) {
+        bridge->send_fail(id, QString("cannot open: %1").arg(f.errorString()));
+        return;
+    }
+    QTextStream in(&f);
+    in.setEncoding(QStringConverter::Utf8);
+    const QString content = in.readAll();
+    f.close();
+
+    GapBuffer& gb = text_buffers[buf];
+    gb.clear();
+    if (!content.isEmpty()) gb.insert(0, content);
+    text_cursors[buf] = 0;
+    buffer_paths[buf] = path;
+    sync_text_widget(buf);   // v0.22 §C — keep display in sync
+
+    QJsonObject ev;
+    ev.insert("buffer-id", buf);
+    bridge->push_event("text-changed", ev);
+
+    bridge->send_ok(id);
+}
+
+void LimnCommand::cmd_buffer_save(const QString& id, const QJsonObject& msg) {
+    QString buf;
+    if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
+    if (!buffer_paths.contains(buf)) {
+        bridge->send_fail(id, "no path (call buffer/load-file first)");
+        return;
+    }
+    const QString path = buffer_paths.value(buf);
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        bridge->send_fail(id, QString("cannot open for writing: %1").arg(f.errorString()));
+        return;
+    }
+    {
+        QTextStream out(&f);
+        out.setEncoding(QStringConverter::Utf8);
+        out << text_buffers[buf].to_qstring();
+    }
+    if (!f.commit()) {
+        bridge->send_fail(id, QString("write failed: %1").arg(f.errorString()));
+        return;
+    }
+    bridge->send_ok(id);
+}
+
+// ─── SPEC v0.22 §C — text-engine display sync ─────────────────────────
+//
+// sync_text_widget mirrors the GapBuffer contents into the QPlainTextEdit
+// when the targeted buffer is the one currently displayed in any focused
+// window. Chrome buffers (*minibuffer*, *echo-area*, *messages*) skip
+// this — they have their own rendering surface (LimnChromeBar).
+//
+// Called after every mutation to text_buffers[BUF] (insert / delete /
+// load-file). Cheap when the buffer is not currently displayed, so we
+// don't bother gating callers.
+
+void LimnCommand::sync_text_widget(const QString& buffer_id) {
+    if (buffer_id.startsWith('*')) return;            // chrome → skip
+    if (!main_widget) return;
+    QPlainTextEdit* tw = main_widget->text_widget();
+    if (!tw) return;
+    if (!text_buffers.contains(buffer_id)) return;
+
+    // Find the focused window's buffer-id. If it matches, refresh.
+    const QString focused_id = windows->focused_id();
+    if (focused_id.isEmpty()) return;
+    LimnWindow* win = windows->get(focused_id);
+    if (!win || win->buffer_id != buffer_id) return;
+
+    const QString s = text_buffers.value(buffer_id).to_qstring();
+    // setPlainText is O(n) per call. For v0.22 this is the simplest
+    // path; future work can do delta updates by tracking the last mirror.
+    // We avoid recursive scroll-to-cursor by NOT calling moveCursor.
+    if (tw->toPlainText() != s) {
+        tw->setPlainText(s);
+    }
+    // Mirror cursor position (UTF-16 offset → QTextCursor position).
+    const int qs_idx = text_cursors.value(buffer_id, 0);
+    QTextCursor c = tw->textCursor();
+    const int max_pos = tw->document()->characterCount() - 1;
+    c.setPosition(qBound(0, qs_idx, qMax(0, max_pos)));
+    tw->setTextCursor(c);
+}
+
+// ─── test/text-widget-snapshot (SPEC v0.22 §C) ────────────────────────
+//
+// Returns a PNG snapshot of the text widget PLUS aggregate stats used
+// by OS-tier visual regression tests (batch-os-text-display.lisp):
+//   { width, height, png, avg-luminance, pixel-variance }
+//
+// QPlainTextEdit::grab() works in Xvfb (unlike QOpenGLWidget which needs
+// a GL context the X server can't supply). That's the whole reason the
+// text-engine viewport is the first one we can do real visual testing
+// on at OS tier.
+
+void LimnCommand::cmd_test_text_widget_snapshot(const QString& id,
+                                                 const QJsonObject& msg) {
+    Q_UNUSED(msg);
+    if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
+    QPlainTextEdit* tw = main_widget->text_widget();
+    if (!tw) { bridge->send_fail(id, "no text widget"); return; }
+
+    QPixmap pm = tw->grab();
+    QImage img = pm.toImage().convertToFormat(QImage::Format_RGB888);
+    const int w = img.width();
+    const int h = img.height();
+
+    // Encode PNG.
+    QByteArray png_bytes;
+    QBuffer png_buf(&png_bytes);
+    png_buf.open(QIODevice::WriteOnly);
+    img.save(&png_buf, "PNG");
+
+    // Compute luminance stats (Rec.601 weights).
+    double sum = 0.0, sum_sq = 0.0;
+    qint64 count = 0;
+    for (int y = 0; y < h; ++y) {
+        const uchar* row = img.constScanLine(y);
+        for (int x = 0; x < w; ++x) {
+            const int r = row[3 * x + 0];
+            const int g = row[3 * x + 1];
+            const int b = row[3 * x + 2];
+            const double lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            sum    += lum;
+            sum_sq += lum * lum;
+            ++count;
+        }
+    }
+    const double avg = (count > 0) ? (sum / count) : 0.0;
+    const double var = (count > 0) ? (sum_sq / count - avg * avg) : 0.0;
+
+    QJsonObject data;
+    data.insert("width",          w);
+    data.insert("height",         h);
+    data.insert("png",            QString::fromUtf8(png_bytes.toBase64()));
+    data.insert("avg-luminance",  avg);
+    data.insert("pixel-variance", var);
+    bridge->send_ok(id, data);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -1832,7 +2038,7 @@ void LimnCommand::cmd_buffer_text(const QString& id, const QJsonObject& msg) {
     // skip the words+rect form mupdf uses.
     if (text_buffers.contains(buffer_id)) {
         QJsonObject data;
-        data.insert("text", text_buffers.value(buffer_id));
+        data.insert("text", text_buffers.value(buffer_id).to_qstring());
         bridge->send_ok(id, data);
         return;
     }
