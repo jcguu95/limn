@@ -160,6 +160,12 @@ public:
     //   anything else → not consumed, filter pushes normal `key`
     bool minibuffer_handle_key(const QString& key, const QJsonArray& mods);
 
+    // v0.16.1: Qt-level IME hook for LimnInputFilter::eventFilter to
+    // call on QEvent::InputMethod. Same server-side dispatch semantics
+    // as cmd_test_inject_ime_commit / _preedit but driven by real Qt
+    // input events (fcitx → Qt → here → bus event + minibuffer mutation).
+    void handle_ime_event(const QString& preedit, const QString& commit);
+
     // Map a widget-local pixel click (relative to the OpenGL viewport)
     // to a document position. Per SPEC v0.5 §6:
     //   page : real page under cursor; -1 if outside any page / no doc

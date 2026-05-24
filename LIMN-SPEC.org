@@ -1314,25 +1314,47 @@ v0.15.0 ship 時 *誠實* 列為缺項、本 release 補完：
 
 C++ 為主、少量 wire contract 新增（selection commands）。
 
-*** v0.16 CJK 三件套 ⏭ planned
+*** v0.16 CJK 三件套 — 分兩波 ship
 
-三件相關但獨立的中文 / 多語支援補洞：
+三件相關但獨立的中文 / 多語支援補洞。
 
-1. *Surrogate-pair cursor 計數*：v0.7 =:cursor= 用 QString-index
-   （UTF-16 code units）。BMP 內 CJK 每字一個 unit 跟 codepoint 對得
-   上、但 emoji 等 non-BMP 字會差。改用 codepoint count。
-2. *Cursor 語意 consistency*：=minibuffer/get=、=buffer/cursor-get=
-   等所有回 =:cursor= 的回應統一用 codepoint 單位。
-3. *Qt =inputMethodEvent= 整合 + container 加 fcitx*：真實 IME
-   composition pipeline 通透（preedit string 顯示、commit 進 buffer）。
-   container 透過 nix 加 fcitx + 一個 input method（最少裝可注入中文
-   composition 的測試 IM）。新事件進 §6：=ime-preedit= /
-   =ime-commit=。
+**** v0.16.0 ✅ shipped — codepoint cursor + IME 注入 primitives
 
-v0.13 batch 23 已驗 xdotool type 直送 CJK 字元 path、本 release 補
-真實 IME composition path。
+1. *Surrogate-pair cursor 計數*：所有 wire 接口 (=:offset= / =:at= /
+   =:from= / =:to= / =:cursor=) 改 codepoint 計數。BMP 不變、non-BMP
+   (emoji 🌟 等) 從 2 UTF-16 unit 變 1 codepoint。
+2. *Cursor 語意 consistency*：minibuffer / buffer / cursor-get/set /
+   insert :at / delete :from :to 全部同一 codepoint 單位、撞 surrogate
+   邊界一律 FAIL（嚴格 contract、不 silent snap）。
+3. *IME 注入 primitives + dispatch*：
+   - 新 =test/inject-ime/preedit= 與 =test/inject-ime/commit=
+     （子命名空間、舊 =test/inject-ime-commit= 留 alias）
+   - ime-commit dispatch 在 C 層做（vanilla Emacs commit_text pattern）
+   - SPEC §6 新事件 =ime-preedit= / =ime-commit= 都帶 :frame-id
 
-C++ + container infra；Lisp 端只是新事件 dispatch。
+**** v0.16.1 ✅ shipped — 真實 Qt inputMethodEvent + container fcitx5
+
+1. *LimnInputFilter intercepts QEvent::InputMethod*：當 Qt 收 IME
+   composition (來自 fcitx / XIM / OS-level IM) 時、自動 route 到
+   =LimnCommand::handle_ime_event=、push =ime-preedit= / =ime-commit=
+   事件並執行 minibuffer mutation。與 v0.16.0 test/inject-ime/* 的
+   server-side dispatch 走同一條 path、只是 trigger 來源不同。
+2. *Container 加 fcitx5 (strictly via nix)*：
+   - =nixpkgs.fcitx5= + =nixpkgs.kdePackages.fcitx5-chinese-addons=
+     進 Dockerfile nix-env install
+   - container-entry.sh 設 =QT_IM_MODULE=fcitx5= 永遠 export
+   - =FCITX=1 docker run= flag 觸發 fcitx5 daemon (opt-in)
+3. v0.13 batch 23 已驗 xdotool type 直送 BMP CJK；v0.16.1 補上真
+   IME composition path（preedit string 顯示、commit 進 buffer）。
+
+CI-driven fcitx-typing-pinyin 互動測試在 headless Xvfb 不可行（需要
+真鍵盤輸入或更精細的 IM 注入）；OS-tier 確認：
+  - fcitx5 binary 存在於 container
+  - QT_IM_MODULE 已設
+  - v0.16.0 inject primitives 全部 regression-clean
+  - QInputMethodEvent handler 編進 binary、無 crash
+
+C++ + container infra；Lisp 端零改動。
 
 *** v0.17.0 bookmark wire primitive ✅ shipped
 

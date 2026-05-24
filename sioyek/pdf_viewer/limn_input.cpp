@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QWindow>
+#include <QInputMethodEvent>
 
 namespace {
 
@@ -298,6 +299,24 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             e.insert("width",    rev->size().width());
             e.insert("height",   rev->size().height());
             bridge->push_event("resize", e);
+            break;
+        }
+        case QEvent::InputMethod: {
+            // v0.16.1: real Qt IME pipeline. fcitx (or any QPA IME) sends
+            // QInputMethodEvent with preedit + commit strings. Hand off to
+            // LimnCommand which fires ime-preedit / ime-commit events and,
+            // if minibuffer is open, mutates *minibuffer* (vanilla-Emacs
+            // C-core commit_text behaviour).
+            //
+            // The same flow as cmd_test_inject_ime_* — test injection just
+            // synthesises this without going through Qt. With this hook in
+            // place, real user typing via fcitx (or any QInputMethod-aware
+            // backend) now produces the same wire events.
+            if (command) {
+                auto* iev = static_cast<QInputMethodEvent*>(ev);
+                command->handle_ime_event(iev->preeditString(),
+                                           iev->commitString());
+            }
             break;
         }
         default:

@@ -785,6 +785,46 @@ void LimnCommand::cmd_minibuffer_get(const QString& id, const QJsonObject&) {
 // Called by LimnInputFilter on every KeyPress. Returns TRUE iff this
 // keystroke was consumed by the minibuffer (so the filter should not
 // also push a normal `key` event). See SPEC §6 Minibuffer 事件.
+// v0.16.1: route a real Qt QInputMethodEvent through the same server-
+// side dispatch as cmd_test_inject_ime_*. Called by LimnInputFilter
+// when QEvent::InputMethod arrives (fcitx → Qt → here).
+//
+// preedit non-empty → push ime-preedit event (display-only)
+// commit  non-empty → push ime-commit  event AND, if minibuffer is
+//                     open, insert text + push minibuffer-input
+//                     (vanilla-Emacs C-core commit_text semantics)
+void LimnCommand::handle_ime_event(const QString& preedit, const QString& commit) {
+    if (!preedit.isEmpty() || preedit.length() == 0) {
+        // Always fire preedit when called — even with empty string,
+        // which is the SPEC §6 "cancel composition" signal. Skip only
+        // when both fields are empty AND we have no good signal to fire.
+        if (!preedit.isEmpty()) {
+            QJsonObject ev;
+            ev.insert("frame-id", "f1");
+            ev.insert("text", preedit);
+            bridge->push_event("ime-preedit", ev);
+        }
+    }
+    if (!commit.isEmpty()) {
+        if (minibuffer_open) {
+            QString& buf = text_buffers["*minibuffer*"];
+            int&     cur = text_cursors["*minibuffer*"];
+            buf.insert(cur, commit);
+            cur += commit.length();
+            if (auto* c = chrome_of(main_widget))
+                c->set_minibuffer(true, minibuffer_prompt, buf);
+            QJsonObject input_ev;
+            input_ev.insert("frame-id", "f1");
+            input_ev.insert("text", buf);
+            bridge->push_event("minibuffer-input", input_ev);
+        }
+        QJsonObject ev;
+        ev.insert("frame-id", "f1");
+        ev.insert("text", commit);
+        bridge->push_event("ime-commit", ev);
+    }
+}
+
 bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mods) {
     if (!minibuffer_open) return false;
 

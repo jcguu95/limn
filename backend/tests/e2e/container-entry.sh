@@ -49,6 +49,22 @@ fc-cache -f > /tmp/fc-cache.log 2>&1 || true
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
 
+# v0.16.1: tell Qt to use fcitx5 as IM module. With fcitx5 installed
+# (via nixpkgs.fcitx5 in Dockerfile), Qt's xcb backend will route
+# QInputMethodEvent through fcitx, enabling REAL Chinese / Japanese
+# composition without keyboard simulation. Without this env, Qt falls
+# back to XIM or no IM at all.
+#
+# QT_IM_MODULE=fcitx5 works even when fcitx daemon isn't running —
+# Qt just won't receive any IME events. We don't auto-start fcitx
+# (most OS tests don't need it; opt-in via FCITX=1).
+export QT_IM_MODULE="${QT_IM_MODULE:-fcitx5}"
+
+if [ "${FCITX:-0}" = "1" ]; then
+  fcitx5 -d > /tmp/fcitx5.log 2>&1 || true
+  sleep 0.3
+fi
+
 # v0.16: UTF-8 locale required for xdotool to type multi-byte input
 # (CJK, emoji). Without this, `xdotool type "中文"` errors out with
 # "Invalid multi-byte sequence". run-os-e2e.sh sets this when it's
