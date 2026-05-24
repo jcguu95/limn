@@ -68,7 +68,10 @@
                 "limn-completion.lisp"
                 ;; v0.26 modules
                 "limn-isearch.lisp"
-                "limn-occur.lisp"))
+                "limn-occur.lisp"
+                ;; v0.30 modules
+                "limn-marker.lisp"
+                "limn-local.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -117,7 +120,10 @@
                 "completion-v025.lisp"
                 ;; v0.26 RED tests — expected to fail until impl lands
                 "isearch-v026.lisp"
-                "occur-v026.lisp"))
+                "occur-v026.lisp"
+                ;; v0.30 RED tests — expected to fail until impl lands
+                "markers-v030.lisp"
+                "buffer-local-v030.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
