@@ -45,7 +45,15 @@
                 "limn-cmd.lisp"
                 "limn-runtime.lisp"
                 "limn-introspect.lisp"
-                "limn-text-mode.lisp"))
+                "limn-text-mode.lisp"
+                ;; v0.25 modules
+                "limn-history.lisp"
+                "limn-custom.lisp"
+                "limn-advice.lisp"
+                "limn-face.lisp"
+                "limn-text-props.lisp"
+                "limn-help.lisp"
+                "limn-completion.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -74,7 +82,15 @@
                 "timer-v023.lisp"
                 "condition-v023.lisp"
                 "buffer-undo-v023.lisp"
-                "logging-v023.lisp"))
+                "logging-v023.lisp"
+                ;; v0.25 RED tests — expected to fail until impl lands
+                "defface-v025.lisp"
+                "text-props-v025.lisp"
+                "history-v025.lisp"
+                "help-v025.lisp"
+                "advice-v025.lisp"
+                "defcustom-v025.lisp"
+                "completion-v025.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

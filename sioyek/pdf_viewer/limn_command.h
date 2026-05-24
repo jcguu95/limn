@@ -53,6 +53,9 @@ private:
     void cmd_bridge_win_float_move  (const QString& id, const QJsonObject& msg);
     void cmd_bridge_win_float_resize(const QString& id, const QJsonObject& msg);
 
+    // ─── display/* (v0.25 face registry) ────────────────────────────
+    void cmd_display_sync_faces   (const QString& id, const QJsonObject& msg);
+
     // ─── view/* ───────────────────────────────────────────────────────
     void cmd_view_set             (const QString& id, const QJsonObject& msg);
     void cmd_view_get             (const QString& id, const QJsonObject& msg);
@@ -237,6 +240,19 @@ private:
     // currently shown? what's the prompt prefix?
     bool     minibuffer_open = false;
     QString  minibuffer_prompt;
+
+    // ─── v0.25 face registry ───────────────────────────────────────
+    // Populated by display/sync-faces from the Lisp face table.
+    // Overlay layers may specify "face":"name" instead of "color":"#RRGGBB";
+    // rebuild_overlay_raster resolves the face to its foreground colour.
+    struct LimnFaceEntry {
+        QString foreground;   // "#RRGGBB" or empty
+        QString background;
+        bool    bold       = false;
+        bool    italic     = false;
+        bool    underline  = false;
+    };
+    QHash<QString, LimnFaceEntry> face_registry_;
 
     // ─── v0.14 last-text-render introspection ──────────────────────
     // Tests use test/last-text-render to verify the QFont that Qt

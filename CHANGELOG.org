@@ -4,6 +4,71 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.25.0 — Interaction & Introspection (defface / text-props / completion / history / help / advice / defcustom)
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+七個子系統全數交付，純 Lisp 實作 + C++ face registry wire-up。
+
+** §A defface / 主題系統（=backend/limn-face.lisp=）
+- =defface= macro：symbol 識別，pre-theme baseline 存於 =*face-defaults*=
+- =set-face-attribute= / =face-attribute=：單屬性讀寫
+- =deftheme= / =enable-theme= / =disable-theme=：覆蓋 + 還原
+- =custom-theme-set-faces=：批次設定主題 face 列表
+- =sync-faces-payload=：序列化成 ={:name :foreground ...}= 列表
+- =%sync-to-bridge=：在 enable/disable-theme 及 set-face-attribute
+  後自動推送到 C++ via =display/sync-faces=（bridge 未連線時 no-op）
+
+** §A C++ face registry（=sioyek/pdf_viewer/limn_command.cpp=）
+- 新增 =cmd_display_sync_faces=：解析 =faces= 陣列，填充
+  =QHash<QString, LimnFaceEntry> face_registry_=
+- =rebuild_overlay_raster=：overlay layer 若含 =:face= 欄位，
+  查表得 foreground 顏色，優先於 =:color= 欄位
+
+** §B text-properties（=backend/limn-text-props.lisp=）
+- Interval tree（sorted list of =(start end . plist)=），non-overlapping
+- =put-text-property= / =get-text-property= / =add-text-properties= / =remove-text-properties=
+- =next-property-change= / =previous-property-change= / =text-property-any=
+- =insert= / =delete-region=：正確的 Emacs front-nonsticky / rear-sticky 語義
+- =propertize=：建立 propertized string（string-level 屬性儲存）
+
+** §C completion / minibuffer（=backend/limn-completion.lisp=）
+- =completing-read=：substring / prefix / flex 三種 style
+- =read-from-minibuffer=、=minibuffer-prompt=、=minibuffer-contents=
+- =quit-minibuffer=（signals =quit-condition=）
+- =%bridge-call= wire-up：bridge 可用時呼叫 =minibuffer/*= 命令
+
+** §D history rings（=backend/limn-history.lisp=）
+- =define-history= / =add-to-history=（no consecutive dup, ring overflow）
+- 內建三個 ring：=*minibuffer-history*=、=*command-history*=、=*search-history*=
+- =save-history= / =load-history=（sidecar =~/.limn/history/<name>.lisp=）
+
+** §E help / describe（=backend/limn-help.lisp=）
+- =describe-function= / =describe-variable= / =describe-key=
+- =apropos= / =apropos-command=（全 symbol 空間搜索）
+- =help-buffer-contents=：取最後一次 help 輸出
+- 依賴 =sb-introspect= 取得 lambda list
+
+** §F advice 系統（=backend/limn-advice.lisp=）
+- =advice-add= / =advice-remove= / =advice-mapc=
+- 支援五種 =:where=：=:before= =:after= =:around= =:filter-args= =:filter-return=
+- =:around= 接 =(orig &rest args)=，Emacs nadvice 語義
+- remove 全部 advice 後還原原始 =fdefinition=
+
+** §G defcustom（=backend/limn-custom.lisp=）
+- =defcustom= macro（=:type :group :set :get= keys）
+- =customize-set-variable= / =customize-save-variable=
+- 型別驗證：boolean integer number string symbol function hook color face choice repeat const
+- =save-customizations= / =load-customizations=（=~/.limn/custom.lisp=）
+- cross-package 符號比較用 =string-equal= on =symbol-name=
+
+** 測試
+- Unit-tier：862/862 passed（+86 新增）
+- Qt-tier 新增：=suites/defface-v025.lisp= 3 tests（face 顏色、更新、覆蓋）
+- OS-tier 新增：=e2e/batch-os-theme-switch.lisp= 4 Ω-checks（face/theme pipeline）
+- OS-tier 新增：=e2e/batch-os-completing-read.lisp= 4 Ω-checks（minibuffer open/close/submit/cancel）
+
 * v0.23.1 — buffer-modified wire event + Lisp dual-subscription (補 v0.23 D8 D9)
 :PROPERTIES:
 :DATE: 2026-05-23

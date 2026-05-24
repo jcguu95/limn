@@ -69,7 +69,9 @@
                  "suites/robust.lisp"
                  "suites/lifecycle.lisp"
                  "suites/i18n.lisp"
-                 "suites/async.lisp"))
+                 "suites/async.lisp"
+                 ;; v0.25 face/theme
+                 "suites/defface-v025.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)
