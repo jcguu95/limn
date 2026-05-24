@@ -91,8 +91,14 @@
                 "limn-coding.lisp"
                 ;; v0.32 module
                 "limn-excursion.lisp"
+                ;; v0.33 modules — overlay data layer + region visualization
+                "limn-overlays.lisp"
+                "limn-region.lisp"
                 ;; v0.34 module — regex engine (depends on cl-ppcre vendor)
                 "limn-regex.lisp"
+                ;; v0.35 modules — file-notify + auto-revert
+                "limn-file-notify.lisp"
+                "limn-auto-revert.lisp"
                 ;; v0.36 modules — indent + query-replace
                 "limn-indent.lisp"
                 "limn-query-replace.lisp"))
@@ -161,9 +167,17 @@
                 "coding-v031.lisp"
                 ;; v0.32 RED tests — expected to fail until impl lands
                 "excursion-v032.lisp"
+                ;; v0.33 RED tests — overlay data + view/overlays :face + region
+                "overlays-v033.lisp"
+                ;; v0.33b RED tests — buffer-kind dispatch + codepoint-rects
+                "overlays-v033b.lisp"
                 ;; v0.34 RED tests — expected to fail until impl lands
                 "regex-v034.lisp"
-                ;; v0.36 RED tests — expected to fail until impl lands
+                ;; v0.35 tests (GREEN — file-notify + auto-revert + process-coding)
+                "file-notify-v035.lisp"
+                "auto-revert-v035.lisp"
+                "process-coding-v035.lisp"
+                ;; v0.36 tests — indent + query-replace
                 "indent-v036.lisp"
                 "query-replace-v036.lisp"))
   (format t "[loading unit] ~a~%" file)

@@ -86,8 +86,14 @@
                 "limn-coding.lisp"
                 ;; v0.32 current-buffer / save-excursion / narrow
                 "limn-excursion.lisp"
+                ;; v0.33 overlay data layer + region visualization
+                "limn-overlays.lisp"
+                "limn-region.lisp"
                 ;; v0.34 regex engine (depends on cl-ppcre vendor + v0.32)
                 "limn-regex.lisp"
+                ;; v0.35 file-notify + auto-revert + process I/O coding
+                "limn-file-notify.lisp"
+                "limn-auto-revert.lisp"
                 ;; v0.36 indent + current-column
                 "limn-indent.lisp"
                 ;; v0.36 query-replace (depends on v0.32 + v0.34)

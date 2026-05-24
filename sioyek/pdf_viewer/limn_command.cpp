@@ -37,6 +37,12 @@
 #include <QTextStream>
 #include <QPlainTextEdit>
 #include <QTextCursor>
+#include <QTextDocument>
+#include <QTextBlock>
+#include <QTextLayout>
+#include <QTextLine>
+#include <QAbstractTextDocumentLayout>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <climits>
 #include <cmath>
@@ -146,6 +152,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "buffer/delete")        { cmd_buffer_delete       (id, msg); return; }
     if (cmd == "buffer/load-file")     { cmd_buffer_load_file    (id, msg); return; }
     if (cmd == "buffer/save")          { cmd_buffer_save         (id, msg); return; }
+    if (cmd == "buffer/codepoint-rects"){ cmd_buffer_codepoint_rects(id, msg); return; }
 
     // bookmark/* (SPEC §5.x, v0.17)
     if (cmd == "bookmark/list-native") { cmd_bookmark_list_native(id, msg); return; }
@@ -1119,14 +1126,39 @@ QString validate_layer(const QJsonObject& layer) {
     const QString type = layer.value("type").toString();
     if (type.isEmpty()) return QStringLiteral("layer missing 'type'");
 
+    // v0.33b: text-range layers live in text-buffer codepoint space, not
+    // PDF page space — they don't need 'page'/'color'. Validate them
+    // separately and short-circuit.
+    if (type == "text-range") {
+        if (!layer.contains("buf-id") || layer.value("buf-id").toString().isEmpty())
+            return QStringLiteral("text-range overlay missing 'buf-id'");
+        if (!layer.contains("start") || !layer.value("start").isDouble())
+            return QStringLiteral("text-range overlay missing 'start'");
+        if (!layer.contains("end")   || !layer.value("end").isDouble())
+            return QStringLiteral("text-range overlay missing 'end'");
+        if (layer.contains("opacity") && !layer.value("opacity").isDouble())
+            return QStringLiteral("text-range 'opacity' must be numeric");
+        if (layer.contains("color")
+            && !is_valid_hex_color(layer.value("color").toString()))
+            return QStringLiteral("text-range 'color' must be #RRGGBB");
+        // face/color: at least one (face resolved at paint time).
+        return QString();
+    }
+
     if (!layer.contains("page") || !layer.value("page").isDouble())
         return QStringLiteral("layer missing or invalid 'page'");
     const int page = layer.value("page").toInt();
     if (page < 0) return QStringLiteral("layer 'page' must be >= 0");
 
-    if (!layer.contains("color"))
-        return QStringLiteral("layer missing 'color'");
-    if (!is_valid_hex_color(layer.value("color").toString()))
+    // v0.33b: 'face' may substitute for 'color' — the face registry
+    // supplies the foreground hex at paint time. Without either, the
+    // layer can't render.
+    const bool has_face  = layer.contains("face")
+                            && !layer.value("face").toString().isEmpty();
+    const bool has_color = layer.contains("color");
+    if (!has_face && !has_color)
+        return QStringLiteral("layer missing 'color' (or 'face')");
+    if (has_color && !is_valid_hex_color(layer.value("color").toString()))
         return QStringLiteral("layer 'color' must be #RRGGBB");
 
     if (!layer.contains("opacity"))
@@ -1135,10 +1167,20 @@ QString validate_layer(const QJsonObject& layer) {
         return QStringLiteral("layer 'opacity' must be numeric");
 
     if (type == "rect") {
-        if (!layer.contains("rect"))
-            return QStringLiteral("rect overlay missing 'rect'");
-        if (!is_valid_rect_array(layer.value("rect")))
+        // v0.33a accepts either 'rect': [x0,y0,x1,y1] (canonical) OR the
+        // four-field x0/y0/x1/y1 form (sugar). Both reach the same painter.
+        const bool has_rect = layer.contains("rect");
+        const bool has_xy   = layer.contains("x0") && layer.contains("y0")
+                           && layer.contains("x1") && layer.contains("y1");
+        if (!has_rect && !has_xy)
+            return QStringLiteral("rect overlay missing 'rect' (or x0/y0/x1/y1)");
+        if (has_rect && !is_valid_rect_array(layer.value("rect")))
             return QStringLiteral("rect 'rect' must be [x0,y0,x1,y1]");
+        if (has_xy) {
+            for (const char* k : {"x0","y0","x1","y1"})
+                if (!layer.value(k).isDouble())
+                    return QStringLiteral("rect x0/y0/x1/y1 must be numeric");
+        }
     } else if (type == "line") {
         if (!layer.contains("from") || !layer.contains("to"))
             return QStringLiteral("line overlay missing 'from' or 'to'");
@@ -1194,12 +1236,20 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
     // paintGL cycle. Use opengl_widget's current size (fall back to a
     // sane default if widget not yet sized in headless).
     int rw = 1200, rh = 900;
-    if (auto* gl = main_widget->opengl_widget()) {
+    // v0.33b: when the focused window is showing a text-engine buffer,
+    // the surface tests sample IS the QPlainTextEdit, so the raster must
+    // match its geometry — not the (hidden) opengl widget's.
+    if (text_buffers.contains(win->buffer_id)) {
+        if (auto* tw = main_widget->text_widget()) {
+            if (tw->viewport()->width()  > 0) rw = tw->viewport()->width();
+            if (tw->viewport()->height() > 0) rh = tw->viewport()->height();
+        }
+    } else if (auto* gl = main_widget->opengl_widget()) {
         if (gl->width()  > 0) rw = gl->width();
         if (gl->height() > 0) rh = gl->height();
     }
     rebuild_overlay_raster(rw, rh);
-    main_widget->opengl_widget()->update();
+    if (auto* gl = main_widget->opengl_widget()) gl->update();
     bridge->send_ok(id);
 }
 
@@ -1739,6 +1789,146 @@ void LimnCommand::cmd_buffer_save(const QString& id, const QJsonObject& msg) {
         return;
     }
     bridge->send_ok(id);
+}
+
+// ─── v0.33b — buffer/codepoint-rects ──────────────────────────────────
+//
+// Given a codepoint range [start, end) in a text buffer, return one pixel
+// rect per visual line (post-wrap). Used by Lisp to:
+//   - scroll-into-view
+//   - compute tooltip / popup positions
+//   - drive the type:"text-range" overlay paint branch (which calls the
+//     same compute_text_range_rects helper below)
+//
+// Coordinate space: text-widget local pixels. Origin (0,0) = widget top-left.
+// Wrapped lines yield multiple rects (one per visual line).
+
+QVector<QRectF> LimnCommand::compute_text_range_rects(const QString& buf_id,
+                                                      int cp_start, int cp_end) {
+    QVector<QRectF> out;
+    if (!main_widget) return out;
+    QPlainTextEdit* tw = main_widget->text_widget();
+    if (!tw) return out;
+    if (!text_buffers.contains(buf_id)) return out;
+
+    const QString s = text_buffers.value(buf_id).to_qstring();
+    if (cp_start < 0) cp_start = 0;
+    if (cp_end   < 0) cp_end   = 0;
+    if (cp_end > cp_count(s)) cp_end = cp_count(s);
+    if (cp_start >= cp_end) return out;
+
+    // Convert codepoint offsets to UTF-16 indices the QTextDocument speaks.
+    const int qs_start = cp_to_qsidx(s, cp_start);
+    const int qs_end   = cp_to_qsidx(s, cp_end);
+    if (qs_start < 0 || qs_end < 0 || qs_start >= qs_end) return out;
+
+    // Talk to QTextDocument's layout directly. cursorRect() needs a shown
+    // widget to return meaningful values — in Xvfb without a window
+    // manager, the QPlainTextEdit's viewport never gets resized, so we
+    // bypass it. The document layout is always valid.
+    //
+    // QPlainTextEdit uses QPlainTextDocumentLayout, which is optimised
+    // for very large plain-text documents: its blockBoundingRect always
+    // returns y=0 (block y is computed per-paint based on cursor scroll).
+    // So we accumulate y ourselves by walking blocks linearly.
+    QTextDocument* doc = tw->document();
+    if (!doc) return out;
+
+    // Give the document a wrap width so line layouts compute against a
+    // real width (mirrors what the widget would hand it). Fall back to a
+    // sane default if viewport hasn't sized yet.
+    int wrap_w = tw->viewport()->width();
+    if (wrap_w <= 0) wrap_w = qMax(1, tw->width());
+    if (wrap_w <= 0) wrap_w = 800;
+    doc->setTextWidth(qreal(wrap_w));
+
+    // First pass: accumulate y offset for every block by summing the
+    // height of preceding blocks. Use documentLayout's blockBoundingRect
+    // to force per-block layout AND get a reliable height; ignore its
+    // (always-zero) y since QPlainTextDocumentLayout doesn't track it.
+    qreal y_cursor = 0.0;
+    for (QTextBlock b = doc->firstBlock(); b.isValid(); b = b.next()) {
+        if (b.position() >= qs_end) break;
+
+        QTextLayout* layout = b.layout();
+        if (!layout) continue;
+        // blockBoundingRect drives the per-block layout pass + returns
+        // its height. Without this, QTextLine objects below have no
+        // measurements.
+        const qreal block_h =
+            doc->documentLayout()->blockBoundingRect(b).height();
+        if (block_h <= 0) continue;
+
+        const int blk_start = b.position();
+        const int blk_len   = b.length();          // includes trailing newline
+        const int sel_lo    = qMax(qs_start, blk_start);
+        const int sel_hi    = qMin(qs_end,   blk_start + blk_len);
+        if (sel_lo < sel_hi) {
+            const int line_count = layout->lineCount();
+            for (int li = 0; li < line_count; ++li) {
+                QTextLine line = layout->lineAt(li);
+                const int line_from = line.textStart();
+                const int line_to   = line_from + line.textLength();
+                const int abs_from = blk_start + line_from;
+                const int abs_to   = blk_start + line_to;
+                const int lo = qMax(sel_lo, abs_from);
+                const int hi = qMin(sel_hi, abs_to);
+                if (lo >= hi) continue;
+
+                const qreal x_lo = line.cursorToX(lo - blk_start);
+                const qreal x_hi = line.cursorToX(hi - blk_start);
+                const QRectF lrect = line.naturalTextRect();
+                const qreal y_top = y_cursor + lrect.top();
+                const qreal h     = lrect.height() > 0 ? lrect.height()
+                                                       : block_h;
+                QRectF r(qMin(x_lo, x_hi),
+                         y_top,
+                         qAbs(x_hi - x_lo),
+                         h);
+                // cursorToX returns the same x at line-end positions; give
+                // those at least 1px so before-string markers are visible.
+                if (r.width() < 1.0) r.setWidth(1.0);
+                r.translate(-tw->horizontalScrollBar()->value(),
+                            -tw->verticalScrollBar()->value());
+                out.append(r);
+            }
+        }
+        y_cursor += block_h;
+    }
+    return out;
+}
+
+void LimnCommand::cmd_buffer_codepoint_rects(const QString& id,
+                                              const QJsonObject& msg) {
+    const QString buf_id = msg.value("buf-id").toString();
+    if (buf_id.isEmpty()) {
+        bridge->send_fail(id, "missing 'buf-id'");
+        return;
+    }
+    if (!text_buffers.contains(buf_id)) {
+        bridge->send_fail(id, QString("unknown text buffer: %1").arg(buf_id));
+        return;
+    }
+    const int cp_start = msg.value("start").toInt(0);
+    const int cp_end   = msg.value("end").toInt(0);
+
+    const QVector<QRectF> rects = compute_text_range_rects(buf_id, cp_start, cp_end);
+
+    QJsonArray arr;
+    for (const QRectF& r : rects) {
+        QJsonArray rect;
+        rect.append(int(r.left()));
+        rect.append(int(r.top()));
+        rect.append(int(r.right()));
+        rect.append(int(r.bottom()));
+        QJsonObject item;
+        item.insert("page", 0);
+        item.insert("rect", rect);
+        arr.append(item);
+    }
+    QJsonObject data;
+    data.insert("rects", arr);
+    bridge->send_ok(id, data);
 }
 
 // ─── SPEC v0.22 §C — text-engine display sync ─────────────────────────
@@ -2290,6 +2480,35 @@ void LimnCommand::cmd_test_inject_audio_input(const QString& id, const QJsonObje
 
 void LimnCommand::cmd_test_inject_resize(const QString& id, const QJsonObject& msg) {
     QJsonObject ev = pick_keys(msg, {"frame-id", "win-id", "width", "height"});
+    // v0.33b: when running in Xvfb without a window manager, xdotool
+    // windowsize doesn't reach the inner widgets. Tests that need a
+    // real Qt resize event (wrap-on-narrow, viewport reflow) call us;
+    // perform the actual widget resize so paint state reflects it.
+    const int w = msg.value("width").toInt(0);
+    const int h = msg.value("height").toInt(0);
+    if (main_widget && w > 0 && h > 0) {
+        if (auto* tw = main_widget->text_widget()) {
+            tw->resize(w, h);
+            // Match the document's text width to the new viewport width
+            // so wrap recomputes immediately. Without this the next paint
+            // would still wrap to the old text-width.
+            tw->document()->setTextWidth(tw->viewport()->width());
+        }
+        main_widget->resize(w, h);
+        // v0.33b: any focused-window text-range overlays need to re-layout
+        // against the new geometry. Test surface is overlay_raster; rebuild
+        // it now so subsequent test/region-bbox sees fresh paint without
+        // the caller having to re-push view/overlays.
+        const QString fid = windows ? windows->focused_id() : QString();
+        LimnWindow* fw    = (windows && !fid.isEmpty()) ? windows->get(fid) : nullptr;
+        if (fw && text_buffers.contains(fw->buffer_id)) {
+            int rw = main_widget->text_widget()
+                       ? main_widget->text_widget()->viewport()->width() : w;
+            int rh = main_widget->text_widget()
+                       ? main_widget->text_widget()->viewport()->height() : h;
+            if (rw > 0 && rh > 0) rebuild_overlay_raster(rw, rh);
+        }
+    }
     bridge->push_event("resize", ev);
     bridge->send_ok(id);
 }
@@ -2422,6 +2641,116 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
 
     QJsonArray layers = focused_window_overlays();
 
+    // v0.33b: text-mode paint path. When the focused window is showing a
+    // text-engine buffer, the PDF render machinery doesn't apply: no doc,
+    // no pages, coords aren't page-norm. We paint type:"text-range"
+    // layers directly using widget-local pixels and return.
+    {
+        const QString fid = windows ? windows->focused_id() : QString();
+        LimnWindow* fw    = (windows && !fid.isEmpty()) ? windows->get(fid) : nullptr;
+        if (fw && text_buffers.contains(fw->buffer_id)) {
+            QPainter painter(&overlay_raster);
+            painter.setRenderHint(QPainter::Antialiasing, false);
+            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+
+            // Sort low→high by priority so high prio paints on top.
+            QVector<QJsonObject> sorted;
+            sorted.reserve(layers.size());
+            for (const QJsonValue& lv : layers) {
+                if (lv.isObject()) sorted.append(lv.toObject());
+            }
+            std::stable_sort(sorted.begin(), sorted.end(),
+                [](const QJsonObject& a, const QJsonObject& b) {
+                    return a.value("priority").toInt(0)
+                         < b.value("priority").toInt(0);
+                });
+
+            for (const QJsonObject& l : sorted) {
+                if (l.value("type").toString() != "text-range") continue;
+                const QString layer_buf = l.value("buf-id").toString();
+                if (layer_buf.isEmpty() || !text_buffers.contains(layer_buf))
+                    continue;
+                const int cp_start = l.value("start").toInt(0);
+                const int cp_end   = l.value("end").toInt(0);
+
+                // Resolve fill color: face background takes precedence
+                // (this is a fill, not a foreground glyph paint), then
+                // face fg, then explicit color. Missing color is fine for
+                // before-string-only overlays; we just skip the fillRect.
+                QString colstr;
+                if (l.contains("face")) {
+                    const QString faceName = l.value("face").toString();
+                    auto it = face_registry_.find(faceName);
+                    if (it != face_registry_.end()) {
+                        if (!it->background.isEmpty()) colstr = it->background;
+                        else if (!it->foreground.isEmpty()) colstr = it->foreground;
+                    }
+                }
+                if (colstr.isEmpty()) colstr = l.value("color").toString();
+
+                bool have_col = false;
+                QColor col;
+                if (colstr.length() == 7 && colstr.startsWith('#')) {
+                    col = QColor(colstr);
+                    if (col.isValid()) {
+                        double opacity = l.value("opacity").toDouble(1.0);
+                        if (opacity < 0.0) opacity = 0.0;
+                        if (opacity > 1.0) opacity = 1.0;
+                        col.setAlphaF(opacity);
+                        have_col = true;
+                    }
+                }
+
+                const QVector<QRectF> rects =
+                    compute_text_range_rects(layer_buf, cp_start, cp_end);
+                if (have_col) {
+                    for (const QRectF& r : rects) painter.fillRect(r, col);
+                }
+
+                // v0.33b: render before-string (and after-string) as text
+                // anchored at the overlay's first / last rect. Lets tests
+                // verify visual injection without mutating buffer text.
+                const QString before = l.value("before-string").toString();
+                const QString after  = l.value("after-string").toString();
+                if (!before.isEmpty() || !after.isEmpty()) {
+                    QFont f = main_widget->text_widget()->font();
+                    f.setPixelSize(qMax(8, f.pixelSize()));
+                    painter.setFont(f);
+                    painter.setPen(QPen(QColor(0, 0, 0)));
+                    if (!before.isEmpty()) {
+                        // If the range is empty (start == end) we still
+                        // need a position — fall back to a 0-codepoint
+                        // anchor.
+                        QVector<QRectF> anchor = rects.isEmpty()
+                            ? compute_text_range_rects(layer_buf,
+                                                        cp_start,
+                                                        cp_start + 1)
+                            : rects;
+                        if (!anchor.isEmpty()) {
+                            QFontMetricsF fm(f);
+                            painter.drawText(QPointF(anchor.first().left(),
+                                                     anchor.first().top()
+                                                     + fm.ascent()),
+                                             before);
+                            last_text_render = QJsonObject{
+                                {"text", before},
+                                {"font-family", f.family()},
+                                {"pixel-size", f.pixelSize()}};
+                        }
+                    }
+                    if (!after.isEmpty() && !rects.isEmpty()) {
+                        QFontMetricsF fm(f);
+                        painter.drawText(QPointF(rects.last().right(),
+                                                 rects.last().top()
+                                                 + fm.ascent()),
+                                         after);
+                    }
+                }
+            }
+            return;
+        }
+    }
+
     DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
     Document* doc    = dv ? dv->get_document() : nullptr;
     if (!dv || !doc) return;
@@ -2504,11 +2833,21 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         };
 
         if (type == "rect") {
-            const QJsonArray ra = l.value("rect").toArray();
-            if (ra.size() != 4) continue;
             float x0, y0, x1, y1;
-            norm_to_pixel(ra[0].toDouble(), ra[1].toDouble(), &x0, &y0);
-            norm_to_pixel(ra[2].toDouble(), ra[3].toDouble(), &x1, &y1);
+            const QJsonArray ra = l.value("rect").toArray();
+            if (ra.size() == 4) {
+                norm_to_pixel(ra[0].toDouble(), ra[1].toDouble(), &x0, &y0);
+                norm_to_pixel(ra[2].toDouble(), ra[3].toDouble(), &x1, &y1);
+            } else if (l.contains("x0") && l.contains("y0")
+                    && l.contains("x1") && l.contains("y1")) {
+                // v0.33b: alternate sugar — x0/y0/x1/y1 numeric fields.
+                norm_to_pixel(l.value("x0").toDouble(),
+                              l.value("y0").toDouble(), &x0, &y0);
+                norm_to_pixel(l.value("x1").toDouble(),
+                              l.value("y1").toDouble(), &x1, &y1);
+            } else {
+                continue;
+            }
             QRectF r(QPointF(std::min(x0, x1), std::min(y0, y1)),
                      QPointF(std::max(x0, x1), std::max(y0, y1)));
             painter.fillRect(r, col);
@@ -2776,8 +3115,24 @@ void LimnCommand::cmd_test_page_pixel_rect(const QString& id,
     DocumentView* dv = main_widget->document_view();
     Document* doc    = dv ? dv->get_document() : nullptr;
     if (!dv || !doc) {
-        // No doc loaded — return empty (not error; tests can decide
-        // whether that's the expected state).
+        // v0.33b: when a text-engine buffer is in the focused window, no
+        // PDF doc exists but the overlay_raster is still the test surface
+        // (sized to the text widget). Return its dimensions so tests can
+        // sample the painted text-range overlays.
+        const QString fid = windows ? windows->focused_id() : QString();
+        LimnWindow* fw    = (windows && !fid.isEmpty()) ? windows->get(fid) : nullptr;
+        if (fw && text_buffers.contains(fw->buffer_id)
+              && !overlay_raster.isNull()) {
+            QJsonObject td;
+            td.insert("x", 0);
+            td.insert("y", 0);
+            td.insert("w", overlay_raster.width());
+            td.insert("h", overlay_raster.height());
+            bridge->send_ok(id, td);
+            return;
+        }
+        // No doc loaded and no text buffer either — return empty (not error;
+        // tests can decide whether that's the expected state).
         bridge->send_ok(id, QJsonObject());
         return;
     }
