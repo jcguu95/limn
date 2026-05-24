@@ -422,3 +422,207 @@
       ;; cleanup
       (funcall (find-symbol "SET-TRANSIENT-MAP" :limn/keys) nil)
       (funcall (find-symbol "SET-LOCAL-KEYMAP" :limn/mode) buf nil))))
+
+
+;;; ────────────────────────────────────────────────────────────────────
+;;; Round 2 — coverage audit additions (Emacs-way semantics)
+;;; ────────────────────────────────────────────────────────────────────
+
+;;; ── A+. parent chain edge cases ─────────────────────────────────────
+
+(deftest v019-α-define-mode-parent-unknown-fails
+  "define-mode :parent pointing at a nonexistent mode signals an error
+   (vs silently leaving keymap.parent = nil — that's a footgun)."
+  (limn/mode:clear-modes)
+  (assert-true
+    (handler-case
+      (progn
+        (limn/mode:define-mode 'child :type :major :parent 'ghost)
+        nil)
+      (error () t))
+    "unknown :parent → error"))
+
+(deftest v019-α-grandparent-chain-walks
+  "3-level parent chain: gp → p → c. Key bound only on gp is reachable
+   from c via the full chain."
+  (limn/mode:clear-modes)
+  (let ((gp (limn/mode:define-mode 'gp :type :major))
+        (p  (limn/mode:define-mode 'p  :type :major :parent 'gp))
+        (c  (limn/mode:define-mode 'c  :type :major :parent 'p)))
+    (setf (limn/mode:mode-keymap gp) (limn/keys:make-keymap))
+    (setf (limn/mode:mode-keymap p)  (limn/keys:make-keymap))
+    (setf (limn/mode:mode-keymap c)  (limn/keys:make-keymap))
+    (limn/mode:define-mode 'p :type :major :parent 'gp)
+    (limn/mode:define-mode 'c :type :major :parent 'p)
+    (limn/keys:define-key (limn/mode:mode-keymap gp) "C-h" 'grandparent-help)
+    (let ((buf (limn/mode:make-mode-buffer)))
+      (limn/mode:activate buf 'c)
+      (assert-eq 'grandparent-help (limn/mode:lookup-key buf "C-h")
+                 "C-h walks c → p → gp"))))
+
+(deftest v019-α-redefine-mode-with-new-parent-updates-link
+  "Re-calling define-mode with a DIFFERENT :parent updates the link
+   live (existing buffers see new chain immediately)."
+  (limn/mode:clear-modes)
+  (let ((a (limn/mode:define-mode 'a :type :major))
+        (b (limn/mode:define-mode 'b :type :major))
+        (c (limn/mode:define-mode 'c :type :major :parent 'a)))
+    (setf (limn/mode:mode-keymap a) (limn/keys:make-keymap))
+    (setf (limn/mode:mode-keymap b) (limn/keys:make-keymap))
+    (setf (limn/mode:mode-keymap c) (limn/keys:make-keymap))
+    (limn/mode:define-mode 'c :type :major :parent 'a)  ; link → a
+    (limn/keys:define-key (limn/mode:mode-keymap a) "K" 'from-a)
+    (limn/keys:define-key (limn/mode:mode-keymap b) "K" 'from-b)
+    (let ((buf (limn/mode:make-mode-buffer)))
+      (limn/mode:activate buf 'c)
+      (assert-eq 'from-a (limn/mode:lookup-key buf "K") "initial parent a")
+      ;; Re-define with parent b
+      (limn/mode:define-mode 'c :type :major :parent 'b)
+      (assert-eq 'from-b (limn/mode:lookup-key buf "K")
+                 "parent re-link to b takes effect immediately"))))
+
+(deftest v019-α-circular-parent-detected
+  "define-mode :parent that would create a cycle (A→B→A) must error,
+   not silently accept (would infinite-loop on lookup)."
+  (limn/mode:clear-modes)
+  (limn/mode:define-mode 'a :type :major)
+  (limn/mode:define-mode 'b :type :major :parent 'a)
+  (setf (limn/mode:mode-keymap (limn/mode:find-mode 'a)) (limn/keys:make-keymap))
+  (setf (limn/mode:mode-keymap (limn/mode:find-mode 'b)) (limn/keys:make-keymap))
+  (limn/mode:define-mode 'b :type :major :parent 'a)
+  (assert-true
+    (handler-case
+      (progn (limn/mode:define-mode 'a :type :major :parent 'b) nil)
+      (error () t))
+    "cycle a→b→a rejected"))
+
+;;; ── B+. describe-bindings edge cases ───────────────────────────────
+
+(deftest v019-α-describe-bindings-empty-keymap
+  "Empty keymap → empty alist (not nil-vs-empty confusion, deterministic)."
+  (let* ((km (limn/keys:make-keymap))
+         (bs (limn/keys:describe-bindings km)))
+    (assert-equal 0 (length bs) "no entries for empty keymap")
+    (assert-true (listp bs) "still a list, not nil-as-error")))
+
+(deftest v019-α-describe-bindings-excludes-parent-by-default
+  "describe-bindings returns OWN bindings only (matches Emacs's
+   default — parent inheritance has its own section/API). Tests that
+   we don't accidentally flatten parent into the same list."
+  (let* ((parent (limn/keys:make-keymap))
+         (child  (limn/keys:make-keymap)))
+    (limn/keys:define-key parent "p" 'in-parent)
+    (limn/keys:define-key child  "c" 'in-child)
+    (limn/keys::define-parent child parent)
+    (let* ((bs   (limn/keys:describe-bindings child))
+           (keys (mapcar #'car bs)))
+      (assert-true (member "c" keys :test #'string=) "own binding present")
+      (assert-true (not (member "p" keys :test #'string=))
+                   "parent binding NOT included (own-only semantics)"))))
+
+;;; ── C+. lookup-key with nil global / no setup ───────────────────────
+
+(deftest v019-α-lookup-key-no-global-nil-buffer-safe
+  "*global-keymap* unbound / nil + empty mode-buffer → lookup returns
+   nil cleanly (no crash, no infinite parent chain)."
+  (limn/mode:clear-modes)
+  (let ((buf (limn/mode:make-mode-buffer))
+        (limn/mode:*global-keymap* nil))
+    (assert-eq nil (limn/mode:lookup-key buf "anything")
+               "no setup → nil")))
+
+;;; ── D+. *key-prefix* hook semantics ─────────────────────────────────
+
+(deftest v019-β-key-prefix-no-fire-when-unchanged
+  "Setting *key-prefix* to the SAME value should NOT fire the hook —
+   spam protection. Matches Emacs's setq-default behaviour for
+   buffer-local var change hooks."
+  (let ((fires 0))
+    (limn/hooks:add-hook "event/key-prefix-changed"
+                         (lambda (_) (incf fires)))
+    (funcall (find-symbol "SET-KEY-PREFIX" :limn/keys) '())
+    (let ((baseline fires))
+      (funcall (find-symbol "SET-KEY-PREFIX" :limn/keys) '())  ; same
+      (assert-equal baseline fires
+                    "no fire when value unchanged"))))
+
+(deftest v019-β-key-prefix-hook-multiple-subscribers
+  "All hook subscribers fire on a change."
+  (let ((a 0) (b 0))
+    (limn/hooks:add-hook "event/key-prefix-changed"
+                         (lambda (_) (incf a)))
+    (limn/hooks:add-hook "event/key-prefix-changed"
+                         (lambda (_) (incf b)))
+    (funcall (find-symbol "SET-KEY-PREFIX" :limn/keys) '())  ; reset baseline
+    (let ((a0 a) (b0 b))
+      (funcall (find-symbol "SET-KEY-PREFIX" :limn/keys) '("C-c"))
+      (assert-true (and (> a a0) (> b b0))
+                   "both subscribers fired"))))
+
+(deftest v019-β-key-prefix-hook-removable
+  "Removing a hook prevents it firing on subsequent changes."
+  (let* ((fires 0)
+         (handler (lambda (_) (incf fires))))
+    (limn/hooks:add-hook    "event/key-prefix-changed" handler)
+    (funcall (find-symbol "SET-KEY-PREFIX" :limn/keys) '())
+    (funcall (find-symbol "SET-KEY-PREFIX" :limn/keys) '("X"))
+    (let ((before-removal fires))
+      (limn/hooks:remove-hook "event/key-prefix-changed" handler)
+      (funcall (find-symbol "SET-KEY-PREFIX" :limn/keys) '("Y"))
+      (assert-equal before-removal fires
+                    "no further fires after remove-hook"))))
+
+;;; ── E+. set-transient-map twice / replacement semantics ────────────
+
+(deftest v019-β-set-transient-map-twice-fires-prev-on-exit
+  "Calling set-transient-map AGAIN while one is active fires the
+   previous map's :on-exit (Emacs convention — the old transient is
+   'left'). The new map's :on-exit only fires when IT is later cleared."
+  (let ((prev-fired 0)
+        (new-fired  0)
+        (km1 (limn/keys:make-keymap))
+        (km2 (limn/keys:make-keymap)))
+    (funcall (find-symbol "SET-TRANSIENT-MAP" :limn/keys) km1
+             :on-exit (lambda () (incf prev-fired)))
+    (funcall (find-symbol "SET-TRANSIENT-MAP" :limn/keys) km2
+             :on-exit (lambda () (incf new-fired)))
+    (assert-equal 1 prev-fired "previous :on-exit fired on replacement")
+    (assert-equal 0 new-fired  "new :on-exit not yet fired")
+    (funcall (find-symbol "SET-TRANSIENT-MAP" :limn/keys) nil)
+    (assert-equal 1 new-fired  "new :on-exit fires on final clear")))
+
+;;; ── F+. local-keymap lifecycle vs mode activation ──────────────────
+
+(deftest v019-β-local-keymap-set-to-nil-clears
+  "(set-local-keymap buf nil) clears the slot — buffer reverts to
+   normal minor / major lookup."
+  (limn/mode:clear-modes)
+  (let* ((major (limn/mode:define-mode 'm :type :major))
+         (mkm   (limn/keys:make-keymap))
+         (lkm   (limn/keys:make-keymap))
+         (buf   (limn/mode:make-mode-buffer)))
+    (setf (limn/mode:mode-keymap major) mkm)
+    (limn/keys:define-key mkm "K" 'mode-K)
+    (limn/keys:define-key lkm "K" 'local-K)
+    (limn/mode:activate buf 'm)
+    (funcall (find-symbol "SET-LOCAL-KEYMAP" :limn/mode) buf lkm)
+    (assert-eq 'local-K (limn/mode:lookup-key buf "K"))
+    (funcall (find-symbol "SET-LOCAL-KEYMAP" :limn/mode) buf nil)
+    (assert-eq 'mode-K (limn/mode:lookup-key buf "K")
+               "cleared → reverts to mode binding")))
+
+(deftest v019-β-local-keymap-survives-mode-switch
+  "local-keymap is BUFFER-LOCAL — deactivating major and activating
+   a different one does not clear local-keymap (it's orthogonal)."
+  (limn/mode:clear-modes)
+  (limn/mode:define-mode 'm1 :type :major)
+  (limn/mode:define-mode 'm2 :type :major)
+  (let* ((lkm (limn/keys:make-keymap))
+         (buf (limn/mode:make-mode-buffer)))
+    (limn/keys:define-key lkm "K" 'persistent)
+    (limn/mode:activate buf 'm1)
+    (funcall (find-symbol "SET-LOCAL-KEYMAP" :limn/mode) buf lkm)
+    (assert-eq 'persistent (limn/mode:lookup-key buf "K"))
+    (limn/mode:activate buf 'm2)         ; major mode switch
+    (assert-eq 'persistent (limn/mode:lookup-key buf "K")
+               "local-keymap binding survives major mode change")))
