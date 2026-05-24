@@ -129,7 +129,9 @@
                 ;; v0.28 RED tests — expected to fail until impl lands
                 "text-nav-v028.lisp"
                 "map-macro-v028.lisp"
-                "which-key-v028.lisp"))
+                "which-key-v028.lisp"
+                ;; v0.29 wiring tests
+                "runtime-wireup-v028.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

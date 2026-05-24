@@ -7,6 +7,8 @@
 ;;;;   HEADLESS=0       open a visible Qt window (default: 1, offscreen)
 ;;;;   LIMN_BIN         override binary path
 ;;;;   LIMN_INITIAL     initial PDF/file to open on launch
+;;;;   LIMN_NO_SPAWN=1  load all modules then exit cleanly — no binary needed
+;;;;                    (used by smoke tests and CI)
 
 (in-package #:cl-user)
 
@@ -23,14 +25,17 @@
 
 ;;; ── load all backend modules in dependency order ──────────────────────
 
-(dolist (file '("limn-hooks.lisp"
-                "limn-log.lisp"
-                "limn-error.lisp"
+(dolist (file '(;; v0.7-v0.22 core
+                "limn-hooks.lisp"
+                "limn-log.lisp"               ; v0.23
+                "limn-error.lisp"             ; v0.23
+                "limn-timer.lisp"             ; v0.23 — must precede which-key
+                "limn-process.lisp"           ; v0.23 — must precede buffer
                 "limn-buffer.lisp"
                 "limn-bridge.lisp"
-                "limn-keys.lisp"
                 "limn-undo.lisp"
-                "limn-buffer-undo.lisp"
+                "limn-buffer-undo.lisp"       ; v0.23.1
+                "limn-keys.lisp"
                 "limn-search.lisp"
                 "limn-client.lisp"
                 "limn-dispatch.lisp"
@@ -38,12 +43,7 @@
                 "limn-cmd.lisp"
                 "limn-runtime.lisp"
                 "limn-introspect.lisp"
-                "limn-custom.lisp"            ; v0.25 — pdf-mode defcustom needs it
-                "limn-history.lisp"           ; v0.25 — search-history integration
                 "limn-text-mode.lisp"
-                ;; v0.23 runtime core
-                "limn-process.lisp"
-                "limn-timer.lisp"
                 ;; v0.24 edit model
                 "limn-kill.lisp"
                 "limn-mark.lisp"
@@ -53,18 +53,24 @@
                 "limn-auto-save.lisp"
                 "limn-backup.lisp"
                 "limn-recentf.lisp"
-                ;; v0.25 interaction (limn-custom / limn-history loaded above
-                ;; ahead of text-mode because pdf-mode defcustom needs them).
+                ;; v0.25 interaction
+                "limn-history.lisp"
+                "limn-custom.lisp"
+                "limn-advice.lisp"
                 "limn-face.lisp"
                 "limn-text-props.lisp"
-                "limn-completion.lisp"
                 "limn-help.lisp"
-                "limn-advice.lisp"
+                "limn-completion.lisp"
                 ;; v0.26 search UI
                 "limn-isearch.lisp"
                 "limn-occur.lisp"
-                ;; v0.27 pdf-mode (depends on v0.25 custom/history/completion)
+                ;; v0.27 pdf-mode (depends on v0.25 + v0.26)
                 "limn-pdf-mode.lisp"
+                ;; v0.28 keymap + nav (text-nav needs kill; which-key needs timer)
+                "limn-text-nav.lisp"
+                "limn-map-macro.lisp"
+                "limn-which-key.lisp"
+                ;; bootstrap (last)
                 "limn.lisp"))
   (load (b/ file)))
 
@@ -128,16 +134,15 @@
 
 ;;; ── connect & install REPL helpers ────────────────────────────────────
 
-(spawn-limn)
-(limn:start *limn-socket-path*)
-
-(load (b/ "repl-helpers.lisp"))
-(banner)
-
-;;; Ensure cleanup if the user just hits Ctrl-D instead of (q)
-(push (lambda ()
-        (handler-case (limn:stop) (error () nil))
-        (when (and *limn-process*
-                   (sb-ext:process-alive-p *limn-process*))
-          (sb-ext:process-kill *limn-process* 15)))
-      sb-ext:*exit-hooks*)
+(unless (string= (or (sb-ext:posix-getenv "LIMN_NO_SPAWN") "") "1")
+  (spawn-limn)
+  (limn:start *limn-socket-path*)
+  (load (b/ "repl-helpers.lisp"))
+  (banner)
+  ;; Ensure cleanup if the user just hits Ctrl-D instead of (q)
+  (push (lambda ()
+          (handler-case (limn:stop) (error () nil))
+          (when (and *limn-process*
+                     (sb-ext:process-alive-p *limn-process*))
+            (sb-ext:process-kill *limn-process* 15)))
+        sb-ext:*exit-hooks*))

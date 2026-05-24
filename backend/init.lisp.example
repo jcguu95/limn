@@ -1,75 +1,32 @@
-;;;; init.lisp.example — Limn v0.8 user-facing demo.
+;;;; init.lisp.example — Limn v0.27+ user configuration demo.
 ;;;;
-;;;; What this file is FOR: showing that everything v0.8 shipped (mode
-;;;; runtime + defcommand + introspection + init.lisp auto-load + C-g
-;;;; cancellation) composes into actual usable behaviour. Copy this to
+;;;; Copy to:
+;;;;   ~/.limn/init.lisp                (most users)
+;;;;   $LIMN_INIT                       (explicit override)
+;;;;   /tmp/.limn/init.lisp             (dev fallback)
 ;;;;
-;;;;   ~/.limn/init.lisp                    (most users)
-;;;;   $LIMN_INIT                           (explicit override)
-;;;;   /tmp/.limn/init.lisp                 (dev fallback)
-;;;;
-;;;; …and Limn starts up with vim-style page navigation and a
-;;;; minibuffer-driven search prompt.
+;;;; Demonstrates the v0.27+ config API:
+;;;;   - which-key popup after a prefix key
+;;;;   - leader-key bindings via map!
+;;;;   - recent-file list via recentf
 
 (in-package :cl-user)
 
-;;; ── helpers ────────────────────────────────────────────────────────────
+;;; ── which-key ──────────────────────────────────────────────────────────────
+;;; Show available key hints after a prefix.  Call once to enable.
+(limn/which-key:which-key-mode)
 
-(defun %current-page (&optional (win-id "w1"))
-  (let ((d (limn/bridge:response-data (limn:call "view/get" :|win-id| win-id))))
-    (getf d :|page|)))
-
-(defun %page-count (&optional (win-id "w1"))
-  (let ((d (limn/bridge:response-data (limn:call "view/get" :|win-id| win-id))))
-    (getf d :|page-count|)))
-
-(defun %goto-page (n &optional (win-id "w1"))
-  (limn:call "view/set" :|win-id| win-id :|page| n))
-
-(defun %clamp (n lo hi) (max lo (min n hi)))
-
-;;; ── page-nav commands ──────────────────────────────────────────────────
-
-(limn/cmd:defcommand next-page ()
-  (lambda ()
-    (let* ((p (%current-page))
-           (n (%page-count)))
-      (%goto-page (%clamp (1+ p) 0 (1- n))))))
-
-(limn/cmd:defcommand prev-page ()
-  (lambda ()
-    (%goto-page (%clamp (1- (%current-page)) 0 1000000))))
-
-(limn/cmd:defcommand first-page ()
-  (lambda () (%goto-page 0)))
-
-(limn/cmd:defcommand last-page ()
-  (lambda () (%goto-page (1- (%page-count)))))
-
-;;; ── search command (minibuffer demo) ──────────────────────────────────
+;;; ── leader-key bindings (default leader: SPC) ─────────────────────────────
 ;;;
-;;; The "s" interactive spec drives the framework's minibuffer reader.
-;;; C-g during the prompt aborts via minibuffer-cancelled (the binding
-;;; in limn.lisp catches it so the binding return is clean).
-;;;
-;;; For v0.8 we just echo the query to *Messages* — wiring real
-;;; hit-by-hit navigation is engine-side work for v0.9.
+;;; (map! :leader KEY FN ...) binds into *leader-keymap*.
+;;; Use multiple pairs in one call or call map! multiple times.
+(limn/map-macro:map! :leader
+  "f f" #'limn/file:find-file
+  "f s" #'limn/file:save-buffer)
 
-(limn/cmd:defcommand search-here (:interactive "s/")
-  (lambda (query)
-    (limn:call "message/echo"
-                :|text| (format nil "Searching for: ~a (~a chars)"
-                                query (length query)))))
+;;; ── recent files ───────────────────────────────────────────────────────────
+;;; Restore *recentf-list* from ~/.limn/recentf on startup.
+;;; No-op when the file is absent.
+(limn/recentf:recentf-load)
 
-;;; ── bindings ──────────────────────────────────────────────────────────
-;;;
-;;; vim convention: j/k = down/up by page, g g = first, G = last, / = search.
-;;; All bindings use symbol form so where-is-command can find them.
-
-(limn:bind "j"   'next-page)
-(limn:bind "k"   'prev-page)
-(limn:bind "g g" 'first-page)
-(limn:bind "G"   'last-page)
-(limn:bind "/"   'search-here)
-
-(format t ";; demo init.lisp loaded: j/k page nav, g-g/G boundaries, / search~%")
+(format t ";; init.lisp loaded: which-key, leader SPC f f/s, recentf~%")
