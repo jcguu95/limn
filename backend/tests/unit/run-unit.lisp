@@ -26,6 +26,9 @@
 ;; v0.23 shared helpers (with-timeout-bound, fake-clock, mock-buffer)
 (load (rel "v023-helpers.lisp"))
 
+;; v0.24 shared helpers (cursor-aware mock-buf24, with-kill-buf, with-mark-buf)
+(load (rel "v024-helpers.lisp"))
+
 ;; Backend implementation modules (loaded BEFORE tests so the unit-test
 ;; package-stubs are replaced by real packages).
 (dolist (impl '("limn-hooks.lisp"
@@ -74,7 +77,16 @@
                 "timer-v023.lisp"
                 "condition-v023.lisp"
                 "buffer-undo-v023.lisp"
-                "logging-v023.lisp"))
+                "logging-v023.lisp"
+                ;; v0.24 RED tests — expected to fail until impl lands
+                "kill-ring-v024.lisp"
+                "mark-ring-v024.lisp"
+                "registers-v024.lisp"
+                "kmacro-v024.lisp"
+                "file-io-v024.lisp"
+                "auto-save-v024.lisp"
+                "backup-v024.lisp"
+                "recentf-v024.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

@@ -2115,10 +2115,65 @@ v0.23 可分階段（先做 A/B/C/E、最後補 D）。
 
 **** C. =registers=
 
-- =register-alist= (single hash table)
-- =point-to-register= char、=jump-to-register= char
-- =copy-to-register= char start end、=insert-register= char
-- =window-configuration-to-register= char（暫存 frame layout）
+Package =limn/register=。register 是單字元 key（字元或符號）→ value
+的 alist，完全在 Lisp 層、不碰 C++。
+
+資料結構：
+
+- =*register-alist*= : alist of (char . value)，全域共享
+- value 型態：
+  - =(string . str)= — 文字片段
+  - =(position buf-id . offset)= — 某 buffer 游標位置
+  - =(window-config . opaque)= — frame layout 快照（暫時用
+    opaque string、v0.25 再細化渲染）
+  - =(number . n)= — 整數（加減用途）
+  - =(rectangle . list-of-strings)= — 矩形文字（v0.24 可
+    stub、留實作給 v0.25 矩形選取）
+
+公開 API：
+
+- =limn/register:set-register= char value → push/replace alist
+- =limn/register:get-register= char → value 或 nil
+- =limn/register:point-to-register= char buf-id
+  → 儲存 =(position buf-id . current-cursor)=
+- =limn/register:jump-to-register= char
+  → 若 value 是 position、移動對應 buffer 的 cursor
+- =limn/register:copy-to-register= char start end buf-id
+  → 儲存 buffer 區段文字為 =(string . str)=
+- =limn/register:insert-register= char buf-id
+  → 把 string register 插入 buffer point 處
+- =limn/register:window-configuration-to-register= char
+  → 儲存目前 window layout 快照（opaque）
+- =limn/register:register-read-with-preview= prompt
+  → 讀一個字元、回 register value（minibuffer）
+- =limn/register:list-registers= → 回 alist 副本（用於 describe）
+
+I/O vtable（test isolation）：
+
+- =*buffer-cursor-fn*= : (buf-id) → integer — 讀 cursor
+- =*buffer-set-cursor-fn*= : (buf-id offset) → — 寫 cursor
+- =*buffer-text-fn*= : (buf-id start end) → string — 讀片段
+- =*buffer-insert-fn*= : (buf-id offset str) → — 插入
+
+不做：
+
+- 不做 register 視覺化 popup（v0.25 可 user-land 加）
+- 不做 rectangle kill/yank 完整語義（stub 即可）
+- 不做 C++ 改動
+
+測試計畫 — =registers-v024.lisp=：
+
+- C1 基本 set/get (5)：set 後 get / nil / 覆蓋 / 多個不互衝 /
+  list-registers 回正確 alist
+- C2 text register (4)：copy → string value / insert 到 buffer /
+  insert nil register error / copy 空區段 = 空字串
+- C3 position register (4)：point-to-register 記當前 cursor /
+  jump-to-register 移 cursor / jump nil register error /
+  不同 buf 各自獨立
+- C4 window-config register (2)：set 後 get type / jump-to-register
+  對 window-config 觸發適當 callback（vtable 注入驗証）
+- C5 edge cases (4)：同 char 連存覆蓋 / 0-length text / char
+  是符號不是字元 / list-registers 在空時回 nil
 
 **** D. =kbd-macro=
 
@@ -2128,23 +2183,168 @@ v0.23 可分階段（先做 A/B/C/E、最後補 D）。
 - =name-last-kbd-macro= name → 存成具名 command
 - =kmacro-counter= / =kmacro-insert-counter=
 
-**** E. File I/O — =find-file= / =save-buffer=
+**** E. File I/O — =find-file= / =save-buffer= / =revert-buffer=
 
-- =limn/file:find-file= path → open buffer
-  - 若 path 是 PDF → 走 engine load
-  - 若 path 是 text → 走 gap buffer + utf-8 decode
-  - 其他 → binary buffer 或拒絕
-- =limn/file:save-buffer= buf &optional path
-- =limn/file:revert-buffer= buf
-- =find-file-hook= / =before-save-hook= / =after-save-hook=
-- 跨平台 path handling、symlink follow 策略
+Package =limn/file=。v0.22 已實作 =find-file= / =save-buffer=
+基礎版（在 limn-text-mode.lisp）；v0.24 補 hook 機制、
+=revert-buffer=、engine routing 細化、path normalization。
+
+公開 API：
+
+- =limn/file:find-file= path
+  - normalize path：relative → absolute（以 =*default-directory*=
+    為 base）、follow symlinks（=truename=）
+  - 若 buffer registry 已有同 path 的 buffer → 切換、不重新載入
+  - 依 =limn/file:file-type= path 判斷路由：
+    - =:pdf= / 引擎支援的 extension → 走 engine load wire
+    - =:text= 或未知 → 走 gap buffer + utf-8 decode
+    - =:binary= → read-only binary stub（不 error、可看）
+  - 成功後依序觸發 =*find-file-hook*= 中各 function (buf-id path)
+  - 返回 buf-id（string）
+- =limn/file:save-buffer= buf-id &optional path
+  - path 省略時用 buffer 的原始 path
+  - 依序觸發 =*before-save-hook*= 中各 function (buf-id)
+  - 若 =*require-final-newline*= 且最後一字元非 newline → 附加 "\n"
+  - 寫盤成功後：set-buffer-modified-p nil、更新 visited-file-name
+  - 觸發 =*after-save-hook*= 中各 function (buf-id)
+- =limn/file:revert-buffer= buf-id &key (confirm t)
+  - confirm t 時問 user（走 minibuffer yes/no）；confirm nil 直接 revert
+  - 從 buffer 的 visited-file-name 重新讀取盤上內容
+  - 重新載入後觸發 =*after-revert-hook*=
+  - 若檔案不存在 → signal error
+- =limn/file:file-type= path → =:pdf= / =:text= / =:binary=
+  - 看 extension alist =*file-type-alist*=（default: pdf→:pdf、txt/lisp/
+    md/org/c/h → :text、其餘 → :binary if binary bytes in first 512)
+- =limn/file:visited-file-name= buf-id → string or nil
+- =limn/file:buffer-modified-p= buf-id → boolean
+- =limn/file:set-buffer-modified-p= buf-id bool
+
+Hooks（皆為 function list，callable (buf-id) 或 (buf-id path)）：
+
+- =*find-file-hook*= — post-open，function (buf-id path)
+- =*before-save-hook*= — pre-write，function (buf-id)
+- =*after-save-hook*= — post-write，function (buf-id)
+- =*after-revert-hook*= — post-revert，function (buf-id)
+
+變數：
+
+- =*require-final-newline*= default nil
+- =*default-directory*= default (sb-posix:getcwd)
+- =*file-type-alist*= — extension → keyword alist
+
+I/O vtable（test isolation）：
+
+- =*read-file-fn*= : (path) → string — 讀磁碟
+- =*write-file-fn*= : (path content) → — 寫磁碟
+- =*file-exists-p-fn*= : (path) → boolean
+- =*engine-load-fn*= : (path buf-id) → — engine wire call
+- =*buffer-set-content-fn*= : (buf-id str) →
+- =*minibuffer-yes-no-fn*= : (prompt) → boolean（revert confirm）
+
+不做：
+
+- 不做 encoding detection beyond utf-8 / latin-1
+- 不做 file-name completion（v0.25）
+- 不做 TRAMP / remote file
+- 不做 binary 編輯（read-only stub 即可）
+- 不重寫 v0.22 已有的基礎實作、只在上層加 hook 包裝
+
+測試計畫 — =file-io-v024.lisp=：
+
+- E1 find-file hook (5)：hook fire / 多個 hook 依序 / hook throw
+  不中斷 open / hook 收 buf-id + path / 已開 buffer 不重載
+- E2 save-buffer hook (5)：before-save fire / after-save fire /
+  before throw 不寫盤 / require-final-newline 附加 / 寫盤呼叫
+  write-file-fn 一次
+- E3 revert-buffer (5)：成功 revert 呼叫 read-file-fn / 觸發
+  after-revert-hook / confirm nil 不問 / 檔不存在 error / revert
+  後 modified-p false
+- E4 file-type routing (4)：.pdf → :pdf / .lisp → :text / 含
+  binary bytes → :binary / alist 自定義 extension
+- E5 path normalization (4)：relative → absolute / symlink
+  follow（mock truename）/ 已在 registry 不重載 / nil path
+  用 visited-file-name
+- E6 buffer-modified-p (3)：初始 false / write-file-fn 後 false /
+  set-buffer-modified-p 手動 toggle
 
 **** F. =auto-save= — 建在 v0.23 timer
 
-- =auto-save-timeout= default 30 secs
-- =auto-save-interval= default 300 keystrokes
-- 自動寫 =#filename#= sidecar
-- =recover-file= 啟動時偵測未清理 auto-save
+Package =limn/auto-save=。兩個觸發路徑：timer 觸發（idle 30s）和
+keystroke 計數觸發（300 次）。自動備份寫 =#path#= sidecar；sidecar
+在正常 save 時刪除。
+
+觸發條件：
+
+- **Timer path**：=limn/timer:run-with-idle-timer *auto-save-timeout*
+  #'auto-save-all-buffers= — 每次 dispatch 事件時重置 idle 計時
+- **Keystroke path**：=limn.lisp= 的 =%dispatch-key= 在每次成功
+  dispatch 後呼叫 =limn/auto-save:tick=；=*auto-save-counter*= 累到
+  =*auto-save-interval*= 時觸發一次 =auto-save-all-buffers= 並歸零
+
+Sidecar 命名規則：
+
+- =/some/dir/foo.txt= → =/some/dir/#foo.txt#=
+- =/some/dir/.dotfile= → =/some/dir/#.dotfile#=
+- 路徑含 =/= → =%2F= 轉義（只用於命名、不影響讀寫路徑）
+
+公開 API：
+
+- =limn/auto-save:auto-save-buffer= buf-id — 寫 sidecar（只對
+  modified + visited + not-recently-saved）
+- =limn/auto-save:auto-save-all-buffers= — iterate 全部 buffer
+- =limn/auto-save:delete-auto-save-file= buf-id — 正常 save 後呼叫
+- =limn/auto-save:auto-save-file-name= buf-id → string or nil
+  （用 =visited-file-name= 組 =#name#=；無 visited-file-name 則 nil）
+- =limn/auto-save:recover-file= path — 找 =#path#=、若存在且比
+  original 新 → 問 user 是否 recover（走 minibuffer yes/no）
+- =limn/auto-save:recover-session= — 啟動時掃 =*auto-save-list-file*=
+  記錄的所有 path、逐一 recover-file
+- =limn/auto-save:tick= — keystroke 計數器 +1、到 interval 自動觸發
+- =limn/auto-save:reset-counter= — 手動歸零（測試用）
+
+變數：
+
+- =*auto-save-timeout*= default 30（秒，nil 關閉 timer path）
+- =*auto-save-interval*= default 300（keystrokes，nil 關閉計數路徑）
+- =*auto-save-counter*= — 目前 keystroke 計數（runtime state）
+- =*auto-save-list-file*= default ="~/.limn/auto-save-list"=
+- =*delete-auto-save-files*= default t（正常 save 後自動刪 sidecar）
+
+I/O vtable（test isolation）：
+
+- =*write-auto-save-fn*= : (sidecar-path content) →
+- =*read-auto-save-fn*= : (sidecar-path) → string or nil
+- =*auto-save-exists-p-fn*= : (sidecar-path) → boolean
+- =*auto-save-newer-p-fn*= : (orig-path sidecar-path) → boolean
+- =*minibuffer-yes-no-fn*= : (prompt) → boolean（recover confirm）
+- =*buffer-content-fn*= : (buf-id) → string（讀 buffer 全文）
+
+與 limn/file 整合：
+
+- =limn/file:save-buffer= 最後呼叫
+  =limn/auto-save:delete-auto-save-file=（若 =*delete-auto-save-files*=）
+- =limn/file:find-file= 後呼叫 =limn/auto-save:recover-file=
+
+不做：
+
+- 不做 auto-save 到 remote（TRAMP）
+- 不做 sidecar 壓縮
+- 不做 session 視覺化 UI（user-land）
+
+測試計畫 — =auto-save-v024.lisp=：
+
+- F1 sidecar naming (4)：普通 path / dotfile / 路徑含空格 /
+  no visited-file-name → nil
+- F2 auto-save-buffer (5)：modified buffer 寫 sidecar / unmodified
+  no-op / no visited-file-name no-op / write-fn 被呼叫一次 /
+  *delete-auto-save-files* t 在 save 後刪
+- F3 keystroke counter (4)：tick N 次 / 到 interval 觸發 / 觸發後
+  歸零 / interval nil 不觸發
+- F4 recover-file (5)：sidecar 不存在 no-op / sidecar 存在但舊
+  no-op / sidecar 存在且新 → 問 user / user yes → 讀 sidecar /
+  user no → no-op
+- F5 auto-save-all-buffers (3)：多 buf 逐一 save / one modified
+  one not / empty registry no error
 
 **** G. =backup= files
 
@@ -2155,20 +2355,95 @@ v0.23 可分階段（先做 A/B/C/E、最後補 D）。
 
 **** H. =recentf=
 
-- =recentf-list= LRU ring（default 50）
-- 開檔 → push 進 list
-- sidecar 持久化 =~/.limn/recentf.lisp=（沿用 v0.17 sidecar 模式）
-- =recentf-open= → completing-read 選一個（依賴 v0.25 completion、
-  v0.24 可暫用 numeric prefix 選）
+Package =limn/recentf=。LRU list of recently opened file paths，
+sidecar 持久化。v0.24 版不依賴 v0.25 completion，以 numeric prefix
+或直接選 top-1 實作 =recentf-open=。
+
+核心資料結構：
+
+- =*recentf-list*= : string list，最新在最前，去重，長度上限
+  =*recentf-max-saved-items*= default 50
+- sidecar 格式：pure Lisp sexpr，=(:recentf-list ("path1" "path2" ...))=
+  寫進 =*recentf-save-file*=，開機時 =recentf-load= 讀入
+
+公開 API：
+
+- =limn/recentf:recentf-push= path — normalize path 後 push 到
+  =*recentf-list*= 前端；若已在 list 中先移除再 push；trim 到 max
+- =limn/recentf:recentf-save= — 將 =*recentf-list*= 序列化寫 sidecar
+- =limn/recentf:recentf-load= — 從 sidecar 讀入 =*recentf-list*=
+  （sidecar 不存在時 no-op）
+- =limn/recentf:recentf-open= &optional n — 以 n 為 1-based index
+  選 =*recentf-list*= 中第 n 個 path，呼叫 =find-file=；n 省略時
+  選第 1 個（最近）
+- =limn/recentf:recentf-clear= — 清空 =*recentf-list*=
+- =limn/recentf:recentf-remove= predicate — 移除符合 predicate 的
+  path（用於清理不存在的檔案）
+
+Hook 接點：
+
+- =*find-file-hook*= 中加入 =(limn/recentf:recentf-push path)=
+  — 開檔時自動記錄
+- =*after-save-hook*= 中加入 recentf-push（save 時也更新）
+
+變數：
+
+- =*recentf-max-saved-items*= default 50
+- =*recentf-save-file*= default ="~/.limn/recentf.lisp"=
+- =*recentf-auto-cleanup*= default nil（t 時定期清 list 中不存在的
+  path）
+
+I/O vtable（test isolation）：
+
+- =*recentf-write-fn*= : (path content) → — 寫 sidecar
+- =*recentf-read-fn*= : (path) → string or nil — 讀 sidecar
+- =*find-file-fn*= : (path) → — open buffer（recentf-open 用）
+
+不做：
+
+- 不做 completing-read 選法（v0.25 再 wire）
+- 不做 auto-cleanup on open（=*recentf-auto-cleanup*= nil by default）
+- 不做 recentf-mode minor mode（全域 always-on、不需 toggle）
+- 不做 sidecar 壓縮
+
+測試計畫 — =recentf-v024.lisp=：
+
+- H1 recentf-push (5)：push 新 path / push 重複 path 移到頂 /
+  push 超過 max 截尾 / push normalize path / push nil no-op
+- H2 recentf-save/load (4)：save 呼叫 write-fn 一次 / load 呼叫
+  read-fn / load 後 *recentf-list* 正確 / sidecar 不存在 load
+  no-op
+- H3 recentf-open (4)：open n=1 呼叫 find-file-fn / open n=2 選
+  第二個 / n 超出範圍 no error / list 為空 no error
+- H4 recentf-remove (3)：移除符合 predicate / 移除不在 list 中
+  no error / 移除後 list 長度正確
+- H5 LRU 語義 (3)：最近 push 在最前 / max 截斷保留最新 /
+  重複 path dedup 後不多占位
 
 **** Testing
 
-- Unit ~120 tests（每個原語 12–15 個 deftest）
-- Qt-tier ~5 tests（clipboard 整合：set / get / 跨 buffer）
-- OS-tier ~3 batches
-  - =batch-os-find-file=: 真開檔 / 改 / 存 / verify disk
-  - =batch-os-auto-save=: 等 timer fire、驗 sidecar
-  - =batch-os-kill-yank-clipboard=: xclip put、Lisp yank、verify
+8 個測試檔（每個原語 15–26 deftest）：
+
+- =kill-ring-v024.lisp= ~30 tests (A: kill-new/append/region/yank/
+  yank-pop/last-command/clipboard)
+- =mark-ring-v024.lisp= ~22 tests (B: set-mark/push/pop/exchange/
+  global ring)
+- =registers-v024.lisp= ~19 tests (C: set/get/text/position/window-config/edge)
+- =kmacro-v024.lisp= ~20 tests (D: start/end/record/replay/name/counter)
+- =file-io-v024.lisp= ~26 tests (E: find-file hook/save hook/revert/
+  file-type/path-norm/modified-p)
+- =auto-save-v024.lisp= ~21 tests (F: naming/save/counter/recover/all-buffers)
+- =backup-v024.lisp= ~15 tests (G: make-name/backup-buffer/flags/prune/hooks)
+- =recentf-v024.lisp= ~19 tests (H: push/save-load/open/remove/LRU)
+
+Qt-tier ~5 tests（clipboard 整合：set / get / 跨 buffer）
+
+OS-tier ~3 batches：
+
+- =batch-os-find-file=: 真開檔 / 改 / 存 / verify disk
+- =batch-os-auto-save=: 等 timer fire（idle 30s）、驗 sidecar 存在 /
+  正常 save 後 sidecar 消失
+- =batch-os-kill-yank-clipboard=: xclip put / Lisp yank / verify
 
 **** 不做的
 
