@@ -91,6 +91,9 @@
                 "limn-region.lisp"
                 ;; v0.34 regex engine (depends on cl-ppcre vendor + v0.32)
                 "limn-regex.lisp"
+                ;; v0.35 file-notify + auto-revert + process I/O coding
+                "limn-file-notify.lisp"
+                "limn-auto-revert.lisp"
                 ;; bootstrap (last)
                 "limn.lisp"))
   (load (b/ file)))

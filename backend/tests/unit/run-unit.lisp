@@ -95,7 +95,10 @@
                 "limn-overlays.lisp"
                 "limn-region.lisp"
                 ;; v0.34 module — regex engine (depends on cl-ppcre vendor)
-                "limn-regex.lisp"))
+                "limn-regex.lisp"
+                ;; v0.35 modules — file-notify + auto-revert
+                "limn-file-notify.lisp"
+                "limn-auto-revert.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -166,7 +169,11 @@
                 ;; v0.33b RED tests — buffer-kind dispatch + codepoint-rects
                 "overlays-v033b.lisp"
                 ;; v0.34 RED tests — expected to fail until impl lands
-                "regex-v034.lisp"))
+                "regex-v034.lisp"
+                ;; v0.35 tests (GREEN — file-notify + auto-revert + process-coding)
+                "file-notify-v035.lisp"
+                "auto-revert-v035.lisp"
+                "process-coding-v035.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

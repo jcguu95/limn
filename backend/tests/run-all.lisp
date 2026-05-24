@@ -85,7 +85,9 @@
                  ;; v0.33b: buffer/codepoint-rects + text-range layer
                  "suites/overlays-v033b.lisp"
                  ;; v0.34 regex engine (cl-ppcre + Emacs-style API)
-                 "suites/regex-v034.lisp"))
+                 "suites/regex-v034.lisp"
+                 ;; v0.35 file-notify + auto-revert + process-coding
+                 "suites/file-notify-v035.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)

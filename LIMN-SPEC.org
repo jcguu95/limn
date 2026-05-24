@@ -4136,7 +4136,7 @@ OS-tier ~1：
 - 不做 syntax-tables 整合（=\\sw= / =\\s-= 透過 v0.31 syntax tables 查、
   不直接走 PCRE 的 =\\w=）—— 此整合是 v0.31 完成後的優化
 
-*** v0.35 file-notify + auto-revert + process I/O coding ⏭ planned
+*** v0.35 file-notify + auto-revert + process I/O coding ✓ shipped
 
 把「外部世界變化」這條打通：檔案被別的程式改、subprocess 講不同編碼、
 都要進 Limn 不會破。

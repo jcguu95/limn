@@ -240,7 +240,10 @@
 
 (defun revert-buffer (buf-id &key (confirm t))
   "Re-read the buffer's content from disk. With :confirm t (default),
-   prompts the user via *minibuffer-yes-no-fn*. Fires *after-revert-hook*."
+   prompts the user via *minibuffer-yes-no-fn*. Fires *after-revert-hook*.
+   Raw bytes returned by *read-file-fn* are run through %decode-file-content
+   (same as find-file) so the buffer always sees a string. v0.35: auto-revert
+   needs this to round-trip text correctly via the file-notify event path."
   (let* ((b (or (gethash buf-id *bufs*)
                 (error "limn/file: unknown buffer ~s" buf-id)))
          (path (fbuf-path b)))
@@ -250,7 +253,8 @@
                (not (funcall *minibuffer-yes-no-fn*
                              (format nil "Revert ~a from disk?" path))))
       (return-from revert-buffer nil))
-    (let ((content (or (funcall *read-file-fn* path) "")))
+    (let* ((raw     (or (funcall *read-file-fn* path) ""))
+           (content (%decode-file-content raw path buf-id)))
       (setf (fbuf-content b) content
             (fbuf-modified-p b) nil)
       (funcall *buffer-set-content-fn* buf-id content))
