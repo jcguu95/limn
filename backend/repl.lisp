@@ -23,6 +23,14 @@
 
 (defun b/ (p) (namestring (merge-pathnames p *backend-dir*)))
 
+;;; ── v0.34: vendor cl-ppcre ────────────────────────────────────────────
+;;; Loaded before backend modules so limn-regex.lisp can resolve cl-ppcre
+;;; at compile time. Soft-load: missing submodule is RED for §A but does
+;;; not crash repl bring-up.
+
+(handler-case (load (b/ "../vendor/cl-ppcre-load.lisp"))
+  (error (e) (format t "  !! skipped vendor cl-ppcre: ~A~%" e)))
+
 ;;; ── load all backend modules in dependency order ──────────────────────
 
 (dolist (file '(;; v0.7-v0.22 core
@@ -78,6 +86,8 @@
                 "limn-coding.lisp"
                 ;; v0.32 current-buffer / save-excursion / narrow
                 "limn-excursion.lisp"
+                ;; v0.34 regex engine (depends on cl-ppcre vendor + v0.32)
+                "limn-regex.lisp"
                 ;; bootstrap (last)
                 "limn.lisp"))
   (load (b/ file)))

@@ -23,6 +23,14 @@
 ;; Framework
 (load (rel "unit-framework.lisp"))
 
+;; v0.34 — vendor cl-ppcre (loaded before backend modules so limn-regex can
+;; resolve cl-ppcre at compile-time). Soft-load: missing submodule is RED
+;; for §A but doesn't crash the runner.
+(handler-case
+    (load (namestring (merge-pathnames "../../../vendor/cl-ppcre-load.lisp"
+                                       *unit-dir*)))
+  (error (e) (format t "  !! skipped vendor cl-ppcre: ~A~%" e)))
+
 ;; v0.23 shared helpers (with-timeout-bound, fake-clock, mock-buffer)
 (load (rel "v023-helpers.lisp"))
 
@@ -82,7 +90,9 @@
                 "limn-syntax.lisp"
                 "limn-coding.lisp"
                 ;; v0.32 module
-                "limn-excursion.lisp"))
+                "limn-excursion.lisp"
+                ;; v0.34 module — regex engine (depends on cl-ppcre vendor)
+                "limn-regex.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -147,7 +157,9 @@
                 "syntax-v031.lisp"
                 "coding-v031.lisp"
                 ;; v0.32 RED tests — expected to fail until impl lands
-                "excursion-v032.lisp"))
+                "excursion-v032.lisp"
+                ;; v0.34 RED tests — expected to fail until impl lands
+                "regex-v034.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

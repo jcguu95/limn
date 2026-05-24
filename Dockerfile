@@ -63,6 +63,7 @@ RUN nix-env -iA \
 # re-run on incremental changes.
 COPY sioyek/  /limn/sioyek/
 COPY backend/ /limn/backend/
+COPY vendor/  /limn/vendor/
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Build Limn — with ccache via buildkit cache mount.

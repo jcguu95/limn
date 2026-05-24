@@ -27,12 +27,15 @@
 
 ;;; ── find-matches ───────────────────────────────────────────────────────
 
-(defun find-matches (words query &key case-sensitive regex fuzzy whole-word)
+(defun find-matches (words query &key case-sensitive regex fuzzy whole-word
+                                       (emacs-syntax t))
   (when (or (null query) (zerop (length query)))
     (return-from find-matches nil))
   (cond
     (fuzzy   (fuzzy-find-matches    words query :case-sensitive case-sensitive))
-    (regex   (regex-find-matches    words query :case-sensitive case-sensitive))
+    (regex   (regex-find-matches    words query
+                                    :case-sensitive case-sensitive
+                                    :emacs-syntax emacs-syntax))
     (whole-word (whole-word-find-matches words query :case-sensitive case-sensitive))
     (t       (exact-find-matches    words query :case-sensitive case-sensitive))))
 
@@ -71,13 +74,38 @@
                              (aref arr i)) out))
     (nreverse out)))
 
-(defun regex-find-matches (words pattern &key case-sensitive)
-  (declare (ignore case-sensitive))
-  "Use cl-ppcre if available; otherwise fall back to a tiny regex."
-  (loop for w in words
-        for i from 0
-        when (tiny-regex-match pattern (getf w :|text|))
-          collect (list* :|word-index| i w)))
+(defun regex-find-matches (words pattern &key case-sensitive (emacs-syntax t))
+  "v0.34: prefer cl-ppcre when available, with optional Emacs→PCRE
+   translation. Falls back to the v0.27 tiny-regex if cl-ppcre / limn/regex
+   are not loaded (keeps the module usable in minimal images).
+   cl-ppcre symbols are resolved via find-symbol so this file compiles in
+   minimal images without the vendor submodule."
+  (let* ((rpkg (find-package '#:limn/regex))
+         (ppkg (find-package '#:cl-ppcre))
+         (translate (and emacs-syntax rpkg
+                         (find-symbol "EMACS-REGEX-TO-PCRE" rpkg)))
+         (effective-pattern (if (and translate (fboundp translate))
+                                (funcall translate pattern)
+                                pattern))
+         (create-scanner (and ppkg (find-symbol "CREATE-SCANNER" ppkg)))
+         (scan           (and ppkg (find-symbol "SCAN" ppkg))))
+    (cond
+      ((and create-scanner scan (fboundp create-scanner) (fboundp scan))
+       (let ((scanner
+               (funcall create-scanner
+                        effective-pattern
+                        :case-insensitive-mode (not case-sensitive))))
+         (loop for w in words
+               for i from 0
+               when (funcall scan scanner (or (getf w :|text|) ""))
+                 collect (list* :|word-index| i w))))
+      (t
+       ;; Fallback (cl-ppcre missing). case-sensitive is silently ignored
+       ;; by the tiny-regex impl — kept as parameter for API parity.
+       (loop for w in words
+             for i from 0
+             when (tiny-regex-match pattern (getf w :|text|))
+               collect (list* :|word-index| i w))))))
 
 (defun tiny-regex-match (pattern text)
   "Toy regex: handles ^...$ anchors, [chars] character classes, literal chars.
