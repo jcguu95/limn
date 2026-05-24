@@ -109,6 +109,12 @@
   (sleep 0.3)
   (wait-for-window)
 
+  (when (xpkg)
+    (let ((install-bo (xsym "INSTALL-BUFFER-OPENED-HANDLER"))
+          (install-vt (xsym "INSTALL-WIRE-VTABLE")))
+      (when install-bo (funcall install-bo))
+      (when install-vt (funcall install-vt))))
+
   (unless (xpkg)
     (format t "✗ FATAL: limn/excursion not loaded — RED expected~%")
     (push "limn/excursion not loaded" *failures*))
@@ -119,6 +125,11 @@
     (unless buf
       (limn:stop) (sb-ext:process-kill proc 15)
       (sb-ext:process-wait proc) (sb-ext:exit :code 2))
+
+    (when (xpkg)
+      (let ((reg (xsym "REGISTER-BUFFER")))
+        (when reg (funcall reg (list :|buffer-id| buf) buf :name buf))))
+    (sleep 0.1)
 
     (let ((set-buf (xsym "SET-BUFFER")))
       (when set-buf (funcall set-buf buf)))

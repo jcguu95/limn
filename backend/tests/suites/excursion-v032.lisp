@@ -29,9 +29,49 @@
   (let ((install (find-symbol "INSTALL-BUFFER-MODIFIED-HANDLER" '#:limn/marker)))
     (when install (funcall install))))
 
+;; v0.32：suite-framework-backed vtable. The Qt-tier framework uses its
+;; own send!/read-response (it doesn't go through limn/dispatch:call),
+;; so limn/excursion's default install-wire-vtable (which calls limn:call)
+;; doesn't work here. Install vtable functions that use the suite's send!.
+(defun %suite-cursor-get (bid)
+  (let ((r (send! "buffer/cursor-get" :|buffer-id| bid)))
+    (and r (eq (getf r :|ok|) t) (getf (getf r :|data|) :|offset|))))
+
+(defun %suite-cursor-set (bid off)
+  (send! "buffer/cursor-set" :|buffer-id| bid :|offset| off)
+  off)
+
+(defun %suite-text-len (bid)
+  (let* ((r (send! "buffer/text" :|buffer-id| bid))
+         (txt (and r (eq (getf r :|ok|) t) (getf (getf r :|data|) :|text|))))
+    (if (stringp txt) (length txt) 0)))
+
+(when (find-package '#:limn/excursion)
+  (let ((xpkg (find-package '#:limn/excursion))
+        (mpkg (find-package '#:limn/marker)))
+    ;; install excursion's vtable directly with the suite's wire fns.
+    (set (find-symbol "*POINT-FN*"           xpkg) #'%suite-cursor-get)
+    (set (find-symbol "*SET-POINT-FN*"       xpkg) #'%suite-cursor-set)
+    (set (find-symbol "*BUFFER-TEXT-LEN-FN*" xpkg) #'%suite-text-len)
+    ;; install marker's parallel vtable so set-marker clamping uses real text-len.
+    (when mpkg
+      (set (find-symbol "*BUFFER-CURSOR-FN*"   mpkg) #'%suite-cursor-get)
+      (set (find-symbol "*BUFFER-TEXT-LEN-FN*" mpkg) #'%suite-text-len))
+    ;; subscribe to event/buffer-opened for auto-registration.
+    (let ((install-bo (find-symbol "INSTALL-BUFFER-OPENED-HANDLER" xpkg)))
+      (when install-bo (funcall install-bo)))
+    ;; pre-register chrome buffers.
+    (let ((reg (find-symbol "REGISTER-BUFFER" xpkg)))
+      (when reg
+        (dolist (bid '("*minibuffer*" "*echo-area*" "*messages*"))
+          (funcall reg (list :|buffer-id| bid) bid :name bid))))))
+
 (defmacro with-text-buffer-events ((buf-var) &body body)
   "Open a fresh text buffer + drain events + reset marker / local / mark
-   state for this buf-id."
+   state for this buf-id. Also defensively registers BUF-VAR with
+   limn/excursion (the buffer-opened event handler should already pick
+   it up, but the suite framework's event delivery runs through its own
+   queue, so we register here to remove any race)."
   `(let* ((r0 (send! "bridge/engine-load"
                      :|win-id| "w1" :|engine| "text" :|path| ""))
           (,buf-var (json-get* r0 :|data| :|buffer-id|)))
@@ -43,6 +83,12 @@
                             (find-symbol "RESET-BUFFER-LOCALS" pkg)
                             (find-symbol "RESET-MARKS" pkg))))
              (when reset (funcall reset ,buf-var))))))
+     ;; Defensive registration in limn/excursion.
+     (let ((xpkg (find-package '#:limn/excursion)))
+       (when xpkg
+         (let ((reg (find-symbol "REGISTER-BUFFER" xpkg)))
+           (when reg (funcall reg (list :|buffer-id| ,buf-var)
+                              ,buf-var :name ,buf-var)))))
      (unwind-protect (progn ,@body)
        (when ,buf-var
          (ignore-errors (send! "buffer/close" :|buffer-id| ,buf-var))))))

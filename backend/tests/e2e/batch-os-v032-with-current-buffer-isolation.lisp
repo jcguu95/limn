@@ -92,6 +92,12 @@
   (sleep 0.3)
   (wait-for-window)
 
+  (when (xpkg)
+    (let ((install-bo (xsym "INSTALL-BUFFER-OPENED-HANDLER"))
+          (install-vt (xsym "INSTALL-WIRE-VTABLE")))
+      (when install-bo (funcall install-bo))
+      (when install-vt (funcall install-vt))))
+
   (unless (xpkg)
     (format t "✗ FATAL: limn/excursion not loaded — RED expected~%")
     (push "limn/excursion not loaded" *failures*))
@@ -105,6 +111,12 @@
       (sb-ext:process-kill proc 15)
       (sb-ext:process-wait proc)
       (sb-ext:exit :code 2))
+
+    ;; Defensive register + give the event handler a tick to run.
+    (when (xpkg)
+      (let ((reg (xsym "REGISTER-BUFFER")))
+        (when reg (funcall reg (list :|buffer-id| buf) buf :name buf))))
+    (sleep 0.1)
 
     (let ((set-buf (xsym "SET-BUFFER")))
       (when set-buf (funcall set-buf buf)))
@@ -157,22 +169,26 @@
 ;;; ── Ω4: nested with-current-buffer ───────────────────────────────────
 
     (format t "~%── Ω4: nested with-current-buffer A → *messages* → A ──~%")
+    (defparameter *wcb-trace* '())
     (let ((wcb (xsym "WITH-CURRENT-BUFFER"))
           (cur (xsym "CURRENT-BUFFER-ID")))
       (cond
         ((not (and wcb cur)) (check "nested API present" nil "RED"))
         (t
-         (let ((depths '()))
-           (eval `(,wcb ,buf
-                   (push (,cur) ',depths)
-                   (,wcb "*messages*"
-                    (push (,cur) ',depths))
-                   (push (,cur) ',depths)))
-           (check (format nil "depth log: ~s" depths)
-                  (and (eql 3 (length depths))
-                       (equal (first depths) buf)
-                       (equal (second depths) "*messages*")
-                       (equal (third depths) buf)))))))
+         (setf *wcb-trace* '())
+         (eval `(,wcb ,buf
+                 (push (,cur) *wcb-trace*)
+                 (,wcb "*messages*"
+                  (push (,cur) *wcb-trace*))
+                 (push (,cur) *wcb-trace*)))
+         ;; pushed in order outer/inner/outer-again; first element of
+         ;; reversed list = first push.
+         (let ((order (reverse *wcb-trace*)))
+           (check (format nil "depth log: ~s" order)
+                  (and (eql 3 (length order))
+                       (equal (first order)  buf)
+                       (equal (second order) "*messages*")
+                       (equal (third order)  buf)))))))
 
     (ignore-errors (limn:call "buffer/close" :|buffer-id| buf)))
 

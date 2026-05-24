@@ -65,16 +65,19 @@
 (defun xsym (n) (and (xpkg) (find-symbol n (xpkg))))
 
 (defun id-of (buf-obj)
-  "Try a few ways to extract the buffer-id from whatever buffer-list
-   returns: mode-buffer struct, plist, or a bare string id."
-  (cond
-    ((stringp buf-obj) buf-obj)
-    ((and (listp buf-obj) (getf buf-obj :|buffer-id|))
-     (getf buf-obj :|buffer-id|))
-    (t
-     ;; try (buffer-name buf-obj) via xpkg
-     (let ((bn (xsym "BUFFER-NAME")))
-       (and bn (funcall bn buf-obj))))))
+  "Extract a string identity from BUF-OBJ for set comparisons. Prefers
+   the display name (which is what users compare against in Ω* asserts);
+   falls back to the wire buffer-id."
+  (let ((bn (xsym "BUFFER-NAME")))
+    (cond
+      ;; bare string id
+      ((stringp buf-obj) buf-obj)
+      ;; ask buffer-name first (rename-aware)
+      ((and bn (funcall bn buf-obj)))
+      ;; plist fallback
+      ((and (listp buf-obj) (or (getf buf-obj :|name|)
+                                (getf buf-obj :|buffer-id|))))
+      (t nil))))
 
 ;;; ── session ─────────────────────────────────────────────────────────
 
@@ -91,6 +94,12 @@
   (sleep 0.3)
   (wait-for-window)
 
+  (when (xpkg)
+    (let ((install-bo (xsym "INSTALL-BUFFER-OPENED-HANDLER"))
+          (install-vt (xsym "INSTALL-WIRE-VTABLE")))
+      (when install-bo (funcall install-bo))
+      (when install-vt (funcall install-vt))))
+
   (unless (xpkg)
     (format t "✗ FATAL: limn/excursion not loaded — RED expected~%")
     (push "limn/excursion not loaded" *failures*))
@@ -102,6 +111,11 @@
     (unless buf
       (limn:stop) (sb-ext:process-kill proc 15)
       (sb-ext:process-wait proc) (sb-ext:exit :code 2))
+
+    (when (xpkg)
+      (let ((reg (xsym "REGISTER-BUFFER")))
+        (when reg (funcall reg (list :|buffer-id| buf) buf :name buf))))
+    (sleep 0.1)
 
 ;;; ── Ω1: buffer-list contains the loaded buffer ──────────────────────
 

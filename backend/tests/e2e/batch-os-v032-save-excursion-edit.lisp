@@ -124,6 +124,11 @@
   (when (find-package '#:limn/marker)
     (let ((install (find-symbol "INSTALL-BUFFER-MODIFIED-HANDLER" '#:limn/marker)))
       (when install (funcall install))))
+  (when (xpkg)
+    (let ((install-bo  (xsym "INSTALL-BUFFER-OPENED-HANDLER"))
+          (install-vt  (xsym "INSTALL-WIRE-VTABLE")))
+      (when install-bo (funcall install-bo))
+      (when install-vt (funcall install-vt))))
 
   (unless (xpkg)
     (format t "✗ FATAL: limn/excursion not loaded — RED expected~%")
@@ -140,6 +145,13 @@
       (sb-ext:process-wait proc)
       (sb-ext:exit :code 2))
 
+    ;; Defensive: register the wire-loaded buffer in limn/excursion's
+    ;; registry in case the event-driven path didn't fire yet (the event
+    ;; arrives async via the pump thread; tests want sync determinism).
+    (when (xpkg)
+      (let ((reg (xsym "REGISTER-BUFFER")))
+        (when reg (funcall reg (list :|buffer-id| buf) buf :name buf))))
+    (sleep 0.1)
     (when (xpkg) (set-current-buf buf))
 
 ;;; ── Seed ──────────────────────────────────────────────────────────────
