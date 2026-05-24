@@ -2467,31 +2467,104 @@ Lisp 層：
 - =face-spec-set= face spec
 - =deftheme= / =enable-theme= / =disable-theme= / =custom-theme-set-faces=
 
+face 以 *symbol*（名稱）識別，與 Emacs 相同。Lisp 層永遠用 symbol，
+C++ 層用對應的 string key。
+
 C++ 層（極小改動）：
 
 - 新增 wire =display/sync-faces= : 收 face-table 全量 → 存進
-  =LimnFaceRegistry=
-- 既有 overlay paint path、原本吃 color 參數的位置改吃 face-id、查
-  registry 拿屬性
+  =LimnFaceRegistry=（key = face name string，value = 屬性 struct）
+- payload 格式：
+  #+begin_example
+  { "faces": [
+      { "name": "default",
+        "foreground": "#ffffff", "background": "#1e1e1e",
+        "bold": false, "italic": false, "underline": false,
+        "strike-through": false, "height": null, "family": null },
+      ...
+    ] }
+  #+end_example
+- 既有 overlay paint path 改吃 face name（string）→ 查 registry 拿屬性
 - 不引新 Qt API、只是 redirect
 
 **** B. =text-properties=
 
-- =put-text-property= start end prop value buf
-- =get-text-property= pos prop buf
-- =add-text-properties= / =remove-text-properties=
-- =next-property-change= / =previous-property-change=
-- 內部用 interval tree（O(log n) 區段查詢）
-- 與 face 整合：=face= property → 渲染時走 face registry
+**不變式（架構約束）**：所有 text 修改必須走 Lisp wrapper，不可直接
+呼叫 bridge。C++ gap buffer 不知道 interval tree 的存在。
+
+#+begin_example
+;; 禁止（bypass Lisp layer）：
+(send! "buffer/insert" :|buffer-id| buf :|offset| p :|text| s)
+
+;; 必須走 wrapper：
+(limn/text:insert buf p s)
+  ;; → 1. shift interval tree（>= p 的所有 start/end 加 len）
+  ;; → 2. 處理 stickiness boundary 語意
+  ;; → 3. 呼叫 bridge buffer/insert
+#+end_example
+
+**Insert 語意（Emacs 預設 stickiness）：**
+
+新插入文字的屬性由插入點 P 的左邊字元決定，但受 stickiness 控制：
+
+| 情況 | 行為 |
+|------|------|
+| 在 interval =[S,E)= 中間插入 | 繼承；interval 延伸為 =[S, E+L)= |
+| 在右邊界 E 插入（rear-sticky，預設） | 繼承；interval 延伸為 =[S, E+L)= |
+| 在左邊界 S 插入（front-nonsticky，預設） | 不繼承；從 S-1 的屬性決定 |
+| prop 加了 =front-sticky= | 繼承；interval 延伸到 =[S-L, E)= |
+| prop 加了 =rear-nonsticky= | 不繼承；interval 維持 =[S, E)= |
+
+**Delete 語意：** 刪除 =[P, P+L)=：
+- 完全在範圍內的 interval → 移除
+- 橫跨邊界的 interval → 裁切（保留交集外的部分）
+- 完全在 P+L 之後的 interval → start/end 各減 L
+
+**Interval 合併：** 相鄰兩個 interval plist 完全相同 → 合併。每次
+=put-text-property= / =remove-text-properties= 後觸發。
+
+API：
+
+- =put-text-property= start end prop value &optional buf
+- =get-text-property= pos prop &optional buf
+- =add-text-properties= start end plist &optional buf
+- =remove-text-properties= start end plist &optional buf
+- =next-property-change= pos &optional buf limit
+- =previous-property-change= pos &optional buf limit
+- =text-property-any= start end prop value &optional buf
+  （回傳第一個 prop=value 的 position，找不到回 nil）
+- =propertize= str &rest props → 回傳帶 props 的新字串（不修改 buf）
+
+內部用 interval tree（O(log n) 區段查詢）。
+與 face 整合：=face= property → 渲染時走 face registry（見 A）。
 
 **** C. =completion= 框架
+
+**Minibuffer（Emacs 方式）：**
+
+Frame 底部固定保留一個 mini-window，對應 Qt 裡一個固定在最下方的
+=QPlainTextEdit=（單行）。平時顯示 echo area 訊息；進入 =completing-read=
+時鍵盤焦點鎖定在此 widget，輸入全數進 minibuffer buffer（=*Minibuf-N*=）。
+C-g 發 quit condition → 解 wrap 回 command loop。
+
+=*Completions*= buffer 在需要時（Tab / 輸入後自動）顯示為上方 split
+window，列出候選清單，方向鍵 / C-n/C-p 可導航，Enter 選定並關閉
+minibuffer。與 Emacs 行為相同。
+
+C++ 側需一次性新增：固定 mini-window widget（=LimnMiniWindow=）、focus
+管理（=LimnWindow::enterMiniBuffer= / =leaveMiniBuffer=）。
+
+API：
 
 - =completing-read= prompt collection &key predicate require-match
   initial-input history default annotation-function
 - collection 形態：list / hash / function
 - 整合 C++ 既有 fzf：當 collection > 100 條目走 fzf
 - =completion-styles=: =substring= / =flex= / =prefix=
-- =minibuffer-completion-help= → popup buffer 列候選
+- =minibuffer-completion-help= → 顯示 =*Completions*= split window
+- =minibuffer-prompt= / =minibuffer-contents= → 讀取狀態
+- =read-from-minibuffer= prompt &key initial-contents keymap history
+  （底層；=completing-read= 建在此之上）
 
 **** D. =history= rings — 泛用
 
@@ -2524,6 +2597,24 @@ C++ 層（極小改動）：
 - =customize-set-variable= sym value → 觸發 :set hook
 - =customize-save-variable= 寫進 =~/.limn/custom.lisp=
 - =customize-group= → tree UI（陽春版、user-land 可加強）
+
+**=:type= 支援集合（Emacs 同款，v0.25 實作此子集）：**
+
+| type | 說明 |
+|------|------|
+| =boolean= | nil 或 t |
+| =integer= | 整數 |
+| =number= | 整數或浮點 |
+| =string= | 字串 |
+| =symbol= | 符號 |
+| =function= | symbol 或 lambda |
+| =hook= | function 的 list（=add-hook= / =remove-hook= aware） |
+| =(choice TYPE ...)= | 多型別之一 |
+| =(repeat TYPE)= | TYPE 元素的 list |
+| =color= | 顏色字串（=#rrggbb= 或具名色） |
+| =face= | 命名 face 的 symbol |
+
+Type mismatch：=user-error=（warn，不 signal error），與 Emacs 相同。
 
 **** Testing
 

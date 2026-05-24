@@ -57,7 +57,15 @@
                 "limn-file.lisp"
                 "limn-auto-save.lisp"
                 "limn-backup.lisp"
-                "limn-recentf.lisp"))
+                "limn-recentf.lisp"
+                ;; v0.25 modules
+                "limn-history.lisp"
+                "limn-custom.lisp"
+                "limn-advice.lisp"
+                "limn-face.lisp"
+                "limn-text-props.lisp"
+                "limn-help.lisp"
+                "limn-completion.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -95,7 +103,15 @@
                 "file-io-v024.lisp"
                 "auto-save-v024.lisp"
                 "backup-v024.lisp"
-                "recentf-v024.lisp"))
+                "recentf-v024.lisp"
+                ;; v0.25 tests (GREEN)
+                "defface-v025.lisp"
+                "text-props-v025.lisp"
+                "history-v025.lisp"
+                "help-v025.lisp"
+                "advice-v025.lisp"
+                "defcustom-v025.lisp"
+                "completion-v025.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

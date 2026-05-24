@@ -103,6 +103,9 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "bridge/win-float-move")   { cmd_bridge_win_float_move  (id, msg); return; }
     if (cmd == "bridge/win-float-resize") { cmd_bridge_win_float_resize(id, msg); return; }
 
+    // display/* (v0.25 face registry)
+    if (cmd == "display/sync-faces")    { cmd_display_sync_faces   (id, msg); return; }
+
     // view/*
     if (cmd == "view/set")              { cmd_view_set             (id, msg); return; }
     if (cmd == "view/get")              { cmd_view_get             (id, msg); return; }
@@ -1196,6 +1199,26 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
     }
     rebuild_overlay_raster(rw, rh);
     main_widget->opengl_widget()->update();
+    bridge->send_ok(id);
+}
+
+// ─── display/sync-faces (v0.25 face registry) ────────────────────────
+void LimnCommand::cmd_display_sync_faces(const QString& id, const QJsonObject& msg)
+{
+    face_registry_.clear();
+    const QJsonArray faces = msg.value("faces").toArray();
+    for (const QJsonValue& v : faces) {
+        QJsonObject f = v.toObject();
+        const QString name = f.value("name").toString();
+        if (name.isEmpty()) continue;
+        LimnFaceEntry entry;
+        entry.foreground = f.value("foreground").toString();
+        entry.background = f.value("background").toString();
+        entry.bold       = f.value("bold").toBool(false);
+        entry.italic     = f.value("italic").toBool(false);
+        entry.underline  = f.value("underline").toBool(false);
+        face_registry_.insert(name, entry);
+    }
     bridge->send_ok(id);
 }
 
@@ -2433,7 +2456,14 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         if (page < 0 || page >= doc->num_pages()) continue;
         if (page != current_page) continue;            // v0.14 page filter
 
-        const QString colstr = l.value("color").toString();
+        // v0.25: "face" field overrides "color" — resolve foreground from registry
+        QString colstr = l.value("color").toString();
+        if (l.contains("face")) {
+            const QString faceName = l.value("face").toString();
+            auto it = face_registry_.find(faceName);
+            if (it != face_registry_.end() && !it->foreground.isEmpty())
+                colstr = it->foreground;
+        }
         if (colstr.length() != 7 || !colstr.startsWith('#')) continue;
         QColor col(colstr);
         if (!col.isValid()) continue;
