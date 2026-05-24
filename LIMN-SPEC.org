@@ -1609,6 +1609,188 @@ v0.18.0 + v0.18.1 留下三項：
 依賴：v0.18.1 已 ship、v0.20 不阻擋（B/C 完全跟 v0.20 不相關；A
 跟 v0.20 都動 limn_command.cpp 但不同函式區、低衝突）。
 
+*** v0.22 text engine 編輯能力 ⏭ planned
+
+讓使用者能在 Limn 視窗裡開啟文字檔、打字、存檔。
+分兩波 ship：先做純邏輯層（A + B），再做畫面層（C）。
+
+**** A. Wire 層：檔案讀寫（C++，~50 行）
+
+新增兩條 wire 命令（均只對 text-engine buffer 有效）：
+
+- =buffer/load-file= ：
+  #+begin_src json
+  {"id":"r1", "cmd":"buffer/load-file",
+              "buffer-id":"t1", "path":"/home/jin/notes.txt"}
+  #+end_src
+  讀取 =path= 的磁碟內容 → 整個 replace buffer 文字 + cursor 歸零。
+  path 不存在 → =ok:false= + =error:"file not found"=。
+  只適用 text-engine buffer；mupdf 回 =not supported=。
+
+- =buffer/save= ：
+  #+begin_src json
+  {"id":"r2", "cmd":"buffer/save", "buffer-id":"t1"}
+  #+end_src
+  把 buffer 目前內容寫回上次 load-file 的路徑。
+  尚未 load（沒有綁定路徑）→ =ok:false= + =error:"no path"=。
+  寫入失敗（磁碟滿、權限）→ =ok:false= + =error:<os message>=。
+
+實作：=LimnCommand= 加 =buffer_paths= (=QHash<QString,QString>=) 記
+buffer-id → path；=cmd_buffer_load_file= / =cmd_buffer_save= 各
+~25 行。
+
+**** B. Lisp 層：=text-mode= + =find-file=（純 Lisp）
+
+放 =backend/text-mode.lisp=，由 =limn.lisp= 在 =bootstrap= 時 load。
+
+1. *=text-mode= 定義*（繼承 =fundamental-mode=）：
+   - 可見字元（=printable-char=）→ =(limn/cmd:buffer/insert buf :text ch)=
+   - =Backspace= → =(limn/cmd:buffer/delete buf :from (1- cursor) :to cursor)=
+   - =Left= / =Right= → cursor 左/右移一 codepoint（不推事件、Emacs 慣例）
+   - =Home= / =End= → cursor 到開頭/末尾
+   - =C-s= → 呼叫 =limn/search:isearch-forward=（已有）
+   - =C-x C-s= → =(limn/cmd:buffer/save buf)=
+   - =C-x C-f= → 呼叫 =find-file=（見下）
+
+2. *=find-file= command*：
+   - =M-x find-file= 或 =C-x C-f=
+   - minibuffer 讀路徑 → =bridge/engine-load engine="text"= 開 buffer
+     → =buffer/load-file= 把檔案讀進去
+     → 對該 window activate =text-mode=
+   - 路徑不存在：開空 buffer（emacs new-file 行為）+ echo "New file"
+
+刻意 *不做*：
+- 自動偵測 major mode（=auto-mode-alist=）——user-land 自己加
+- 多 buffer 切換 UI——user-land 自己加
+- 行號、syntax highlight——C 層還沒有顯示、此波不碰
+
+**** C. 畫面層：text-engine 顯示 widget（C++，最難）
+
+目前 text-engine buffer 只存在 =text_buffers= 雜湊表裡、沒有任何 Qt
+widget 把內容畫到螢幕上。=cmd_view_set= 遇到 text buffer 直接失敗
+（=val_doc= 是 null）。這一波補完這個缺口。
+
+**架構決策：display-only widget，input 走 bridge**
+
+=QPlainTextEdit= 設為唯讀——它只負責「畫字」，不處理鍵盤輸入。
+所有按鍵仍由 =MainWidget= 的 key handler 攔截、推 =key= 事件進
+bridge，再由 Lisp =text-mode= 呼叫 =buffer/insert= 等命令、C++ 更新
+=text_buffers= 後再通知 widget 重繪。這樣 Lisp 永遠是 single source
+of truth，和 minibuffer 的架構完全對稱。
+
+**實作步驟**：
+
+1. *=MainWidget= 加 stacked widget*：
+   - =QStackedWidget= 包住現有 =PdfViewOpenGLWidget=（index 0）與
+     新 =QPlainTextEdit=（index 1，=setReadOnly(true)=）
+   - =switch_to_text_view(buffer_id)= / =switch_to_pdf_view()= 兩個
+     helper 切換可見 index
+
+2. *=cmd_view_set= 支援 text-engine window*：
+   - 偵測 =win->buffer_id= 在 =text_buffers= → 不走 =val_doc= 路徑
+   - 把 =text_buffers[bid].to_qstring()= 塞進 =QPlainTextEdit=、
+     =setPlaceholderText= 顯示 buffer-id
+   - 回 =ok:true=（page / zoom 對 text buffer 是 no-op）
+
+3. *即時同步*：每次 =cmd_buffer_insert= / =cmd_buffer_delete= /
+   =cmd_buffer_set_text= 改完 =text_buffers= 後，若該 buffer 是當前
+   顯示的 text widget → 呼叫 =text_widget->setPlainText(...)= 重繪
+   （gap buffer 的 =to_qstring()= 是 O(n) 但可接受；
+   cursor 同步用 =QTextCursor= setPosition）
+
+4. *=cmd_view_set= validation 修補*：text-engine window 的 page 驗證
+   跳過 =val_doc->num_pages()= 檢查（text buffer 沒有 page 概念）
+
+5. *字型設定（防 tofu box）*：
+   =QPlainTextEdit= 初始化時明確指定 Unicode 覆蓋廣的字型、不留給
+   系統 default（系統 default 在 container 裡常缺 CJK glyph，導致
+   出現一堆 □ 空心方框）：
+   #+begin_src cpp
+   QFont f("Noto Sans");
+   f.setStyleHint(QFont::SansSerif);   // fallback chain
+   text_widget->setFont(f);
+   text_widget->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+   text_widget->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+   #+end_src
+   Dockerfile 確保 =fonts-noto= + =fonts-noto-cjk= 已裝。
+
+**不做（刻意推後）**：
+- scroll / zoom 對 text widget 生效
+- 字型設定 wire command
+- 行號 gutter
+- syntax highlight overlay
+
+**** 測試
+
+新增 bridge 命令 =test/text-widget-snapshot=（~20 行 C++）：
+呼叫 =QPlainTextEdit::grab()= 回傳 PNG bytes + stats
+（=avg-luminance=、=pixel-variance=、=width=、=height=）。
+理由：=QPlainTextEdit= 不走 OpenGL，在 Xvfb 下可真實 render，
+是第一個能在 OS-tier 做視覺驗證的 viewport（PDF 那層至今辦不到）。
+Golden pixel test 未來再疊上去（需先釘住字型 + 視窗大小）。
+
+**A/B 波：integration tier**
+
+wire 正確性：
+- =buffer/load-file= round-trip：寫臨時檔 → load → =buffer/text= 比對
+- =buffer/save= round-trip：load → insert → save → 磁碟讀回比對
+- =buffer/load-file= path 不存在 → =ok:false= + ="file not found"=
+- =buffer/save= 未綁路徑 → =ok:false= + ="no path"=
+- =buffer/load-file= / =buffer/save= 對 mupdf buffer → ="not supported"=
+- load UTF-8 含 CJK 的檔案 → =buffer/text= 回正確 CJK 字串
+- load 含 CRLF 的檔案 → 不 crash、內容合理
+
+Lisp unit tests（=text-mode= keymap 綁定全覆蓋）：
+- printable char → =buffer/insert=
+- =Backspace= → =buffer/delete=
+- =C-x C-s= → =buffer/save=、=C-x C-f= → =find-file=
+- =find-file= 既有檔 → buffer 有內容；新路徑 → 空 buffer + echo "New file"
+
+**A/B 波：OS-tier driver（=batch-os-text-edit.lisp=）**
+
+以真實 xdotool 驗整條鏈，邏輯層（不需要畫面）：
+- =C-x C-f= → minibuffer 等路徑 → 打路徑 + Enter → =buffer/text= 有內容
+- 打字 → =C-x C-s= → 磁碟檔案有內容
+- 開檔、編輯、存、重開 → 內容持久
+
+**C 波：OS-tier driver（=batch-os-text-display.lisp=）**
+
+視覺層，全部用 =test/text-widget-snapshot= 驗：
+
+/基本顯示/
+- 空 buffer → luminance 高（接近 255）、variance 低（接近白底均勻）
+- 打 ="LIMN TEXT ENGINE TEST"= → variance > threshold（有字在畫面上）
+- buffer/delete 後 → widget 立即更新（variance 變化可量）
+
+/換行/
+- 打超長字串（超過 widget 寬度）→ snapshot Y 軸有多個文字帶（多行 pixel 分布）
+- 打含 =\n= 的字串（="line one\nline two\nline three"=）→
+  snapshot 有多行（Y 軸文字帶間距正確）
+
+/Tofu box 偵測/
+- 打 ="abc"= → snapshot_abc
+- 打 ="一二三"=（同字元數）→ snapshot_cjk
+- 比對：=snapshot_abc ≠ snapshot_cjk=（不同 glyph 會有不同像素 pattern）；
+  若兩者幾乎一樣 → 代表兩個都畫成同款 tofu box → FAIL
+- 打混合 ="abc 一二三"= → overall variance 高（CJK 筆畫多樣、不是重複方框）
+
+/cursor 與同步/
+- =buffer/cursor-set= 跳到中間 → insert 一字 → 字出現在 cursor 處而非末尾
+  （=buffer/text= 確認位置、snapshot 確認可見）
+- 快速連續 insert 10 次 → 最終 =buffer/text= 不漏字、snapshot 無重複或缺字
+
+/widget 切換/
+- w1 先開 PDF（OpenGL widget 可見）→ 再 =engine-load text= →
+  snapshot 從「空 OpenGL 背景」變成「白底文字區」（luminance 明顯升高）
+- 反向：text → PDF → luminance 回落（OpenGL 空背景）
+
+/大檔案/
+- load 10 KB+ 的檔案 → widget 顯示前幾行、不 hang、不 truncate
+
+依賴：v0.20 gap-buffer 已 ship（=to_qstring()= API 必要）。
+A + B 不依賴 C（無畫面仍可測試 wire + Lisp 邏輯）。
+C 依賴 A + B 完工（需要 =cmd_view_set= 知道 text buffer 的存在）。
+
 *** 未來 milestone（待排序、未來再排）
 
 以下功能 SPEC 已釘住輪廓或哲學上預設、v0.19 之後再排：
