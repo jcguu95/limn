@@ -29,7 +29,8 @@
   (:export #:defcommand #:find-command #:list-commands #:clear-commands
            #:call-interactively
            #:command-name #:command-spec #:command-mode #:command-body
-           #:*minibuffer-read* #:*prefix-arg*))
+           #:*minibuffer-read* #:*prefix-arg*
+           #:*last-command* #:*this-command*))
 
 (in-package #:limn/cmd)
 
@@ -82,6 +83,14 @@
 (defvar *prefix-arg* 1
   "The numeric prefix argument for the current call. 'p' spec reads it.")
 
+(defvar *last-command* nil
+  "Symbol identifying the previously executed command. Dispatch loop
+   copies *this-command* here after each command completes.")
+
+(defvar *this-command* nil
+  "Symbol identifying the currently executing command. Set by dispatch
+   loop before calling the command body.")
+
 ;;; ── interactive spec parsing ──────────────────────────────────────────
 
 (defun parse-spec (spec)
@@ -118,10 +127,14 @@
 
 ;;; ── invocation ────────────────────────────────────────────────────────
 
-(defun call-interactively (name)
-  "Invoke command NAME, filling its args according to its interactive
-   spec. Errors if NAME isn't registered."
-  (let ((c (find-command name)))
+(defun call-interactively (name-or-cmd &optional prefix)
+  "Invoke command NAME-OR-CMD, filling its args according to its
+   interactive spec. NAME-OR-CMD may be a registered command name
+   (symbol) or a command struct returned by FIND-COMMAND. PREFIX, if
+   supplied, is bound as *PREFIX-ARG* for the duration of the call."
+  (let ((c (cond ((command-p name-or-cmd) name-or-cmd)
+                 (t (find-command name-or-cmd)))))
     (unless c
-      (error "limn/cmd: unknown command ~s" name))
-    (apply (command-body c) (gather-args (command-spec c)))))
+      (error "limn/cmd: unknown command ~s" name-or-cmd))
+    (let ((*prefix-arg* (or prefix *prefix-arg*)))
+      (apply (command-body c) (gather-args (command-spec c))))))

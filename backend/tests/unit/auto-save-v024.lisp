@@ -93,6 +93,10 @@
            (limn/auto-save:*visited-file-name-fn*
              (lambda (bid)
                (when (equal bid ,buf-id) ,visited)))
+           (limn/auto-save:*delete-auto-save-fn*
+             (lambda (path) (remhash path *asave-store*)))
+           (limn/auto-save:*buffer-list-fn*
+             (lambda () (list ,buf-id)))
            (limn/auto-save:*auto-save-counter* 0)
            (limn/auto-save:*auto-save-interval* 300)
            (limn/auto-save:*delete-auto-save-files* t))

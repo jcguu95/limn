@@ -48,7 +48,16 @@
                 "limn-cmd.lisp"
                 "limn-runtime.lisp"
                 "limn-introspect.lisp"
-                "limn-text-mode.lisp"))
+                "limn-text-mode.lisp"
+                ;; v0.24 modules
+                "limn-kill.lisp"
+                "limn-mark.lisp"
+                "limn-register.lisp"
+                "limn-kmacro.lisp"
+                "limn-file.lisp"
+                "limn-auto-save.lisp"
+                "limn-backup.lisp"
+                "limn-recentf.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)

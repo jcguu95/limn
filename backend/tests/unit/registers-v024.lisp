@@ -40,23 +40,34 @@
 
 (defmacro with-register-buf ((buf-var &key (id "reg") (text "") (cursor 0))
                               &body body)
-  "mock-buf24 + wire register's I/O vtable to it."
+  "mock-buf24 + wire register's I/O vtable to it. Falls through to the
+   previously-bound vtable so nested with-register-buf forms compose."
   `(with-kill-buf (,buf-var :id ,id :text ,text :cursor ,cursor)
-     (let ((limn/register:*buffer-cursor-fn*
-             (lambda (bid)
-               (when (equal bid ,id) (mbuf-cursor ,buf-var))))
-           (limn/register:*buffer-set-cursor-fn*
-             (lambda (bid off)
-               (when (equal bid ,id) (setf (mbuf-cursor ,buf-var) off))))
-           (limn/register:*buffer-text-fn*
-             (lambda (bid start end)
-               (when (equal bid ,id)
-                 (subseq (mbuf-text ,buf-var) start end))))
-           (limn/register:*buffer-insert-fn*
-             (lambda (bid offset str)
-               (when (equal bid ,id)
-                 (mbuf-insert-at! ,buf-var offset str)))))
-       ,@body)))
+     (let* ((prev-cursor limn/register:*buffer-cursor-fn*)
+            (prev-set    limn/register:*buffer-set-cursor-fn*)
+            (prev-text   limn/register:*buffer-text-fn*)
+            (prev-insert limn/register:*buffer-insert-fn*))
+       (let ((limn/register:*buffer-cursor-fn*
+               (lambda (bid)
+                 (if (equal bid ,id)
+                     (mbuf-cursor ,buf-var)
+                     (funcall prev-cursor bid))))
+             (limn/register:*buffer-set-cursor-fn*
+               (lambda (bid off)
+                 (if (equal bid ,id)
+                     (setf (mbuf-cursor ,buf-var) off)
+                     (funcall prev-set bid off))))
+             (limn/register:*buffer-text-fn*
+               (lambda (bid start end)
+                 (if (equal bid ,id)
+                     (subseq (mbuf-text ,buf-var) start end)
+                     (funcall prev-text bid start end))))
+             (limn/register:*buffer-insert-fn*
+               (lambda (bid offset str)
+                 (if (equal bid ,id)
+                     (mbuf-insert-at! ,buf-var offset str)
+                     (funcall prev-insert bid offset str)))))
+         ,@body))))
 
 ;;; ── C1. set-register / get-register ──────────────────────────────────────
 
@@ -180,7 +191,7 @@
     (limn/register:window-configuration-to-register #\w)
     (let ((val (limn/register:get-register #\w)))
       (assert-true (consp val) "value is cons")
-      (assert-equal 'window-config (car val)
+      (assert-equal "WINDOW-CONFIG" (symbol-name (car val))
                     "type is window-config"))))
 
 (deftest register-c4-jump-window-config-no-error
