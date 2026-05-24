@@ -70,7 +70,11 @@
                 "limn-isearch.lisp"
                 "limn-occur.lisp"
                 ;; v0.27 — pdf-mode (depends on v0.25 + v0.26)
-                "limn-pdf-mode.lisp"))
+                "limn-pdf-mode.lisp"
+                ;; v0.28 modules
+                "limn-text-nav.lisp"
+                "limn-map-macro.lisp"
+                "limn-which-key.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -121,7 +125,11 @@
                 "isearch-v026.lisp"
                 "occur-v026.lisp"
                 ;; v0.27 RED tests — expected to fail until limn-pdf-mode lands
-                "pdf-mode-v027.lisp"))
+                "pdf-mode-v027.lisp"
+                ;; v0.28 RED tests — expected to fail until impl lands
+                "text-nav-v028.lisp"
+                "map-macro-v028.lisp"
+                "which-key-v028.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
