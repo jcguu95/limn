@@ -65,7 +65,9 @@
                 "limn-face.lisp"
                 "limn-text-props.lisp"
                 "limn-help.lisp"
-                "limn-completion.lisp"))
+                "limn-completion.lisp"
+                ;; v0.27 — pdf-mode (loaded if present; skipped during RED)
+                "limn-pdf-mode.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -111,7 +113,9 @@
                 "help-v025.lisp"
                 "advice-v025.lisp"
                 "defcustom-v025.lisp"
-                "completion-v025.lisp"))
+                "completion-v025.lisp"
+                ;; v0.27 RED tests — expected to fail until limn-pdf-mode lands
+                "pdf-mode-v027.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
