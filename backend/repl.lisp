@@ -73,6 +73,9 @@
                 ;; v0.30 markers + buffer-local vars (foundation for v0.32)
                 "limn-marker.lisp"
                 "limn-local.lisp"
+                ;; v0.31 syntax tables + coding systems
+                "limn-syntax.lisp"
+                "limn-coding.lisp"
                 ;; v0.32 current-buffer / save-excursion / narrow
                 "limn-excursion.lisp"
                 ;; bootstrap (last)

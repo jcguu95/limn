@@ -78,6 +78,9 @@
                 ;; v0.30 modules
                 "limn-marker.lisp"
                 "limn-local.lisp"
+                ;; v0.31 modules
+                "limn-syntax.lisp"
+                "limn-coding.lisp"
                 ;; v0.32 module
                 "limn-excursion.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
@@ -140,6 +143,9 @@
                 ;; v0.30 tests
                 "markers-v030.lisp"
                 "buffer-local-v030.lisp"
+                ;; v0.31 RED tests
+                "syntax-v031.lisp"
+                "coding-v031.lisp"
                 ;; v0.32 RED tests — expected to fail until impl lands
                 "excursion-v032.lisp"))
   (format t "[loading unit] ~a~%" file)
