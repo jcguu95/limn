@@ -1563,18 +1563,23 @@ void LimnCommand::cmd_buffer_insert(const QString& id, const QJsonObject& msg) {
     int& cursor        = text_cursors[buf];           // UTF-16 index internally
 
     int qs_at;
-    if (msg.contains("at") && msg.value("at").isDouble()) {
-        const int cp_at    = msg.value("at").toInt();
+    int cp_pos;          // v0.23.1 §D8 — capture pre-insertion cp position
+    {
         const QString s    = content.to_qstring();
         const int total_cp = cp_count(s);
-        if (cp_at < 0 || cp_at > total_cp) {
-            bridge->send_fail(id, QString("'at' offset %1 out of range [0, %2]")
-                                  .arg(cp_at).arg(total_cp));
-            return;
+        if (msg.contains("at") && msg.value("at").isDouble()) {
+            const int cp_at = msg.value("at").toInt();
+            if (cp_at < 0 || cp_at > total_cp) {
+                bridge->send_fail(id, QString("'at' offset %1 out of range [0, %2]")
+                                      .arg(cp_at).arg(total_cp));
+                return;
+            }
+            qs_at  = cp_to_qsidx(s, cp_at);
+            cp_pos = cp_at;
+        } else {
+            qs_at  = cursor;
+            cp_pos = qsidx_to_cp(s, cursor);
         }
-        qs_at = cp_to_qsidx(s, cp_at);
-    } else {
-        qs_at = cursor;
     }
     content.insert(qs_at, text);
     // Cursor shifts (in UTF-16 internal units): AT-or-BEFORE-cursor
@@ -1582,6 +1587,18 @@ void LimnCommand::cmd_buffer_insert(const QString& id, const QJsonObject& msg) {
     // insertion leaves cursor in place.
     if (qs_at <= cursor) cursor += text.length();
     sync_text_widget(buf);   // v0.22 §C — keep display in sync
+
+    // v0.23.1 §D8 — emit buffer-modified for the Lisp undo subsystem.
+    {
+        QJsonObject ev;
+        ev.insert("buffer-id", buf);
+        ev.insert("op",        "insert");
+        ev.insert("pos",       cp_pos);
+        ev.insert("len",       cp_count(text));
+        ev.insert("before",    QString(""));
+        ev.insert("after",     text);
+        bridge->push_event("buffer-modified", ev);
+    }
     bridge->send_ok(id);
 }
 
@@ -1605,12 +1622,27 @@ void LimnCommand::cmd_buffer_delete(const QString& id, const QJsonObject& msg) {
     }
     const int qs_from = cp_to_qsidx(s, cp_from);
     const int qs_to   = cp_to_qsidx(s, cp_to);
+    // v0.23.1 §D8 — snapshot removed text BEFORE mutation so the event
+    // payload's :before field carries the data the Lisp undo system
+    // needs to reverse the operation.
+    const QString removed = s.mid(qs_from, qs_to - qs_from);
     content.remove(qs_from, qs_to - qs_from);
     // Adjust cursor (UTF-16 internal) based on its position vs deleted range:
     int& cursor = text_cursors[buf];
     if (cursor >= qs_to)        cursor -= (qs_to - qs_from);  // shift left
     else if (cursor > qs_from)  cursor = qs_from;             // snap to start
     sync_text_widget(buf);   // v0.22 §C — keep display in sync
+
+    {
+        QJsonObject ev;
+        ev.insert("buffer-id", buf);
+        ev.insert("op",        "delete");
+        ev.insert("pos",       cp_from);
+        ev.insert("len",       cp_to - cp_from);
+        ev.insert("before",    removed);
+        ev.insert("after",     QString(""));
+        bridge->push_event("buffer-modified", ev);
+    }
     bridge->send_ok(id);
 }
 

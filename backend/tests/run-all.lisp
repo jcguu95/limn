@@ -62,6 +62,7 @@
                  "suites/chrome.lisp"
                  "suites/minibuffer.lisp"
                  "suites/buffer-edit.lisp"
+                 "suites/buffer-undo-wire.lisp"
                  "suites/gap-buffer.lisp"
                  "suites/text-engine-v022.lisp"
                  "suites/mouse-coord.lisp"

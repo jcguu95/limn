@@ -4,6 +4,53 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.23.1 — buffer-modified wire event + Lisp dual-subscription (補 v0.23 D8 D9)
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+把 v0.23.0 因為跟 v0.22 (gap-buffer 前端化) 直接相依而暫緩的兩件事
+補完，現在 v0.22 已經 merge 進 main、可以直接動工。
+
+C++ 改動（=sioyek/pdf_viewer/limn_command.cpp=，~30 行）：
+- =cmd_buffer_insert= 在 mutation 成功後 =push_event("buffer-modified", ...)=
+  payload =:buffer-id :op="insert" :pos :len :before="" :after=text=
+- =cmd_buffer_delete= 同樣 emit，payload =:op="delete" :before=removed
+  :after=""=
+- 兩個 :pos 跟 :len 都用 codepoint index（對齊既有 wire API 的
+  =:at= / =:from= / =:to= 語義）
+
+Lisp 改動（=backend/limn-buffer-undo.lisp=）：
+- =install-buffer-modified-handler= 改成雙訂閱：同時掛在 wire 的
+  字串鍵 "event/buffer-modified" (由 =limn-dispatch:fire-event= 觸發)
+  跟 in-process 的關鍵字 =:event/buffer-modified= (mock-buffer 用)。
+  Wire payload 走 =%normalize-wire-event= 把 JSON-style =:|key|=
+  轉成 in-process 慣例的 =:key=、并把 op 字串轉成關鍵字。
+- =buffer-undo-list= 改成連 pending-ops 一起回 — 對使用者來說
+  pending 也是已記錄的編輯，下次 boundary / undo 會吸進去。
+- =%record-op= 加 =%op-is-noop-p= 過濾 zero-length delete、empty
+  insert 等實質沒效果的 op（避免 undo list 被無意義條目膨脹）。
+
+新測試：
+- D8 Qt-tier =backend/tests/suites/buffer-undo-wire.lisp= 8 個
+  deftest / 27 個 assertion：
+  - insert / delete 發出 event 且 payload 完整
+  - 順序保留（burst 50 個 quick insert 不丟失）
+  - 多 buffer routing 正確（:buffer-id 對得上）
+  - 用 non-BMP char (𝕏 = U+1D54F) 驗 cp 不是 UTF-16
+  - Lisp =limn/buffer-undo= 真的捕捉到 wire event
+  - 整條 round-trip：真 wire insert → Lisp undo → 真 wire delete
+    → buffer 內容真的回 ""
+- D9 OS-tier =batch-os-v023-undo-roundtrip.lisp= 4 個 assertion：
+  spawn 真 limn binary、用 limn:call 走 wire 走完整鏈、
+  =buffer/text= 查證內容回到原狀
+
+測試成績：
+- Unit-tier: 732/732 green（穩定）
+- Qt-tier: 1457 passed / 8 failed（8 個都是 v0.14-v0.20 既有的
+  paint-text / overlay quirks、跟 v0.23.1 完全無關、0 regression）
+- v0.23 完整三層覆蓋全到位
+
 * v0.23.0 — Runtime Core: process / timer / undo / condition / log
 :PROPERTIES:
 :DATE: 2026-05-23

@@ -81,14 +81,20 @@
   nil)
 
 (defun buffer-undo-list (buf-id)
-  "Flat list of all recorded edit records across all nodes — provided
-   for introspection / test assertions, not for surgical mutation."
+  "Flat list of all recorded edit records — every op across every
+   sealed node, plus any pending (not-yet-boundary-sealed) ops. For
+   introspection / test assertions, not for surgical mutation."
   (let ((s (%state buf-id))
         (acc '()))
     (maphash (lambda (k node)
                (declare (ignore k))
                (dolist (op (getf node :ops)) (push op acc)))
              (buf-state-nodes s))
+    ;; Pending ops are still "recorded edits" from the user's POV —
+    ;; they will be sealed into the next node on the next undo-boundary
+    ;; or undo call. Include them for accurate "what has been seen"
+    ;; count.
+    (dolist (op (buf-state-pending-ops s)) (push op acc))
     acc))
 
 (defun buffer-current-branch-id (buf-id)
@@ -110,11 +116,28 @@
 
 ;;; ─── Recording edits ───────────────────────────────────────────────
 
+(defun %op-is-noop-p (ev)
+  "True if EV represents a mutation with no real effect (e.g. a delete
+   of zero characters, or an insert of an empty string). These are
+   filtered out so undo lists don't bloat with no-op records."
+  (let ((op (getf ev :op))
+        (len (getf ev :len))
+        (after (getf ev :after))
+        (before (getf ev :before)))
+    (case op
+      (:insert (or (null after) (zerop (length after))))
+      (:delete (or (null len) (zerop len)
+                   (and before (zerop (length before)))))
+      (:replace (and (or (null len) (zerop len))
+                     (or (null after) (zerop (length after)))))
+      (t nil))))
+
 (defun %record-op (buf-id ev)
   (let ((s (%state buf-id)))
     (sb-thread:with-mutex ((buf-state-lock s))
       (when (and (not (buf-state-disabled-p s))
-                 (not (buf-state-recording s)))
+                 (not (buf-state-recording s))
+                 (not (%op-is-noop-p ev)))
         (push ev (buf-state-pending-ops s))))))
 
 (defun undo-boundary (buf-id)
@@ -291,12 +314,40 @@
 
 (defvar *handler-installed* nil)
 
+(defun %normalize-wire-event (ev)
+  "Translate a wire-event plist (keys are JSON-style :|buf-id| etc.)
+   into the in-process shape (keys are :buf-id :op :pos :len etc.).
+   Wire op arrives as a string (\"insert\" / \"delete\"); we re-key
+   it as a keyword for downstream uniformity."
+  (let ((wire-op (or (getf ev :|op|) (getf ev :op))))
+    (list :buf-id (or (getf ev :|buffer-id|) (getf ev :buf-id))
+          :op     (cond ((stringp wire-op)
+                         (intern (string-upcase wire-op) :keyword))
+                        (t wire-op))
+          :pos    (or (getf ev :|pos|) (getf ev :pos))
+          :len    (or (getf ev :|len|) (getf ev :len))
+          :before (or (getf ev :|before|) (getf ev :before) "")
+          :after  (or (getf ev :|after|)  (getf ev :after)  ""))))
+
 (defun install-buffer-modified-handler ()
+  "Subscribe to buffer-modified events from BOTH channels:
+   - Wire dispatch (string-keyed hook \"event/buffer-modified\",
+     fired by limn-dispatch:fire-event when C++ pushes the event)
+   - In-process keyword hook (:event/buffer-modified, fired by
+     mock-buffer in unit tests)
+
+   Idempotent — calls after the first are no-ops."
   (unless *handler-installed*
     (let ((hooks (find-package '#:limn/hooks)))
       (when hooks
-        (funcall (find-symbol "ADD-HOOK" hooks)
-                 :event/buffer-modified
-                 (lambda (ev) (%record-op (getf ev :buf-id) ev)))
+        (let ((add (find-symbol "ADD-HOOK" hooks)))
+          ;; Wire path — strings, JSON-style keys.
+          (funcall add "event/buffer-modified"
+                   (lambda (ev)
+                     (let ((norm (%normalize-wire-event ev)))
+                       (%record-op (getf norm :buf-id) norm))))
+          ;; In-process path — keyword, already-canonical keys.
+          (funcall add :event/buffer-modified
+                   (lambda (ev) (%record-op (getf ev :buf-id) ev))))
         (setf *handler-installed* t))))
   t)

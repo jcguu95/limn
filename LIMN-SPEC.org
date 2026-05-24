@@ -1798,8 +1798,25 @@ Ship 結果：
   timer + §C 20 condition + §D 28 buffer-undo + §E 15 logging）
 - OS-tier: 3/3 batch PASS（=process-shell= / =process-self-die= /
   =timer-real=、wall-clock overhead 量測 ≤ 50ms）
-- *D8 Qt-tier + D9 OS-tier 暫緩到 v0.23.1*：依賴 C++ =gap_buffer.cpp=
-  emit =:event/buffer-modified=（與 v0.22 直接相依）
+- *v0.23.1 ✅ shipped — D8 Qt-tier + D9 OS-tier 補完*（v0.22 ship 進
+  main 後立刻補）：
+  - C++ =cmd_buffer_insert= / =cmd_buffer_delete= 加 push_event
+    "buffer-modified"，payload =:buffer-id :op :pos :len :before
+    :after=（pos / len 用 codepoint index 對齊 wire API）
+  - Lisp =install-buffer-modified-handler= 改雙訂閱：wire
+    "event/buffer-modified" (string-keyed) + in-process
+    :event/buffer-modified (keyword) — 同時餵 mock-buffer unit
+    tests 跟真 wire Qt-tier
+  - =buffer-undo-list= 含 pending ops；=%record-op= 過濾掉 no-op
+    edits（zero-length delete、empty insert 等）
+  - D8 Qt-tier =suites/buffer-undo-wire.lisp= 8/8 PASS（27 assertions
+    含 insert/delete/order/multi-buffer/codepoint/burst/Lisp-undo-
+    subscribes/roundtrip）
+  - D9 OS-tier =batch-os-v023-undo-roundtrip= 4/4 PASS（真 text
+    buffer + 真 wire insert → Lisp undo → 真 wire delete → buffer
+    文字真的回到原狀）
+  - Qt-tier 整體 1457 passed / 8 failed（後者全部是 v0.14-v0.20 既有
+    的 paint-text / overlay flakes、跟 v0.23.1 無關、0 regression）
 
 實作過程發現五個設計修正（全部寫入 code）：
 1. Event 名稱用 keyword (=:event/error=)、不用 symbol，避免 per-
