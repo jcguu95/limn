@@ -1520,6 +1520,95 @@ C++ 端：
 要為了 v0.7 QString-index 跟 v0.8 codepoint 兩套 API 寫兩遍。所以
 不能比 v0.16 早。也跟 v0.17/v0.18/v0.19 互不阻擋、排這裡剛好。
 
+*** v0.21 consolidation + dogfood ⏭ planned
+
+v0.14–v0.20 把 paintGL / per-window DV / CJK+IME / bookmark / frame /
+keymap / gap-buffer 全部 primitive 鋪完。v0.21 是「收尾 + 證明」release：
+
+  A. *Frame system 完工*（折入原 v0.18.2 deferred）
+  B. *User-land examples dogfood* v0.16–v0.20 primitive、證明 wire
+     contract 真的對 user-land 夠用
+  C. *Docs / housekeeping cleanup*
+
+不再追新 SPEC contract、不再追新 primitive。完全是品質與 polish。
+
+**** A. Frame system 完工
+
+v0.18.0 + v0.18.1 留下三項：
+
+1. *Per-frame wire command routing*：
+   - =view/set= / =view/get= / =bridge/engine-load= / =bookmark/*= /
+     =view/overlays= / =view/selection-*= 等 wire 命令、target win 在
+     fN 時 driver fN 的 MainWidget（v0.18 之前無腦走 f1、ship 兩個
+     OS window 但只一個能被命令操作）
+   - 實作策略：=LimnCommand= 加 helper =resolve_widget_for_window(win_id)=
+     回 win 所屬 frame 的 MainWidget；既有 cmd_* 改用此 helper
+
+2. *=frame-workspace-change= event*：
+   - C++ 加 X11 native event filter (透過 =QAbstractNativeEventFilter=)
+     攔 =ClientMessage (_NET_WM_DESKTOP)= property notify
+   - 偵測到 frame 的 OS window 跨 workspace → push =frame-workspace-
+     change= event 帶 =:frame-id= + =:from= + =:to= workspace 編號
+   - 純 X11 path、macOS host 端 fallback no-op (留 SPEC 註)
+
+3. *Openbox multi-workspace container 設定*：
+   - container-entry.sh 設 openbox =--config-file= 給出 4 個 workspaces
+   - OS-tier =batch-os-frame-workspace.lisp=：
+     - xdotool 經 =set_desktop_for_window= 把 f2 拉去 workspace 2
+     - bridge call 仍通
+     - 收到 =frame-workspace-change= event
+     - workspace 1 / 2 frames 各自 modeline / minibuffer 隔離
+
+**** B. User-land examples
+
+純 Lisp、放 =examples/= 目錄、不進 framework code。每份檔自包文檔
+解釋它示範什麼 primitive，user 可以 =sbcl --script= 直接玩。
+
+1. =examples/which-key.lisp=：
+   - 訂閱 =event/key-prefix-changed= hook
+   - 用 =message/echo= 顯示 "C-x [f s c-s]"
+   - dogfood v0.19 β =*key-prefix*= + hook
+
+2. =examples/hydra.lisp=：
+   - 寫 =(defhydra repeat-page-down (j) ...)= 形 macro
+   - 用 =limn/keys:set-transient-map= 實作 "按 j 連續下一頁、按 q 退出"
+   - dogfood v0.19 β =set-transient-map=
+
+3. =examples/local-set-key.lisp=：
+   - 對 buffer 加 buffer-local override "C-c C-c" = save & close
+   - dogfood v0.19 β =mode-buffer-local-keymap= / =set-local-keymap=
+
+4. =examples/bookmark-sidecar.lisp=：
+   - 寫 =(save-bookmarks)= / =(load-bookmarks)= helpers，存 SBCL
+     readable 格式到 =~/.limn/bookmarks/<pdf-checksum>.lisp=
+   - dogfood v0.17.0 =bookmark/*= primitive
+   - 證明「framework 不替 user 決定 persistence」哲學成立
+
+5. =examples/cjk-ime-demo.lisp=：
+   - 訂閱 =event/ime-preedit= 把 composition 印到 stdout
+   - dogfood v0.16.0/.1 IME pipeline
+   - 純觀察性、不修改 buffer
+
+**** C. Docs / housekeeping
+
+- 砍 =backend/tests/suites/frame.lisp=（v0.18.0 後被
+  =frame-v018.lisp= 取代、soft-skip 風格無用）
+- =CHANGELOG.org= 補 v0.16.0/.1、v0.17.0、v0.18.0/.1、v0.19.0、v0.20.0
+  entries（自 v0.15 後沒寫過）
+- =philosophy.org= 補一段 post-v0.19 framework 故事（什麼 primitive 都
+  有了、user-land 該長什麼）
+- SPEC §12 ledger 收尾 polish（v0.21 ship 完後檢視重排）
+
+**** 不做的
+
+- 不開新 SPEC contract
+- 不引新 framework primitive
+- 不重構 v0.14–v0.20 任何已 ship 部份（除 frame 完工外）
+- 不寫 user-facing tutorial 文檔（user-land 教學是 user repo 的事）
+
+依賴：v0.18.1 已 ship、v0.20 不阻擋（B/C 完全跟 v0.20 不相關；A
+跟 v0.20 都動 limn_command.cpp 但不同函式區、低衝突）。
+
 *** 未來 milestone（待排序、未來再排）
 
 以下功能 SPEC 已釘住輪廓或哲學上預設、v0.19 之後再排：
