@@ -24,10 +24,13 @@
 ;;; ── load all backend modules in dependency order ──────────────────────
 
 (dolist (file '("limn-hooks.lisp"
+                "limn-log.lisp"
+                "limn-error.lisp"
                 "limn-buffer.lisp"
                 "limn-bridge.lisp"
                 "limn-keys.lisp"
                 "limn-undo.lisp"
+                "limn-buffer-undo.lisp"
                 "limn-search.lisp"
                 "limn-client.lisp"
                 "limn-dispatch.lisp"
@@ -35,7 +38,10 @@
                 "limn-cmd.lisp"
                 "limn-runtime.lisp"
                 "limn-introspect.lisp"
+                "limn-custom.lisp"            ; v0.25 — pdf-mode defcustom needs it
+                "limn-history.lisp"           ; v0.25 — search-history integration
                 "limn-text-mode.lisp"
+                "limn-pdf-mode.lisp"          ; v0.27
                 "limn.lisp"))
   (load (b/ file)))
 
