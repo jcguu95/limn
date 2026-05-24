@@ -46,6 +46,7 @@
 ;; All unit-test files
 (dolist (file '("bridge-client.lisp"
                 "keymap.lisp"
+                "keymap-v019.lisp"
                 "undo.lisp"
                 "hooks.lisp"
                 "buffer-registry.lisp"
