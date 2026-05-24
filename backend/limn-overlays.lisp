@@ -42,9 +42,13 @@
    #:overlay-as-wire-layer
    #:overlays-to-wire-layers
    #:layer-with-face
+   ;; v0.33b — buffer/codepoint-rects client helpers
+   #:make-codepoint-rects-request
+   #:parse-codepoint-rects-response
    ;; vtable
    #:*current-buffer-id*
-   #:*buffer-text-len-fn*))
+   #:*buffer-text-len-fn*
+   #:*buffer-kind-fn*))
 
 (in-package #:limn/overlays)
 
@@ -56,6 +60,28 @@
 (defvar *buffer-text-len-fn*
   (lambda (bid) (declare (ignore bid)) 0)
   "(buf-id) → text length. Forwarded to limn/marker via late binding.")
+
+(defvar *buffer-kind-fn*
+  (lambda (bid)
+    ;; Default: look the buffer up in limn/buffer (if present) and map
+    ;; engine name → kind. Late-bound so we don't hard-require
+    ;; limn/buffer at load time.
+    (let* ((p (find-package '#:limn/buffer))
+           (lookup (and p (find-symbol "LOOKUP" p)))
+           (engine (and p (find-symbol "ENGINE" p)))
+           (b (and lookup (fboundp lookup) (funcall lookup bid)))
+           (eng (and b engine (fboundp engine) (funcall engine b))))
+      (cond
+        ((null eng)              nil)
+        ((equal eng "text")      :text)
+        ((equal eng "mupdf")     :pdf)
+        (t                       nil))))
+  "(buf-id) → :text | :pdf | nil. Drives overlay-as-wire-layer's default
+   :type when the overlay doesn't carry an explicit 'type property:
+     :text → \"text-range\" (C++ does line layout at paint time)
+     :pdf  → \"rect\" (caller must supply 'page + 'rect)
+     nil   → \"overlay\" (generic fallback, preserves pre-v0.33b shape)
+   Default implementation queries limn/buffer:lookup + :engine.")
 
 ;;; ── late binding to limn/marker ────────────────────────────────────────
 
@@ -350,9 +376,23 @@
          (rect  (overlay-get ov 'rect))
          (color (overlay-get ov 'color))
          (op    (overlay-get ov 'opacity))
-         (layer (list :|type| (or type "overlay")
+         (buf   (overlay-buffer ov))
+         ;; Buffer-kind dispatch (v0.33b): when caller didn't pin 'type,
+         ;; look up the buffer's kind via *buffer-kind-fn*.
+         (kind  (and (null type) buf
+                     (ignore-errors (funcall *buffer-kind-fn* buf))))
+         (resolved-type
+           (cond
+             (type             type)
+             ((eq kind :text)  "text-range")
+             ((eq kind :pdf)   "rect")
+             (t                "overlay")))
+         (layer (list :|type| resolved-type
                       :|start| start
                       :|end|   end)))
+    ;; text-range layers carry their buffer-id so C++ can find the widget.
+    (when (and (equal resolved-type "text-range") buf)
+      (setf (getf layer :|buf-id|) buf))
     (when page  (setf (getf layer :|page|)    page))
     (when rect  (setf (getf layer :|rect|)    rect))
     (when color (setf (getf layer :|color|)   color))
@@ -389,3 +429,27 @@
          ;; reverse-sort for paint order: low priority first
          (asc      (stable-sort (copy-list filtered) #'< :key #'%priority)))
     (mapcar #'overlay-as-wire-layer asc)))
+
+;;; ── v0.33b: buffer/codepoint-rects client helpers ─────────────────────
+;;;
+;;; Pure builders / parsers — the actual socket call lives in limn:call.
+;;; Splitting them out lets the request/response shape be unit-tested
+;;; without a running C++ side.
+
+(defun make-codepoint-rects-request (buf-id win-id start end)
+  "Build the wire plist for buffer/codepoint-rects."
+  (list :|cmd|    "buffer/codepoint-rects"
+        :|buf-id| buf-id
+        :|win-id| win-id
+        :|start|  start
+        :|end|    end))
+
+(defun parse-codepoint-rects-response (response)
+  "Extract the rects list from a buffer/codepoint-rects response.
+   Returns:
+     - list of {:page N :rect (x0 y0 x1 y1)} on success
+     - nil when response has :ok = nil (callers can distinguish failure
+       from empty by checking :ok on the raw response)"
+  (when (eq (getf response :|ok|) t)
+    (let ((data (getf response :|data|)))
+      (and data (getf data :|rects|)))))

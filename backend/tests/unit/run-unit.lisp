@@ -140,7 +140,9 @@
                 "markers-v030.lisp"
                 "buffer-local-v030.lisp"
                 ;; v0.33 RED tests — overlay data + view/overlays :face + region
-                "overlays-v033.lisp"))
+                "overlays-v033.lisp"
+                ;; v0.33b RED tests — buffer-kind dispatch + codepoint-rects
+                "overlays-v033b.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

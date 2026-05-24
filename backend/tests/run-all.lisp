@@ -77,7 +77,9 @@
                  ;; v0.30 markers + buffer-local (wire round-trip)
                  "suites/marker-v030.lisp"
                  ;; v0.33 視覺系統：overlays + face wire + region
-                 "suites/overlays-v033.lisp"))
+                 "suites/overlays-v033.lisp"
+                 ;; v0.33b: buffer/codepoint-rects + text-range layer
+                 "suites/overlays-v033b.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)
