@@ -67,7 +67,6 @@
                  "suites/robust.lisp"
                  "suites/lifecycle.lisp"
                  "suites/i18n.lisp"
-                 "suites/frame.lisp"
                  "suites/async.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)

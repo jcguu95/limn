@@ -4,6 +4,162 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.21.0 — consolidation + dogfood
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+「收尾 + 證明」release。三件事：
+
+(A) Frame system 完工：container 加 wmctrl + xorg.xprop、openbox
+預設 ≥ 4 desktops、xdotool =set_desktop_for_window= 把 frame 跨
+workspace 移動後 bridge call 仍通。Per-frame wire command routing
+原本擔心要大改、實測發現 v0.15.0/.1 isolation 已涵蓋 wire-level
+contract。Frame-workspace-change event 留 follow-up（需要 X11
+native filter；user 暫用 wmctrl polling 替代）。
+
+(B) User-land examples（純 Lisp、放 =examples/=、dogfood v0.16-v0.19
+primitives）：
+- =which-key.lisp= 訂閱 =event/key-prefix-changed= 顯示候選 keys
+- =hydra.lisp= =defhydra= macro + =set-transient-map=
+- =local-set-key.lisp= buffer-local override (Emacs-style)
+- =bookmark-sidecar.lisp= sha256-keyed sidecar 持久化
+- =cjk-ime-demo.lisp= 訂閱 ime-preedit / commit 印 composition
+
+證明 v0.16-v0.19 primitives 對 user-land 夠用、framework 不需再長
+sugar wrapper。
+
+(C) Cleanup：刪舊 =suites/frame.lisp= (被 frame-v018.lisp 取代);
+CHANGELOG 補 v0.14-v0.21 entries; SPEC §12 整理。
+
+測試：Qt 1337/5 (pre-existing)、OS 41/41 batches green、
+5 examples 自包 self-test 全綠。
+
+* v0.20.0 — gap-buffer primitive (text engine refactor)
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+text engine storage 從 =QHash<QString, QString>= 換成
+=QHash<QString, GapBuffer>=。純 C++ refactor、wire contract 零變動。
+QString.insert/remove 是 O(n) memcpy；gap buffer amortised O(1)
+per edit。Chrome 短字串 (minibuffer) 沒差、真實 prose/code 編輯
+變快。Vanilla Emacs C core 用 gap buffer 不是巧合。
+
+* v0.19.0 — keymap α + β (pure Lisp, C++ untouched)
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+純 Lisp。SPEC §9.1 contract extension、v0.19 ship 完 SPEC bump
+v0.8 → v0.9。
+
+α 補既有 contract：=define-mode :parent= 自動 wire (eager validate
++ cycle detect)；=describe-bindings= 遞迴 walk prefix sub-keymaps
+出 flat "C-x f" string；=lookup-key= 自動 fallback =*global-keymap*=。
+
+β 新 primitive：
+- =limn/keys:*key-prefix*= 升 package var + =event/key-prefix-changed=
+  hook → 解鎖 which-key
+- =limn/keys:set-transient-map= + =*transient-keymap*= lookup 最頂層
+  → 解鎖 hydra / repeat-mode
+- mode-buffer =:local-keymap= slot → 解鎖 local-set-key
+
+34 deftests 全綠。
+
+* v0.18.1 — real second Qt MainWindow per frame
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+frame/create 真正 instantiate 第二個 OS-level Qt window。frame/focus
+真 show()+raise()+activateWindow()。frame/close 不洩 X11 windows
+(3 cycle 壓力測試驗證)。
+
+* v0.18.0 — frame system phase 1 (registry + wire + events)
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+Abstract frame registry：LimnWindow 攜 frame_id (default f1)。
+=frame/{list,create,close,focus}= wire 命令、bridge/win-list 帶
+:frame-id、bridge/win-split 接 :frame-id。新 events frame-create /
+close / focus 都帶 :frame-id。
+
+* v0.17.0 — bookmark wire primitives
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+=bookmark/list-native= (PDF embedded outline) + =bookmark/{list,set,
+get,delete}= (user-managed, per-buffer in-memory)。framework 提供
+primitive、persistence 全留 user Lisp。
+
+* v0.16.1 — Qt inputMethodEvent interceptor + container fcitx5
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+LimnInputFilter 攔 =QEvent::InputMethod=、route 到
+=LimnCommand::handle_ime_event= (跟 test/inject-ime/* 同 dispatch path)。
+Container 加 =nixpkgs.fcitx5= + chinese-addons (strict nix)、
+=QT_IM_MODULE=fcitx5= 永遠 export、=FCITX=1= flag opt-in daemon。
+
+* v0.16.0 — codepoint cursor + IME pipeline
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+(1) 所有 wire (:offset / :at / :from / :to / :cursor) 改 codepoint
+計數。non-BMP (emoji) 從 2 UTF-16 unit 變 1 codepoint。撞 surrogate
+邊界一律 FAIL。Combining character 算 N codepoints。
+
+(2) Cursor 語意 consistency：minibuffer / buffer 都同一 codepoint
+單位。
+
+(3) =test/inject-ime/{preedit,commit}= 子命名空間 (舊
+=test/inject-ime-commit= 留 alias)；ime-commit dispatch 在 C 層
+做 (vanilla Emacs commit_text pattern)。
+
+* v0.15.2 — selection text extraction polish
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+selection :text 從 synth 字串升級為 sioyek =get_text_selection=
+的真實 extraction (focused window only；non-focused 仍走 synth
+fallback、合理 trade-off)。
+
+* v0.15.1 — selection per-window + engine-load isolation + rotation focus-apply
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+收 v0.15.0 三個 deferred deltas：(1) Visual selection per-window
++ =view/selection-{set,get,clear}=；(2) engine-load on non-focused
+不擾動 live；(3) rotation focus-swap 真實 apply。Ω12 pixel-level
+驗證旋轉確實 reflect 到 raster (aspect 從 2.75 翻轉成 0.075)。
+
+* v0.15.0 — per-window independent DocumentView (focus swap + basic state)
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+兩 pane 不再共享底層 DocumentView。每個 LimnWindow 自有 page / zoom
+/ offset / overlay / buffer-id / dark-mode 狀態。=bridge/win-focus=
+真實 swap live DV (save drift → restore snapshot → rebuild raster)。
+
+* v0.14.0 — view/overlays paintGL (deterministic side-raster)
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+=view/overlays= 升級為「真實 paint into raster」。Side-QImage 渲染：
+不依賴 GL framebuffer (Xvfb 無 GPU)、用 QPainter 畫進 server-側
+QImage、production paintGL 從 QImage blit。5 個 pixel-level test
+wire primitives 取代 PNG transport、tests 完全 deterministic。
+34/34 OS-tier batches green。
+
 * v0.13.1 — windowkill cleanup（cumulative-state flake 殺到 0）
 :PROPERTIES:
 :DATE: 2026-05-23

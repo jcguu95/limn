@@ -1520,7 +1520,7 @@ C++ 端：
 要為了 v0.7 QString-index 跟 v0.8 codepoint 兩套 API 寫兩遍。所以
 不能比 v0.16 早。也跟 v0.17/v0.18/v0.19 互不阻擋、排這裡剛好。
 
-*** v0.21 consolidation + dogfood ⏭ planned
+*** v0.21.0 consolidation + dogfood ✅ shipped
 
 v0.14–v0.20 把 paintGL / per-window DV / CJK+IME / bookmark / frame /
 keymap / gap-buffer 全部 primitive 鋪完。v0.21 是「收尾 + 證明」release：

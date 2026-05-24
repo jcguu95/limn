@@ -53,7 +53,9 @@ RUN nix-env -iA \
       nixpkgs.mesa-demos \
       nixpkgs.ccache \
       nixpkgs.fcitx5 \
-      nixpkgs.kdePackages.fcitx5-chinese-addons
+      nixpkgs.kdePackages.fcitx5-chinese-addons \
+      nixpkgs.wmctrl \
+      nixpkgs.xorg.xprop
 
 # Now copy the actual source. Only this and the build step below get
 # re-run on incremental changes.
