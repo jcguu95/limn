@@ -81,7 +81,10 @@
                  ;; v0.32 current-buffer / save-excursion / narrow
                  "suites/excursion-v032.lisp"
                  ;; v0.34 regex engine (cl-ppcre + Emacs-style API)
-                 "suites/regex-v034.lisp"))
+                 "suites/regex-v034.lisp"
+                 ;; v0.36 indent + query-replace (wire round-trip)
+                 "suites/indent-v036.lisp"
+                 "suites/query-replace-v036.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)

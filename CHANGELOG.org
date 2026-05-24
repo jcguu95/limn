@@ -4,6 +4,95 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.36.0 — query-replace + indent + current-column
+:PROPERTIES:
+:DATE: 2026-05-24
+:END:
+
+把 v0.32 control flow + v0.34 regex 組裝成 query-replace 系統，加上
+程式語言 mode 必備的 indent / current-column 字寬計算。Emacs C-core
+等價層的「user-facing 編輯命令」第二輪。
+
+兩個新 module，全部純 Lisp（C++ 一行不改）：
+
+** =limn/indent= (=backend/limn-indent.lisp=)
+- *§C 字寬*：=char-display-width= (ASCII=1, TAB=動態到下個 tab-stop,
+  CJK fullwidth=2, emoji=2, newline/CR=0, control=2)；=current-column=
+  從行首掃 point 累加 display width
+- *§B indent*：=indent-to= / =move-to-column= (FORCE 拆 TAB / 補
+  SPC) / =back-to-indentation= / =indent-region= (從末行往回掃避免
+  offset shift) / =indent-rigidly= (正反 count, 跳過 blank line) /
+  =indent-relative= / =indent-for-tab-command= / =newline-and-indent=
+- *Buffer-local vars*（cl-user package, 走 v0.30 defvar-local）：
+  =*tab-width*= (8) / =*indent-tabs-mode*= (t) / =*fill-column*= (70,
+  plumbed for future) / =*indent-line-function*= (預設
+  =indent-relative=)
+- *Vtable*：=*buffer-text-fn*= / =*buffer-insert-fn*= /
+  =*buffer-delete-fn*= / =*point-fn*= / =*set-point-fn*= /
+  =*buffer-text-len-fn*=；=install-wire-vtable= 連到 limn:call
+
+** =limn/query-replace= (=backend/limn-query-replace.lisp=)
+- *§A M-% prompt 循環*：y/SPC (替換+前進), n/DEL (跳過), ! (剩餘全
+  替), q/RET (退出), . (替+退出), , (替+暫停), ^ (revert 上一個 +
+  re-prompt)
+- *Range arg*：=:start= / =:end= 限制範圍；隨 replace 長度差自動調
+  整 end
+- *Narrow integration*：無 :start/:end 時自動讀 point-min/point-max
+- *Regex 模式*：=query-replace-regexp= 走 v0.34 =emacs-regex-to-pcre=
+  + cl-ppcre + \\N back-references
+- *Case-fold*：=:case-fold t= 預設；翻成 PCRE =(?i)= flag
+- *Multi-line anchors*：regex 模式自動加 =(?m)= 讓 =^=/=$= 配對每行
+- *Zero-length match*：=a*= 等模式不無窮迴圈（match 後再前進一格）
+- *Response 注入*：=:response-fn= thunk 讓單元測試直接餵按鍵；正式
+  入口接 minibuffer
+
+** Wireup
+- =backend/repl.lisp= + =backend/tests/unit/run-unit.lisp= 都加進兩
+  個新模組的載入順序
+- =limn-text-mode.lisp= 新增 =indent-for-tab-command= 和
+  =newline-and-indent= 兩個 cl-user 命令，並把它們綁到 text-mode
+  keymap：=TAB= → indent / =C-j= → newline-and-indent
+- =limn.lisp= =%bootstrap-runtime= 把 =limn/indent= +
+  =limn/query-replace= 的 =install-wire-vtable= 在 session start 時
+  呼叫
+
+** 測試（三層全綠）
+- *Unit-tier* (=backend/tests/unit/indent-v036.lisp= +
+  =query-replace-v036.lisp=)：~90 個 tests 涵蓋 char-display-width ×
+  12 / current-column × 10 / indent-to × 10 / move-to-column × 8 /
+  back-to-indentation × 4 / indent-region/rigidly × 8 / buffer-local
+  × 4 / indent-relative + tab-cmd × 4 / qr literal × 15 / qr regexp
+  × 10 / qr range + narrow × 5
+- *Qt-tier* (=backend/tests/suites/indent-v036.lisp= +
+  =query-replace-v036.lisp=)：16 個 wire round-trip tests 對著真
+  limn binary 走 buffer/text / buffer/cursor-get/set / buffer/insert
+  / buffer/delete + key/send 驗證 keymap wireup
+- *OS-tier* (7 個 batch)：=batch-os-v036-query-replace-roundtrip= +
+  =-query-replace-regexp= + =-indent-region-real= + =-cjk-column= +
+  =-tab-key-text-mode= + =-narrow-and-query-replace= +
+  =-perf-large-replace= (10K matches under 30s budget)
+- 2244 unit-tier tests 全綠（從 2065 → +179 GREEN，含 v0.34 regex 在
+  cl-ppcre vendor 完整 checkout 後一起綠掉）
+
+** 實作筆記
+- =indent-region= 必須從末行往回呼叫 *indent-line-function*，因為
+  user fn 可能 insert/delete 改變 offset
+- =query-replace= 的 zero-length match 防護：replace 後若 match 是
+  空的，再 incf point 一次，否則同位置會無限循環
+- =current-column= 對 narrowing 不直接 aware；point-min 是 v0.32 的
+  事，indent 系統純粹算行首到 point 的字寬累加
+- buffer-local vars 用 v0.30 的 =make-variable-buffer-local= 註冊，
+  即可 per-buffer 設定 =*tab-width*= 不互相污染
+- =install-wire-vtable= idempotent；測試環境用 progv 注入 mock，
+  production 第一次 START 時連到真 wire
+
+** 依賴 / 受影響範圍
+- 依賴：v0.30 (markers + buffer-local) / v0.32 (current-buffer +
+  narrow) / v0.34 (regex)；v0.26 isearch/occur 不變動
+- 不動 C++；不加 SBCL 套件；vendor 沿用 v0.34 的 cl-ppcre
+- 不做：=fill-paragraph= (只 plumb =*fill-column*=) / isearch 換
+  regex backend (retrofit 留 user 自選) / multi-file grep (留 v0.35+)
+
 * v0.25.0 — Interaction & Introspection (defface / text-props / completion / history / help / advice / defcustom)
 :PROPERTIES:
 :DATE: 2026-05-23

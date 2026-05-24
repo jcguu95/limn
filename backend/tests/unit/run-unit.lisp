@@ -92,7 +92,10 @@
                 ;; v0.32 module
                 "limn-excursion.lisp"
                 ;; v0.34 module — regex engine (depends on cl-ppcre vendor)
-                "limn-regex.lisp"))
+                "limn-regex.lisp"
+                ;; v0.36 modules — indent + query-replace
+                "limn-indent.lisp"
+                "limn-query-replace.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -159,7 +162,10 @@
                 ;; v0.32 RED tests — expected to fail until impl lands
                 "excursion-v032.lisp"
                 ;; v0.34 RED tests — expected to fail until impl lands
-                "regex-v034.lisp"))
+                "regex-v034.lisp"
+                ;; v0.36 RED tests — expected to fail until impl lands
+                "indent-v036.lisp"
+                "query-replace-v036.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

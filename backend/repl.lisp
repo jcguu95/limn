@@ -88,6 +88,10 @@
                 "limn-excursion.lisp"
                 ;; v0.34 regex engine (depends on cl-ppcre vendor + v0.32)
                 "limn-regex.lisp"
+                ;; v0.36 indent + current-column
+                "limn-indent.lisp"
+                ;; v0.36 query-replace (depends on v0.32 + v0.34)
+                "limn-query-replace.lisp"
                 ;; bootstrap (last)
                 "limn.lisp"))
   (load (b/ file)))
