@@ -24,6 +24,7 @@ sioyek/moc_predefs.h
 sioyek/qrc_resources.cpp
 sioyek/sioyek.app/
 sioyek/limn.app/
+sioyek/.qmake.stash
 
 # Sioyek top-level non-source files
 sioyek/bak/

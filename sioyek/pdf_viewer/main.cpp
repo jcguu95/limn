@@ -42,11 +42,16 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--headless") == 0) { pre_headless = true; break; }
     }
-    // For --headless: use offscreen by default (full paint pipeline runs,
-    // QWidget::grab() works). The minimal platform is also viable when you
-    // want even less surface area — set QT_QPA_PLATFORM=minimal manually.
+    // For --headless: prefer the minimal platform. v0.22 §C found that
+    // Qt 6.11's offscreen plugin aborts at QApplication construction on
+    // the Linux container (silent SIGABRT, even with QT_DEBUG_PLUGINS).
+    // minimal works for the bridge / wire-level tests that run under
+    // --headless. Visual tests (test/text-widget-snapshot) live in OS-
+    // tier which uses Xvfb + xcb, where widget->grab() works correctly.
+    // Override via QT_QPA_PLATFORM=offscreen for paint-pipeline tests
+    // once the offscreen plugin works again.
     if (pre_headless && std::getenv("QT_QPA_PLATFORM") == nullptr) {
-        setenv("QT_QPA_PLATFORM", "offscreen", 1);
+        setenv("QT_QPA_PLATFORM", "minimal", 1);
     }
 
     // macOS: by default Qt swaps Ctrl/Cmd so that Qt::ControlModifier means

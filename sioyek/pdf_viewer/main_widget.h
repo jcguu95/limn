@@ -8,6 +8,8 @@ class DatabaseManager;
 class DocumentManager;
 class CachedChecksummer;
 class LimnChromeBar;
+class QStackedWidget;
+class QPlainTextEdit;
 
 // MainWidget hosts the PDF view. Bridge / dispatch / events live in
 // separate files (limn_bridge.*, limn_command.*). MainWidget exposes
@@ -27,6 +29,15 @@ public:
     DocumentManager*     document_manager() { return document_manager_; }
     LimnChromeBar*       chrome_bar()       { return chrome_bar_; }
 
+    // SPEC v0.22 §C — text-engine display widget. Read-only display
+    // surface stacked on top of opengl_widget; switched in when the
+    // focused window's buffer is text-engine. Input still flows via
+    // the app-level LimnInputFilter (text_widget has NoFocus).
+    QPlainTextEdit*      text_widget()      { return text_widget_; }
+    QStackedWidget*      main_stack()       { return main_stack_; }
+    void                 show_text_view();  // stack index → text widget
+    void                 show_pdf_view();   // stack index → opengl widget
+
     // SPEC v0.5 §5.1 — real visible window split. Adds a new pane to the
     // splitter alongside the existing viewport. orientation is "h" (split
     // horizontally → side-by-side) or "v" (vertically → top/bottom).
@@ -45,4 +56,7 @@ private:
     DocumentManager*     document_manager_ = nullptr;
     CachedChecksummer*   checksummer_      = nullptr;
     LimnChromeBar*       chrome_bar_       = nullptr;
+    // SPEC v0.22 §C — text-engine display
+    QStackedWidget*      main_stack_       = nullptr;
+    QPlainTextEdit*      text_widget_      = nullptr;
 };

@@ -36,6 +36,26 @@ openbox --sm-disable > /tmp/openbox.log 2>&1 &
 OPENBOX_PID=$!
 sleep 0.3
 
+# v0.22 §C: fontconfig setup. `nix-env -iA nixpkgs.fontconfig` installs
+# the library but does NOT link its etc/fonts (where Qt expects the
+# default fonts.conf). Without it, every Qt app aborts:
+#   "Fontconfig error: Cannot load default config file: No such file: (null)"
+# pre-v0.22 binaries also crashed but nobody noticed — earlier CI
+# never actually ran the Linux limn binary. v0.22 OS-tier visual tests
+# need it (test/text-widget-snapshot reads QPlainTextEdit pixels).
+if [ ! -e /etc/fonts ]; then
+  # NB: nix store dirs are named HASH-fontconfig-VERSION, so the leading
+  # segment is *not* `fontconfig-*` — match via *fontconfig*etc/fonts.
+  FC_FONTS=$(find /nix/store -maxdepth 4 -type d -wholename '*fontconfig*/etc/fonts' 2>/dev/null | head -1)
+  if [ -n "$FC_FONTS" ]; then
+    mkdir -p /etc
+    ln -sf "$FC_FONTS" /etc/fonts
+    echo "linked fontconfig: $FC_FONTS -> /etc/fonts"
+  else
+    echo "WARNING: no fontconfig etc/fonts in /nix/store — Qt may abort"
+  fi
+fi
+
 # v0.14: rebuild fontconfig cache so freshly-installed fonts (DejaVu Sans
 # etc) are findable by Qt's font matching at runtime. Without this, Qt
 # silently falls back and any test requesting a specific font sees

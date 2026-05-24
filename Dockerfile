@@ -46,6 +46,8 @@ RUN nix-env -iA \
       nixpkgs.openbox \
       nixpkgs.sbcl \
       nixpkgs.dejavu_fonts \
+      nixpkgs.noto-fonts \
+      nixpkgs.noto-fonts-cjk-sans \
       nixpkgs.bash \
       nixpkgs.coreutils \
       nixpkgs.fontconfig \

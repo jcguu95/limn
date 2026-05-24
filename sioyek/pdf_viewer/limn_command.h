@@ -108,6 +108,18 @@ private:
     void cmd_buffer_insert       (const QString& id, const QJsonObject& msg);
     void cmd_buffer_delete       (const QString& id, const QJsonObject& msg);
 
+    // SPEC v0.22 §A — text-engine file I/O
+    void cmd_buffer_load_file    (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_save         (const QString& id, const QJsonObject& msg);
+
+    // SPEC v0.22 §C — text-engine display
+    // Sync the C++ QPlainTextEdit display to text_buffers[buf]. Called
+    // after every mutation (insert / delete / load-file / set-text) so
+    // the widget mirrors the buffer's current content + cursor.
+    void sync_text_widget        (const QString& buffer_id);
+    // test/text-widget-snapshot — return PNG + stats of the text widget.
+    void cmd_test_text_widget_snapshot(const QString& id, const QJsonObject& msg);
+
     // ─── test/* (enabled only when --test-mode is set) ────────────────
     void cmd_test_inject_key        (const QString& id, const QJsonObject& msg);
     void cmd_test_inject_mouse_click(const QString& id, const QJsonObject& msg);
@@ -214,6 +226,9 @@ private:
     // reads the strings via the helpers below.
     QHash<QString, GapBuffer> text_buffers;
     QHash<QString, int>       text_cursors;   // per-buffer cursor (UTF-16 offset)
+    // SPEC v0.22 §A: text-engine buffer-id → bound on-disk path.
+    // Set by buffer/load-file, consumed by buffer/save. Absent = "no path".
+    QHash<QString, QString>   buffer_paths;
     int                     next_text_seq = 1;
 
     // ─── minibuffer meta-state (SPEC §5.4) ─────────────────────────
