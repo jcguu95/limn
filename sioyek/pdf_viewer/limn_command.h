@@ -70,6 +70,7 @@ private:
     void cmd_buffer_close        (const QString& id, const QJsonObject& msg);
     void cmd_buffer_toc          (const QString& id, const QJsonObject& msg);
     void cmd_buffer_text         (const QString& id, const QJsonObject& msg);
+    void cmd_buffer_search       (const QString& id, const QJsonObject& msg); // v0.27
     void cmd_buffer_links        (const QString& id, const QJsonObject& msg);
     void cmd_buffer_metadata     (const QString& id, const QJsonObject& msg);
     void cmd_buffer_render       (const QString& id, const QJsonObject& msg);

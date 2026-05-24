@@ -157,7 +157,54 @@ QJsonArray supports() {
     a.append("buffer/render");
     a.append("buffer/render-region");
     a.append("buffer/metadata");
+    a.append("buffer/search");                  // v0.27
     return a;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// v0.27: full-document text search.
+// ─────────────────────────────────────────────────────────────────────────
+
+QJsonObject extract_search_hits(Document* doc,
+                                 const QString& query,
+                                 bool case_sensitive) {
+    Q_UNUSED(case_sensitive);   // MuPDF's needle match is ASCII-case-insensitive
+    QJsonObject result;
+    QJsonArray hits;
+    if (!doc || query.isEmpty()) {
+        result.insert("hits", hits);
+        return result;
+    }
+
+    const QByteArray needle_bytes = query.toUtf8();
+    const char* needle = needle_bytes.constData();
+    const int n_pages = doc->num_pages();
+    constexpr int kHitMax = 64;        // per-page hit cap
+
+    for (int page = 0; page < n_pages; ++page) {
+        fz_quad quads[kHitMax];
+        int hit_n = 0;
+        fz_try(mupdf_context) {
+            hit_n = fz_search_page_number(mupdf_context, doc->doc, page,
+                                           needle, nullptr, quads, kHitMax);
+        } fz_catch(mupdf_context) {
+            hit_n = 0;  // skip pages MuPDF refuses to search
+        }
+        if (hit_n <= 0) continue;
+
+        QJsonArray rects;
+        for (int i = 0; i < hit_n; ++i) {
+            double x0, y0, x1, y1;
+            quad_to_rect(quads[i], x0, y0, x1, y1);
+            rects.append(rect_to_json(x0, y0, x1, y1));
+        }
+        QJsonObject h;
+        h.insert("page", page);
+        h.insert("rects", rects);
+        hits.append(h);
+    }
+    result.insert("hits", hits);
+    return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
