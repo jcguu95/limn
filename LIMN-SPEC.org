@@ -354,6 +354,17 @@ engine 依能力實作。=buffer/open= 回應中的 =supports= 欄位
 {"id":"r42", "cmd":"buffer/metadata", "buffer-id":"b1"}
 → {"id":"r42", "ok":true,
    "data":{"title":"...","author":"...","page-count":42,"format":"pdf"}}
+
+// 多頁搜尋（v0.29 新增）—— 走 MuPDF =fz_search_page= 逐頁掃。
+// rects 已 page-normalize 為 0..1 浮點（同 view/overlays 的座標系）。
+// case-sensitive 預設 false；mupdf 預設不分大小寫，true 走自訂 stext 路徑。
+{"id":"r80", "cmd":"buffer/search",
+             "buffer-id":"b1", "query":"deep learning",
+             "case-sensitive":false}
+→ {"id":"r80", "ok":true,
+   "data":{"hits":[{"page":3, "rects":[[0.12,0.34,0.45,0.36],
+                                       [0.12,0.41,0.45,0.43]]},
+                   {"page":7, "rects":[[0.20,0.18,0.50,0.20]]}]}}
 #+end_src
 
 **Buffer 編輯**（text engine 適用；非文字 engine 一律回 =not supported=）：
@@ -599,6 +610,7 @@ buffer/links         頁面連結
 buffer/render        整頁 PNG 渲染
 buffer/render-region 矩形 PNG 渲染
 buffer/metadata      title、author 等
+buffer/search        多頁文字搜尋（rects page-normalized 0..1）
 
 # 編輯類（text engine 適用，§5.3 後段）
 buffer/cursor-get    取得當前 cursor offset
@@ -2710,7 +2722,7 @@ vtable I/O 變數：
 
 - *§C PDF search 整合*：在 PDF buffer 上用 =view/overlays= +
   =limn/search:find-matches= 做 isearch。需複雜 wire 設置、留待
-  v0.27+ 或 PDF-mode 成熟後。
+  v0.28+ 或 PDF-mode 成熟後。
 
 - *=*search-history*= 真正 ring 整合*：unit 測試以 vtable mock
   =*history-push-fn*= 隔離；production 呼叫
@@ -2722,6 +2734,1614 @@ vtable I/O 變數：
   行為 TBD，留給 text-props 渲染層決定。
 
 依賴：v0.25 (history, text-props)。v0.24 (kill/mark) 非必要。
+
+*** v0.28 Keymap 完整化 — Emacs + Doom 風格 ⏭ planned
+
+純 Lisp（除確認 C++ =key_to_string= 的 RET / DEL 命名外零 C++ 改動）。
+把 text-mode 的 keymap 補到 Emacs 日用水準，並加入 Doom 風格的
+keymap 定義 API 與 leader key + which-key 機制。
+
+**** A. text-mode keymap 補完
+
+目前 text-mode 有：self-insert、BS、Left/Right、Home/End、
+C-x C-s、C-x C-f。以下是缺少的 Emacs 標準編輯按鍵。
+
+**游標移動**（純 Lisp：=buffer/text= 拿全文 → 計算目標 offset →
+=buffer/cursor-set= 跳過去；適合文字編輯 buffer，大型 PDF 不走這個）：
+
+| 按鍵 | 命令 | 語意 |
+|------+------+------|
+| C-f | forward-char | 已有（<right> alias），新增 chord |
+| C-b | backward-char | 已有（<left> alias），新增 chord |
+| C-n | next-line | 找下一個 \n 後的同欄位置 |
+| C-p | previous-line | 找上一個 \n 前的同欄位置 |
+| C-a | move-beginning-of-line | 真實行首（找上一個 \n 的後一位） |
+| C-e | move-end-of-line | 真實行尾（找下一個 \n 的前一位） |
+| M-f | forward-word | 跳到下一個 word 邊界 |
+| M-b | backward-word | 跳到上一個 word 邊界 |
+| M-< | beginning-of-buffer | offset → 0 |
+| M-> | end-of-buffer | offset → (length text) |
+
+C-n / C-p 保留 =*goal-column*=（Emacs 慣例：上下移動記住目標欄、
+碰到短行時停在行尾而不 reset 目標欄）。
+
+**編輯**（接 v0.24 的 kill-ring / mark / undo 模組，只差 keymap 還沒掛）：
+
+| 按鍵 | 命令 | 依賴模組 |
+|------+------+---------|
+| RET | newline | buffer/insert "\n" |
+| DEL | delete-forward-char | buffer/delete cursor cursor+1 |
+| C-d | delete-char | 同 DEL |
+| C-k | kill-line | limn/kill：cursor→行尾 kill |
+| C-SPC | set-mark-command | limn/mark:set-mark |
+| C-x C-x | exchange-point-and-mark | limn/mark:exchange-point-and-mark |
+| C-w | kill-region | limn/kill:kill-region(mark…point) |
+| M-w | kill-ring-save | limn/kill:copy-region-as-kill |
+| C-y | yank | limn/kill:yank |
+| M-y | yank-pop | limn/kill:yank-pop |
+| M-d | kill-word | cursor 到下個 word 尾 kill |
+| C-/ | undo | limn/buffer-undo:undo |
+| C-x u | undo | 同 C-/ |
+
+**key 名稱確認（C++ 微調）**：
+
+=limn_input.cpp= 的 =key_to_string= 若尚未支援，需確認或補上：
+=Qt::Key_Return= → ="RET"=、=Qt::Key_Delete= → ="DEL"=（非 Backspace）。
+若已有則 C++ 零改動。
+
+**** B. =map!= macro — Doom 風格批次 keymap 定義
+
+逐個呼叫 =limn:bind= 在大 init.lisp 很難讀。=map!= 是純 Lisp macro，
+展開成一組 =limn/keys:define-key= 呼叫：
+
+#+begin_src lisp
+;; 綁到 mode 的 keymap
+(map! :map pdf-mode-map
+  "j"   #'pdf-scroll-down
+  "k"   #'pdf-scroll-up
+  "n"   #'pdf-next-page
+  "p"   #'pdf-prev-page)
+
+;; :prefix 縮寫：下面兩個鍵都帶 "g" 前綴
+(map! :map pdf-mode-map :prefix "g"
+  "g"  #'pdf-first-page
+  "G"  #'pdf-last-page)
+
+;; :leader 直接綁到 *leader-keymap*
+(map! :leader
+  "f f" #'find-file
+  "f r" #'recentf-open-files
+  "b b" #'switch-to-buffer)
+#+end_src
+
+選項語義：
+
+- =:map KEYMAP= — 目標 keymap object
+- =:mode MODE-SYMBOL= — 透過 mode 名查 keymap（糖衣）
+- =:prefix STRING= — 後續 spec 自動加前綴（可巢狀 =map!= 呼叫）
+- =:leader= — 等同 =:map *leader-keymap*=
+- action 是 lambda 或 command symbol，自動 wrap call-interactively
+
+=limn:bind= 和 =limn/keys:define-key= 繼續是底層 primitive；
+=map!= 只是 macro sugar，不引入新 runtime state。
+
+**** C. Leader key + =limn/which-key= 正式模組
+
+**Leader key**（Doom 預設 =SPC=、Spacemacs 同）：
+
+#+begin_src lisp
+(setf limn/keys:*leader-key* "SPC")   ; 預設值
+#+end_src
+
+=*leader-key*= 對應一個全域 =*leader-keymap*=（普通 keymap object）。
+dispatch 時：若 buffer 不是 minibuffer、且最高層按鍵 == =*leader-key*=，
+走 =*leader-keymap*= 的 prefix 機制（=set-key-prefix= 已有）；
+找不到 binding 才 fall through 到 self-insert。
+
+**=limn/which-key= 正式模組**（從 =examples/which-key.lisp= 升級）：
+
+#+begin_src lisp
+(require :limn/which-key)
+(limn/which-key:which-key-mode)          ; 啟用 which-key minor mode
+
+(setf limn/which-key:*idle-delay*  0.5) ; 秒，prefix 後多久彈出
+(setf limn/which-key:*max-display* 20)  ; echo area 最多顯示幾個 key
+#+end_src
+
+監聽 =event/key-prefix-changed=（v0.19 已有）；prefix 更新後超過
+=*idle-delay*=，呼叫 =message/echo= 顯示候選鍵。格式：
+
+#+begin_example
+SPC f → files  b → buffers  w → windows  h → help  ...
+#+end_example
+
+若 =map!= 的 =:desc= 欄位有描述（可選），顯示描述；否則顯示 command name。
+
+**** 不做的
+
+- Evil / vim modal editing（normal/insert mode 切換）— 屬 user-land，
+  =set-transient-map= 已夠組，不做 framework 內建
+- 完整 Doom =map!= DSL（=:after= / =:when= 條件綁定）— 留 user-land
+
+**** Testing
+
+Unit ~100 tests：
+- A 段：每個命令的 cursor-before / after assertion；kill-ring 整合
+  （C-k → ring 有值 → C-y 回填）；=*goal-column*= 保留（C-n 遇短行
+  停行尾 → 再 C-n 長行後欄位還原）；undo round-trip
+- B 段：=map!= macro 展開正確性；=:prefix= 串聯；=:mode= 查 keymap；
+  =:leader= 對到 =*leader-keymap*=
+- C 段：prefix 後觸發 =event/key-prefix-changed= → which-key 產出正確
+  格式；=*idle-delay*= 控制（mock timer）
+
+Qt-tier ~4 tests：
+- 真實 Qt widget：打 "hello" → C-a → C-k → C-y → buffer text "hello"
+- which-key：press "C-x" → echo area 有候選鍵文字
+
+OS-tier ~2 batches：
+- =batch-os-v026-editing=: spawn limn、inject "hello" → C-a → C-k → C-y → 驗 buffer
+- =batch-os-v026-leader=: SPC → which-key popup 出現 → "f f" → find-file 開啟
+
+依賴：v0.24（kill-ring / mark / undo 模組已 ship，只差掛進 keymap）；
+v0.25 completing-read 可選（which-key desc 可後補）。
+
+*** v0.29 pdf-mode 正式版 ⏭ planned
+
+以 mupdf engine buffer 為目標的完整互動層。把 sioyek 原本 C++ 寫死的
+翻頁 / 搜尋 / 高亮 / 書籤 UX 全部移到 Lisp，frontend 只剩渲染。
+視覺呈現走 =view/overlays= paintGL（v0.14 已 ship）。
+
+C++ 新增一個 =buffer/search= wire 命令（約 30 行），其餘全純 Lisp
+（新檔 =limn-pdf-mode.lisp=，約 400 行）。
+
+**** A. pdf-mode keymap — 導覽
+
+mupdf engine buffer 開啟時自動套 =pdf-mode=（v0.11 engine-default-mode
+機制已支援）。keymap 效法 Doom Emacs 的 =pdf-tools= 慣例：
+
+**翻頁 / 捲動**：
+
+| 按鍵 | 命令 | 說明 |
+|------+------+------|
+| j / <down> | pdf-scroll-down | 往下捲固定行（預設 3 行） |
+| k / <up>   | pdf-scroll-up   | 往上捲 |
+| J / n      | pdf-next-page   | =view/set :page (1+ p)= |
+| K / p      | pdf-prev-page   | =view/set :page (1- p)= |
+| C-f / SPC  | pdf-next-page   | Doom pdf-tools 慣例 |
+| C-b / S-SPC| pdf-prev-page   | 同上反向 |
+| gg         | pdf-first-page  | prefix 序列 "g" "g" → page 0 |
+| G          | pdf-last-page   | page → page-count - 1 |
+| [n]G       | pdf-goto-page   | =:interactive "p"=，numeric prefix |
+
+**縮放 / 視圖**：
+
+| 按鍵 | 命令 | 說明 |
+|------+------+------|
+| + / = | pdf-zoom-in    | zoom × 1.25 |
+| -     | pdf-zoom-out   | zoom × 0.8 |
+| 0     | pdf-zoom-reset | zoom = 1.0 |
+| W     | pdf-fit-width  | zoom 使頁寬填滿視窗 |
+| d     | pdf-toggle-dark | engine-params :dark-mode toggle |
+| r     | pdf-rotate-cw   | engine-params :rotation += 90 |
+
+**** B. 搜尋 + 高亮
+
+搜尋分兩層：
+
+1. **Wire 層**：新 =buffer/search= 指令，C++ 走 MuPDF =fz_search_page=
+   逐頁搜尋並回傳命中矩形——避免 Lisp 逐頁 =buffer/text= 的 O(pages) 往返。
+
+#+begin_src json
+{"id":"r80", "cmd":"buffer/search",
+             "buffer-id":"b1", "query":"deep learning",
+             "case-sensitive":false}
+→ {"id":"r80", "ok":true,
+   "data":{"hits":[{"page":3, "rects":[[x0,y0,x1,y1],[x0,y0,x1,y1]]},
+                   {"page":7, "rects":[[x0,y0,x1,y1]]},
+                   ...]}}
+#+end_src
+
+2. **Lisp 層**：維護 =*pdf-search-state*=（query、hits、current-index）；
+   =view/overlays= 一次送全部命中矩形（當前命中 =#FFD700= opacity 0.6，
+   其他命中 =#FFD700= opacity 0.25）；捲動到當前命中的頁 + offset。
+
+keybindings：
+
+| 按鍵 | 命令 | 說明 |
+|------+------+------|
+| /   | pdf-isearch-forward | minibuffer 讀 query → buffer/search |
+| n   | pdf-isearch-next    | 下一個命中（overlay + 捲動） |
+| N   | pdf-isearch-prev    | 上一個命中 |
+| C-g | pdf-isearch-quit    | 清除高亮，reset state |
+
+**** C. 高亮標注（Annotation）
+
+使用者用滑鼠 drag 選取文字（v0.15 =view/selection-get= 已有 rects），
+然後：
+
+| 按鍵 | 命令 | 說明 |
+|------+------+------|
+| h   | pdf-highlight-selection | 高亮當前 selection（預設黃色） |
+| H   | pdf-annotate-selection  | 高亮 + minibuffer 讀注記文字 |
+| d h | pdf-delete-annotation   | 刪除游標所在 annotation |
+
+**Annotation 資料結構**：
+
+#+begin_src lisp
+(defstruct pdf-annotation
+  id         ; uuid string
+  page       ; 0-based integer
+  rects      ; list of [x0 y0 x1 y1]（page-normalized，同 view/overlays）
+  color      ; hex string "#FFD700"
+  note       ; string or nil
+  created-at) ; universal-time
+#+end_src
+
+**Sidecar 持久化**（沿用 v0.24 =limn-bookmark.lisp= 的 SHA256 sidecar 模式）：
+
+- 路徑：=~/.limn/annotations/{sha256-of-filepath}.lisp=
+- annotate / delete 後序列化；buffer open 時載入並 =view/overlays= 畫出
+
+**** D. 目錄（TOC）
+
+| 按鍵 | 命令 | 說明 |
+|------+------+------|
+| t   | pdf-toc | 開 =*PDF-TOC*= buffer（floating window） |
+
+Lisp 流程：
+1. =buffer/toc= 拿樹狀結構（v0.3 wire 已有）
+2. 格式化成縮排純文字放進 =*PDF-TOC*= buffer
+3. =bridge/win-float-create= 顯示（已有）
+4. =RET= → 讀當前行的頁碼 → =pdf-goto-page=
+
+**** E. 書籤 UI（整合 =limn-bookmark.lisp=）
+
+v0.24 的 =limn-bookmark.lisp= 已有 make-bookmark / jump-to-bookmark；
+pdf-mode 掛進 keymap：
+
+| 按鍵 | 命令 | 說明 |
+|------+------+------|
+| m [char] | pdf-set-bookmark  | 在當前頁設書籤，命名為 char |
+| ' [char] | pdf-jump-bookmark | 跳到 char 書籤 |
+| ' ' | pdf-list-bookmarks | completing-read 選書籤（v0.25 C 之後） |
+
+**** F. Modeline
+
+pdf-mode 在 buffer 開啟後、每次頁碼 / zoom 改變後呼叫 =modeline/set=：
+
+#+begin_example
+PDF: paper.pdf   [42 / 183]   100%
+     ↑filename   ↑page/total  ↑zoom%
+#+end_example
+
+**** C++ 改動
+
+| 地方 | 改動 | 行數 |
+|------+------+------|
+| =limn_command.cpp= | 新增 =cmd_buffer_search=：走 =fz_search_page= 逐頁、收集 quads → JSON | ~30 |
+| =limn_input.cpp= | 確認 / 補 RET / DEL key 名（若 v0.28 未處理） | ~4 |
+| SPEC §5.3 | 補 =buffer/search= 文件 | — |
+
+**** 不做的
+
+- MuPDF 原生 annotation write-back（寫回 PDF 的 .annots）— 需
+  =fz_edit_layer= write API，留 v0.31+
+- 雙頁模式（two-page view）— 留 user-land 或 v0.31
+- SyncTeX 反向搜尋（LaTeX 雙向跳轉）— 長期
+
+**** Testing
+
+Unit ~80 tests：
+- A 段：每個命令的 =view/set= payload 驗證（mock bridge）
+- B 段：=buffer/search= response → overlay 層數與 hits 數一致；
+  n / N 更新 current-index
+- C 段：sidecar 序列化 / 反序列化 round-trip；overlay 計數
+- D 段：=format-toc-tree= 輸出縮排文字正確
+- E 段：=pdf-set-bookmark= / =pdf-jump-bookmark= 整合 =limn-bookmark=
+
+Qt-tier ~6 tests：
+- navigation：j 連按 3 次 → offset-y 真的增加
+- search：inject "/" + "the" + RET → =view/overlays= 有 rect
+- annotation：selection-set + h → overlay 有新 rect + sidecar 檔案存在
+- modeline：open PDF → modeline 文字含頁碼
+
+OS-tier ~3 batches：
+- =batch-os-v027-nav=: open PDF → press G → page = last page
+- =batch-os-v027-search=: open PDF → / "the" → echo area 有 hit count
+- =batch-os-v027-annotate=: open PDF → mouse drag + h → screenshot 有黃色矩形
+
+依賴：v0.14（view/overlays paintGL）、v0.15（selection-get）、
+v0.24（bookmark / kill-ring）、v0.25（completing-read，書籤列表用）。
+
+**** v0.28–v0.29 依賴關係
+
+#+begin_example
+v0.25 Interaction  ──┐
+  (completing-read /  ├──> v0.28 Keymap 完整化
+   history / advice)  │    (kill-ring / mark / undo 全在 v0.24；
+                       │     which-key 不依賴 v0.25；
+                       │     completing-read 在 which-key desc 可選用)
+                       │
+                       └──> v0.29 pdf-mode
+                            (書籤列表用 completing-read；
+                             annotation sidecar 沿用 v0.24 模式)
+#+end_example
+
+v0.28 與 v0.29 在 v0.25 ship 後可平行；一處 soft coupling：
+v0.29 書籤列表 =' '= 用 completing-read（v0.25 C）——若 v0.25 慢、
+降級為純 minibuffer prompt。
+
+*** v0.30 Runtime wire-up + init.lisp.example 翻新 ⏭ planned
+
+純 bring-up release。v0.23–v0.29 所有 Lisp 模組「程式碼寫好、unit 測試
+綠」但 =backend/repl.lisp= 的模組載入 list 停在 v0.22——意思是真實啟動
+=run-repl.sh= 時只有 v0.22-and-earlier 的模組存在 runtime、後面六版的
+功能（kill-ring、mark、undo wire、process、timer、log、find-file、
+auto-save、recentf、faces、text-props、completing-read、history、help、
+advice、defcustom、text-nav、map!、which-key、pdf-mode）全部沒被載入。
+
+**動機**：所有後續版本（v0.31+）都假設前面版本「真的在跑」。先把 boot
+path 接通，user 才有東西 dogfood、後續版本才有合理測試基準。也順手把
+=init.lisp.example= 翻新成 v0.29 級別的示範。
+
+純 mechanical / wiring 工作，零新功能；估計 ~50 行 boot config + 一份
+新範例 init。
+
+**** A. =repl.lisp= 模組載入 list 補完
+
+現狀 =backend/repl.lisp= 約第 30 行的 =(dolist (file '(...)))= 停在 v0.22：
+
+#+begin_src lisp
+;; 目前
+(dolist (file '("limn-hooks.lisp"
+                "limn-buffer.lisp"
+                "limn-bridge.lisp"
+                "limn-keys.lisp"
+                "limn-undo.lisp"
+                "limn-search.lisp"
+                "limn-client.lisp"
+                "limn-dispatch.lisp"
+                "limn-mode.lisp"
+                "limn-cmd.lisp"
+                "limn-runtime.lisp"
+                "limn-introspect.lisp"
+                "limn-text-mode.lisp"
+                "limn.lisp"))
+  ...)
+#+end_src
+
+需擴充對齊 =backend/tests/unit/run-unit.lisp= 已驗證 dependency 順序的
+完整 list：
+
+#+begin_src lisp
+(dolist (file '(;; v0.7-v0.22 core (existing)
+                "limn-hooks.lisp"
+                "limn-log.lisp"                  ; v0.23
+                "limn-error.lisp"                ; v0.23
+                "limn-timer.lisp"                ; v0.23
+                "limn-process.lisp"              ; v0.23
+                "limn-buffer.lisp"
+                "limn-bridge.lisp"
+                "limn-undo.lisp"
+                "limn-buffer-undo.lisp"          ; v0.23.1
+                "limn-keys.lisp"
+                "limn-search.lisp"
+                "limn-client.lisp"
+                "limn-dispatch.lisp"
+                "limn-mode.lisp"
+                "limn-cmd.lisp"
+                "limn-runtime.lisp"
+                "limn-introspect.lisp"
+                ;; v0.24 edit model
+                "limn-kill.lisp"
+                "limn-mark.lisp"
+                "limn-register.lisp"
+                "limn-kmacro.lisp"
+                "limn-file.lisp"
+                "limn-auto-save.lisp"
+                "limn-backup.lisp"
+                "limn-recentf.lisp"
+                ;; v0.25 interaction
+                "limn-history.lisp"
+                "limn-custom.lisp"
+                "limn-advice.lisp"
+                "limn-face.lisp"
+                "limn-text-props.lisp"
+                "limn-help.lisp"
+                "limn-completion.lisp"
+                ;; v0.26 isearch + occur
+                "limn-isearch.lisp"
+                "limn-occur.lisp"
+                ;; v0.28 keymap completion (text-mode AFTER kill/mark/undo)
+                "limn-text-nav.lisp"
+                "limn-text-mode.lisp"
+                "limn-map-macro.lisp"
+                "limn-which-key.lisp"
+                ;; v0.29 pdf-mode
+                "limn-pdf-mode.lisp"
+                ;; bootstrap (last)
+                "limn.lisp"))
+  (load (b/ file)))
+#+end_src
+
+**注意點**：
+- 順序對應 =run-unit.lisp=（unit-test runner 已驗證過 dependency 順序）
+- =limn-text-mode.lisp= 必須 AFTER kill / mark / undo（v0.28 keymap 要 wire 那些 command）
+- =limn.lisp= 永遠最後（bootstrap 假設其他模組都載入了）
+
+每個模組 auto-install at load（v0.24+ 慣例），所以載入就會自動 wire keymap
+/ 訂閱 event / 註冊 engine-default-mode。不需要額外 install 呼叫。
+
+**** B. =limn.lisp= bootstrap 補 install hook（若需要）
+
+確認 =limn.lisp= 的 start function 沒漏掉任何 v0.23+ 模組的 install 步驟。
+查 v0.25 / v0.28 / v0.29 模組是否需要顯式 install 呼叫（多數 auto-install
+at load、少數需要 start 時觸發訂閱）。
+
+預期 ~5–10 行新增 install 呼叫（若有需要）。
+
+**** C. =init.lisp.example= 翻新
+
+當前 =backend/init.lisp.example= 是 v0.8 demo（vim-style 翻頁 + 簡單
+minibuffer 搜尋）。更新成 v0.29 級別的完整示範：
+
+#+begin_src lisp
+;;;; ~/.limn/init.lisp — v0.29 完整示範
+;;;;
+;;;; 把這份複製到 ~/.limn/init.lisp、改成你想要的內容。
+
+(in-package :cl-user)
+
+;;; ── which-key (v0.28)：按 prefix 後 0.5 秒彈候選 ────────────────────
+(require :limn/which-key)
+(limn/which-key:which-key-mode)
+
+;;; ── leader key SPC（v0.28）── 仿 Doom 風格 ─────────────────────────
+(setf limn/keys:*leader-key* "SPC")
+
+(limn/map:map! :leader
+  "f f" #'find-file                ; v0.24
+  "f r" #'recentf-open-files       ; v0.24
+  "b b" #'switch-to-buffer         ; v0.25 completing-read
+  "h f" #'describe-function        ; v0.25
+  "h k" #'describe-key             ; v0.25
+  "h v" #'describe-variable)       ; v0.25
+
+;;; ── pdf-mode 微調（v0.29）── 自訂額外按鍵 ──────────────────────────
+(limn/map:map! :mode 'pdf-mode
+  "TAB" #'pdf-toc                  ; 改 TAB 開 TOC（預設是 t）
+  "z z" #'pdf-zoom-reset)          ; 加個方便 alias
+
+;;; ── 自動存檔（v0.24）─ ──────────────────────────────────────────────
+(setf limn/auto-save:*auto-save-interval* 30)  ; 30 秒
+(limn/auto-save:enable!)
+
+;;; ── recentf（v0.24）─ 開機載入 ────────────────────────────────────
+(limn/recentf:load-history)
+
+;;; ── face theme（v0.25）─ 啟用暗色主題 ────────────────────────────
+(limn/face:deftheme my-dark
+  '((default     :background "#1E1E1E" :foreground "#D4D4D4")
+    (mode-line   :background "#252526" :foreground "#CCCCCC")
+    (region      :background "#264F78")
+    (cursor      :background "#FFFFFF")))
+(limn/face:enable-theme 'my-dark)
+#+end_src
+
+放在 =backend/init.lisp.example=、覆蓋舊版。
+
+**** Testing
+
+純 wiring 沒有「新功能」要測，但需要 smoke：
+
+Unit ~3 tests（=backend/tests/unit/runtime-wireup-v028.lisp=）：
+- =backend/repl.lisp= load list 跟 =backend/tests/unit/run-unit.lisp= load
+  list 一致（diff = 0、忽略 =limn.lisp= 順序差異）
+- 每個列出的模組 file 真的存在於 =backend/=
+- =init.lisp.example= parse OK（=(with-open-file ... (read ...))= 不爆）
+
+Smoke test ~1（=backend/tests/smoke/v028-bootstrap.sh=）：
+- =sbcl --script backend/repl.lisp --no-spawn= 載入全部後 =(quit)=
+  不爆任何 error。=--no-spawn= 是個假 flag、實際用 env var 阻擋
+  =spawn-limn-process=（不需 Qt 環境）
+
+OS-tier ~1 batch（=batch-os-v028-real-init=）：
+- =HEADLESS=0 LIMN_INIT=examples/v028-demo.lisp ./backend/run-repl.sh= 啟動、
+  確認沒 stderr error、buffer-list 含預期 buffers
+
+**** 依賴
+
+- v0.23–v0.29（已 ship，本版只是把它們 wire 進 runtime）
+
+**** 不做的
+
+- 不做 lazy load（=require= on first use）——啟動載入時間 ~1 秒、user 不感
+- 不做 .limnrc 系統（v0.8 已用 =~/.limn/init.lisp=、保留）
+- 不做 plugin manager（=use-package= 等價）——user-land 想用 quicklisp 就 quicklisp
+
+*** v0.31 Markers + Buffer-local variables ⏭ planned
+
+純 Lisp、零 C++ 改動。補兩個 Emacs C-core 才有、但 Limn 還缺的基本元件——
+這兩個元件是其他模組的「地基」：任何「位置」(mark / bookmark / annotation
+/ undo entry / search hit) 要在編輯後仍然指對地方、任何 mode 要乾淨地帶
+自己的 buffer-scoped state，都得仰賴它們。
+
+**動機**：v0.24 起每個有「offset」概念的模組（mark-ring、bookmark、
+annotation、undo position）存的都是 raw integer——使用者在 marker 之前
+插一段字，offset 就失準。Emacs 在 C-core 用 marker 解這個問題、每次
+buffer mutation 自動 fixup 所有 marker。v0.31 把這層補上。
+
+**** A. Markers — 自動修正的 buffer 位置
+
+API：
+
+#+begin_src lisp
+;; 建立
+(make-marker)                                  ; → 未指向任何位置的空 marker
+(point-marker)                                 ; → 當前 buffer + cursor
+(point-min-marker)                             ; → 當前 buffer 起點
+(point-max-marker)                             ; → 當前 buffer 終點
+(copy-marker MARKER)                           ; → 同位置的新 marker
+(copy-marker INTEGER &optional INSERT-TYPE BUF) ; → 從 integer 升級
+
+;; 存取
+(marker-position M)                            ; → integer 或 nil（unlinked）
+(marker-buffer M)                              ; → buffer-id 字串 或 nil
+(set-marker M POSITION &optional BUFFER)       ; 重新指向
+
+;; 插入行為（Emacs 慣例）
+(marker-insertion-type M)                      ; :before（預設）或 :after
+(set-marker-insertion-type M TYPE)             ; 改變
+;;   :before — 在 marker.pos 插入時，marker 不動（留在原位）
+;;   :after  — 在 marker.pos 插入時，marker 推到新文字後
+#+end_src
+
+**Fixup 規則**（每次 =:event/buffer-modified= 觸發、遍歷該 buffer 的 marker list）：
+
+#+begin_example
+Insert at POS, length L:
+  for each marker M with marker-buffer == this buffer:
+    if M.position < POS:                    不動
+    elif M.position == POS:
+       if M.insertion-type == :before:      不動
+       else:                                M.position += L
+    else (M.position > POS):                M.position += L
+
+Delete [FROM, TO):
+  for each marker M:
+    if M.position <= FROM:                  不動
+    elif M.position < TO:                   M.position = FROM   ; clamp 到刪除起點
+    else (M.position >= TO):                M.position -= (TO - FROM)
+#+end_example
+
+**內部資料**：
+
+每個 buffer-id 對應一個 weakref 集合（=*markers-by-buffer*= : buffer-id
+→ set of markers）。weakref 是因為 marker 隨時可能被 GC、不該 leak。
+SBCL 用 =sb-ext:make-weak-pointer= 實作；unit-tier 測試可用 simple list
++ manual cleanup（避免引入 SBCL 特定依賴到 unit-tier 框架）。
+
+**整合既有模組**（v0.31 ship 時順手轉換）：
+
+- =limn-mark.lisp= : mark / mark-ring 改存 marker（不是 integer offset）。
+  =set-mark= 接受 integer 自動 wrap 成 marker。=mark= 回傳的還是 integer
+  (=marker-position=)，保持 API 兼容
+- =limn-buffer-undo.lisp= : undo entry 的 position 升級成 marker，
+  insert/delete 中段時 undo 記錄不會錯位
+- =limn-pdf-mode.lisp= : annotation 開啟時還是讀 fixed rects（sidecar
+  存的是固定矩形），但 v0.31 開放 =pdf-annotation-anchor= 槽位給未來
+  marker 支援 reflow 文件用——本版只先 plumb，annotation 行為不變
+
+**Marker 與 codepoint cursor (v0.16) 的關係**：
+
+=marker-position= 是 codepoint offset（跟 =buffer/cursor-get= 同單位），
+不是 UTF-16 unit、不是 byte。v0.16 釘的 cursor 語意一致——marker 不引入
+新單位。
+
+**** B. Buffer-local variables — 通用框架
+
+API（對齊 Emacs，命名直接照搬）：
+
+#+begin_src lisp
+;; 宣告全域帶 buffer-local 預設值的變數
+(defvar-local *fill-column* 70 "Column to fill at.")
+;; 等同 (defvar *fill-column* 70 ...) + (make-variable-buffer-local '*fill-column*)
+
+;; 既有 defvar 後升級
+(make-variable-buffer-local '*tab-width*)
+
+;; 寫 buffer-local（在當前 buffer，全域 default 不動）
+(setq-local *fill-column* 80)
+;; 或顯式
+(set-buffer-local-value '*fill-column* 80 BUF-ID)
+
+;; 讀（讀當前 buffer，若無 buffer-local 值落到 default）
+(limn/local:get '*fill-column*)                ; 走 buffer-aware lookup
+(buffer-local-value '*fill-column* BUF-ID)     ; 顯式指定 buffer
+(default-value '*fill-column*)                 ; 拿全域 default、跳過 buffer
+
+;; 查詢 / 解綁
+(local-variable-p '*fill-column*)              ; T 若當前 buffer 有 local 值
+(local-variable-p '*fill-column* BUF-ID)
+(kill-local-variable '*fill-column*)           ; 刪當前 buffer local，落回 default
+#+end_src
+
+**實作策略**：
+
+不污染 SBCL 的 =symbol-value=（那要 weave 全 runtime、不可行）。改用顯式
+package =limn/local=：
+
+- =limn/local:get SYM= — buffer-aware lookup
+- =limn/local:set SYM VALUE= — 寫當前 buffer
+- =limn/local:bound-p SYM=
+
+提供 =defvar-local= macro 展開成普通 =defvar=（default）+ 標記 +
+=setq-local= macro。內部 hash =*buffer-local-symbols*= (symbol → t)；
+=mode-buffer= 結構加 slot =local-vars= (hash symbol → value)。
+
+**Lookup 路徑**：
+1. =limn/local:get SYM= 先看當前 mode-buffer 的 =local-vars=
+2. 找不到、看該 symbol 是否在 =*buffer-local-symbols*= 且 buffer 有 local
+   值（已涵蓋第 1 點）
+3. 都沒有、回 =(symbol-value SYM)= 也就是 default
+
+**整合既有模組**：
+
+- =mode-buffer-local-keymap= (v0.19) 改用 =local-vars= 統一管：先
+  deprecate 該 slot、改成 =(limn/local:get 'limn/mode:*local-keymap*)=。
+  保留舊 accessor 為 backward-compat
+- v0.32 syntax tables 跟 coding systems 將以 buffer-local var 表達——這
+  是 v0.31 必須先做的理由
+
+**hook 點**：
+
+新事件 =:event/buffer-local-changed= : payload =(:buffer-id :symbol
+:old :new)=。可用於 modeline 重繪、debug、user-land 觀察。
+
+**** Testing
+
+Unit ~80 tests：
+
+A markers (~50)：
+- =make-marker= → unlinked、=marker-position M= = nil
+- =point-marker= / =point-min/max-marker=
+- =copy-marker INTEGER= → marker、保留 insertion-type
+- Fixup 8 種 case：insert 在 marker 之前 / 之後 / 同點 :before / 同點 :after；
+  delete [from to) 區段：marker 在區段前 / 中 / 後；marker 在區段邊界
+- cross-buffer：marker A 在 b1、edit b2、A 不動
+- multiple markers：burst 30 個 markers、burst 30 個 edits、所有 marker
+  仍對得起來
+- non-BMP：marker 在 emoji 字符上方、insertion 不挪它（codepoint 單位）
+- GC：刪所有 reference → marker 被 weakref reaper 清掉、下次 edit 不走那條
+- 整合：mark-ring set-mark 5、insert 2 字 at 0、=(mark)= 還是指原本字
+
+B buffer-local (~30)：
+- =defvar-local= 產生帶 default 的 var
+- =setq-local= 影響 buffer A 不影響 buffer B
+- =kill-local-variable= → 回 default
+- =local-variable-p= 正確
+- =default-value= 跳過 buffer
+- hook =:event/buffer-local-changed= 觸發、payload 對
+
+Qt-tier ~2 tests：
+- 真實 wire round-trip：=buffer/insert= 在 mark 之前、=mark= 真的不動
+  （之前是 raw int 會走位）
+- buffer-local =*tab-width*= 在不同 buffer 設不同值、modeline 顯示對
+
+OS-tier ~1 batch：
+- =batch-os-v028-marker-survive-edit=: spawn limn、開 file、set-mark、
+  在 mark 之前 inject 文字、verify mark 自動跟著動
+
+**** 依賴
+
+- v0.23.1 =:event/buffer-modified= wire event（已 ship）
+- v0.24 limn-mark.lisp（要轉換、不是依賴方向）
+- v0.29 limn-pdf-mode.lisp annotation (要 plumb anchor 槽位)
+
+**** 不做的
+
+- 不做 =with-current-buffer= macro（v0.33 跟 =narrow-to-region= 一起做）
+- 不做 marker 的 sexp print form serialization（轉 sidecar 還是用 plist）
+- 不做 frame-local / window-local variables（Emacs 也只在 buffer 強做、
+  其他 layer 用 hash 即可）
+
+*** v0.32 Syntax tables + Coding systems ⏭ planned
+
+純 Lisp、零 C++ 改動。補 Emacs C-core 兩個跟「文字怎麼解讀」相關的元件：
+syntax tables 決定字元在 buffer 裡的「文法角色」（word / 括號 / string-
+quote 等），coding systems 決定 buffer 跟 file 之間的 byte ↔ codepoint
+轉換。兩者都仰賴 v0.31 buffer-local variables。
+
+**** A. Syntax tables — 字元文法分類
+
+v0.28 M-f / M-b 寫死「alphanumeric + =_= = word」，這在 prog-mode 是錯的：
+=lisp-mode= 裡 =-= 跟 =?= 也是 word；=python-mode= 裡 =_= 是 word；
+=fundamental-mode= 跟 =text-mode= 規則又不同。Emacs 用 syntax table 解。
+
+**Syntax class**（精簡 Emacs 集合）：
+
+| 類別 | 字元範例 | 行為 |
+|------+----------+------|
+| =:word=          | A-Z a-z 0-9 中文 | 屬 word，M-f / M-b 連續吃 |
+| =:symbol=        | =-=              | 跟 :word 連在一起構成 symbol (forward-sexp) |
+| =:whitespace=    | SPC \t \n        | 分隔 |
+| =:open=          | =(= =[= ={=      | 開括號（matched with :close） |
+| =:close=         | =)= =]= =}=      | 收括號 |
+| =:string=        | =\"= =\'=        | string quote |
+| =:escape=        | =\\=             | escape char |
+| =:punct=         | =,= =.= =;= =:=  | 一般標點 |
+| =:comment-start= | =;= (lisp) =//= (c) | 註解開頭 |
+| =:comment-end=   | newline (lisp)   | 註解結尾 |
+
+API：
+
+#+begin_src lisp
+;; 建立
+(make-syntax-table &optional PARENT)            ; PARENT 預設 *standard-syntax-table*
+
+;; 改 entry
+(modify-syntax-entry CHAR CLASS &optional TABLE)
+;; e.g. (modify-syntax-entry #\- :symbol *lisp-mode-syntax-table*)
+
+;; 查 entry
+(char-syntax CHAR &optional TABLE)              ; → keyword class
+
+;; 動態切換（commands 用）
+(with-syntax-table TABLE &body BODY)
+
+;; 預設 / 全域
+*standard-syntax-table*                         ; fallback
+#+end_src
+
+**Buffer-local**：每個 buffer 有 =*syntax-table*=（buffer-local var、
+依賴 v0.31）。Major mode 在 =:on-enter= 設值（=text-mode= 用標準表、
+=lisp-mode= 用 lisp 表）。M-f / M-b / M-d / forward-sexp 走當前 syntax
+table。
+
+**內部表示**：
+
+不用全 Unicode 大 vector（17M 條目）。用兩層：
+- 0–127 (ASCII)：simple-vector of length 128，O(1) lookup
+- 128 以上：hash table，未設定 → 繼承 parent → 最終 fallback 預設
+  (=:word= for letters / =:punct= 其他)
+
+**整合既有模組**：
+
+- =limn-text-nav.lisp= : =forward-word-offset= / =backward-word-offset=
+  改吃 syntax table。預設行為跟現在一致（避免 regression）、mode 可以覆寫
+- 新 helper =skip-syntax-forward CLASS-STR= / =skip-syntax-backward= 對齊
+  Emacs
+
+**** B. Coding systems — 檔案編碼
+
+目前 =limn-file.lisp:find-file= 走 SBCL 預設 UTF-8，碰非 UTF-8 老檔
+（CJK Big5 / GB / Shift-JIS / Windows-1252 / Latin-1）就拋 decode error。
+
+API：
+
+#+begin_src lisp
+;; 定義
+(define-coding-system NAME
+  :encoding ENCODING            ; SBCL external-format keyword
+  :bom T                        ; 是否帶 BOM
+  :eol :unix / :dos / :mac      ; 行尾類型
+  :doc DOC-STRING)
+
+;; 查
+(find-coding-system NAME)        ; → coding-system 物件 或 nil
+(list-coding-systems)            ; → 已註冊清單
+
+;; 轉換 string
+(encode-coding-string STR CODING) ; → byte vector
+(decode-coding-string BYTES CODING) ; → string
+
+;; 轉換 region (in-buffer)
+(encode-coding-region BUF-ID FROM TO CODING)
+(decode-coding-region BUF-ID FROM TO CODING)
+
+;; 偵測
+(detect-coding-system BYTES)     ; → coding-system 物件（heuristic）
+(detect-coding-region BUF-ID FROM TO)
+
+;; 自動：find-file 用
+(set-buffer-file-coding-system BUF-ID CODING) ; buffer-local
+*buffer-file-coding-system*                    ; buffer-local var (v0.31)
+#+end_src
+
+**Bundled coding systems**（v0.32 ship 時內建）：
+
+| name             | SBCL external-format | 用途 |
+|------------------+----------------------+------|
+| =utf-8=          | =:utf-8=           | 預設 |
+| =utf-8-with-bom= | =:utf-8= + EF BB BF | Windows 慣例 |
+| =utf-16le=       | =:utf-16le=        | |
+| =utf-16be=       | =:utf-16be=        | |
+| =latin-1=        | =:latin-1=         | 西歐 binary-safe |
+| =windows-1252=   | =:windows-1252=    | Windows 西歐 |
+| =gb18030=        | =:gbk=             | 簡中 |
+| =big5=           | =:big5=            | 繁中 |
+| =shift-jis=      | =:shift_jis=       | 日文 |
+| =euc-jp=         | =:euc-jp=          | 日文 |
+| =iso-2022-jp=    | =:iso-2022-jp=     | 日文 mail |
+
+SBCL 部分 external-format 名稱不一致——shim layer 把 Limn name 映射到
+SBCL name。少數 SBCL 沒原生支援的（=iso-2022-jp= 等）用 babel：optional
+quickload dependency、沒裝就降級成 "fallback to UTF-8 + warning"。
+
+**Auto-detect 啟發**：
+
+#+begin_example
+1. 檢 BOM：
+   - EF BB BF → utf-8-with-bom
+   - FF FE    → utf-16le
+   - FE FF    → utf-16be
+2. 試 UTF-8 valid：if (sb-ext:octets-to-string bytes :utf-8) 不拋錯 → utf-8
+3. ASCII-only：utf-8
+4. heuristic：
+   - 高位 bit set 但 UTF-8 invalid → 看 file-coding-system-alist
+     (副檔名 / 路徑前綴) 預設
+   - 沒設定 → fallback windows-1252（西歐 binary-safe）
+5. 使用者 explicit override via prefix arg：C-u C-x C-f → minibuffer
+   讀 coding system 名稱
+#+end_example
+
+**find-file 流程**（取代當前實作）：
+
+#+begin_example
+1. 讀整個 file as octets
+2. detect-coding-system → CODING
+3. decode-coding-string → buffer text
+4. buffer/load-string + cache buffer-file-coding-system
+5. find-file-hook
+#+end_example
+
+**save-buffer 流程**：
+
+#+begin_example
+1. 拿 buffer text + buffer-file-coding-system
+2. encode-coding-string → octets
+3. write octets to file
+4. before-save-hook / after-save-hook
+#+end_example
+
+實作上 SBCL 直接 =(with-open-file ... :element-type '(unsigned-byte 8))=
+已足夠，C++ 不必動。
+
+**整合既有模組**：
+
+- =limn-file.lisp:find-file= 改走新 coding 流程
+- =limn-recentf.lisp= 不受影響（只記 path）
+- =limn-auto-save.lisp= 用 =buffer-file-coding-system= 存
+
+**** Testing
+
+Unit ~120 tests：
+
+A syntax (~60)：
+- =make-syntax-table= 預設 entries
+- =modify-syntax-entry= 改一個字元、其他不動
+- parent inheritance（=lisp-mode-table= 從 standard 繼承、覆寫部分）
+- =char-syntax= round-trip
+- =with-syntax-table= dynamic bind
+- =forward-word= 在 lisp-mode 把 =foo-bar= 當一個 word（=-= 是 :symbol）
+- =forward-word= 在 text-mode 把 =foo-bar= 拆兩 word
+- CJK：=你好= 是兩個 word char、=forward-word= 連吃
+- non-BMP：emoji 預設 :word
+- =skip-syntax-forward "w"= 正確
+
+B coding (~60)：
+- decode utf-8 / utf-16 / latin-1 / big5 / gb18030 round-trip
+- encode round-trip
+- =detect-coding-system= on BOM samples
+- heuristic on pure ASCII → utf-8
+- heuristic on Big5-encoded "你好"（無 BOM）→ 依 file-coding-system-alist
+  猜中 / 或 fallback
+- find-file 流程：開 Big5 檔案、buffer text 正確、=buffer-file-coding-system=
+  記錄 big5
+- save-buffer 用同 coding 寫回、bytes 跟原檔 == byte-for-byte
+- encode failure（unsupported codepoint）→ 抛 specific error、可被 catch
+- SBCL 不支援某些 coding 時 → degrade warning + fallback utf-8
+
+Qt-tier ~3 tests：
+- 真實 buffer：開 fixture 的 big5.txt → 內容正確、modeline 顯示 "big5"
+- =forward-word= in lisp-mode-buffer 跨 =-= 不停
+- save-buffer round-trip 不損 byte
+
+OS-tier ~1 batch：
+- =batch-os-v029-coding-roundtrip=: 用 fixture 一份 Big5 / GB / Shift-JIS
+  檔，find-file → buffer text 對、save-buffer → diff 原檔 bytes == 0
+
+**** 依賴
+
+- v0.31 buffer-local variables（=*syntax-table*= / =*buffer-file-coding-system*=
+  都是 buffer-local var）
+- v0.16 codepoint cursor 一致性（marker.position / buffer offset 同單位）
+
+**** 不做的
+
+- 不做 Emacs 那種 19-種 syntax-entry「flags」（comment-style-a/b、prefix
+  / suffix flag 等）。先支援基本 class、必要時再擴
+- 不做 character categories（=put-char-category=）— 跟 syntax 重疊、
+  CJK 排序用，user-land 真需要再加
+- 不做 file-locks（=.#file=）— v0.33+ 再排
+- 不做 process I/O coding（v0.23 process 預設 utf-8、留 v0.33 用同層擴）
+
+**** v0.31–v0.32 依賴與 dogfood 順序
+
+#+begin_example
+v0.31 Markers + Buffer-local vars
+        │
+        ├──> 立刻能用：mark / bookmark / annotation 編輯後不再錯位
+        │
+        └──> v0.32 Syntax + Coding
+                ├──> M-f / M-b 在 prog-mode 對齊 Emacs
+                └──> 開非 UTF-8 老檔不再炸
+#+end_example
+
+兩個版本完成後、加上 v0.33 控制流 / v0.35 regex / v0.36 file-watch + proc
+coding / v0.37 query-replace + indent，Limn 的「Emacs C-core 等價層」就
+算補齊。v0.34 視覺層（overlay-data + region + view/overlays :face）在中
+間 ship、ship 完可 retrofit v0.26 isearch / occur + v0.29 pdf-mode 的
+highlight 走 face。
+
+*** v0.33 Current buffer + save-excursion + narrow-to-region ⏭ planned
+
+純 Lisp、零 C++ 改動。補 Emacs 命令寫法的核心控制流：=*current-buffer*=
+dynamic var、=save-excursion= / =save-restriction= / =with-current-buffer=
+macro、=narrow-to-region= / =widen=。
+
+**動機**：Emacs elisp 命令九成都用 =save-excursion=「做完事情把 point 還
+回去」、用 =with-current-buffer= 短暫切換 buffer、用 =narrow-to-region=
+限縮工作範圍。Limn 沒這層、任何「在 *messages* 寫一行然後回原 buffer」
+寫法都得手動 save/restore wire state，超繁瑣且容易錯。
+
+依賴 v0.31 markers（save-excursion 存 point 用 marker、否則 body 內若
+編輯前段，point 還回去會錯位）。
+
+**** A. =*current-buffer*= dynamic variable
+
+#+begin_src lisp
+(current-buffer)           ; → mode-buffer object
+(current-buffer-id)        ; → wire buffer-id 字串
+(buffer-name &optional BUF) ; → 顯示用名字（chrome 為 "*minibuffer*" 等、檔案為 basename）
+
+;; setter
+(set-buffer BUF)           ; 改 *current-buffer*（dynamic re-bind 推薦走 with-current-buffer）
+#+end_src
+
+實作：=*current-buffer*= 是 dynamic var，預設由 runtime 從 focused
+window 推導；每次 wire =event/focus-changed= 時更新。所有 Lisp-layer
+buffer-aware 函式（=insert= / =delete-char= / =point= / =point-min= /
+=point-max= / =mark= / =buffer-local-value=）都走 =(current-buffer)=。
+
+**** B. =with-current-buffer= macro
+
+#+begin_src lisp
+(with-current-buffer BUF
+  (insert "hello\n")
+  (set-mark (point)))
+;; BUF 可以是 mode-buffer object、buffer-id string、或 buffer-name
+#+end_src
+
+實作：=(let ((*current-buffer* (resolve-buffer BUF))) ...)=。dynamic
+binding、自然在 body 結束後 restore。配 =resolve-buffer= helper：吃
+object / id / name 回 mode-buffer。
+
+**** C. =save-excursion= macro
+
+#+begin_src lisp
+(save-excursion
+  (goto-char (point-min))
+  (insert "header\n"))
+;; 結束後 point 自動回到原位（即使 body 在 point 前面插入了字）
+#+end_src
+
+實作：
+1. =(let* ((m (point-marker)) ...))= — point 存成 marker（v0.31），編輯
+   自動 fixup
+2. 也存 mark（=(mark)= → marker）+ mark-active 狀態
+3. =unwind-protect= 包 body：normal 結束跟 error 都 restore
+4. =(set-marker m nil)= 清掉 marker 釋放 reference
+
+**** D. =save-restriction= + =narrow-to-region= + =widen=
+
+語意：narrowing 只在 Lisp 層生效——=point-min= / =point-max= / 所有
+respecting narrowing 的函式（=re-search-forward= / =forward-line= 等）
+clip 到 [narrow-start, narrow-end]。**C++ frontend 不知道 narrowing 存
+在、display 仍顯示完整 buffer**（視覺 narrowing 留 v0.34 用 overlay
+壓暗 outside 區域）。
+
+#+begin_src lisp
+(narrow-to-region START END)
+(widen)                          ; 解除
+(save-restriction
+  (narrow-to-region 100 200)
+  (re-search-forward "foo"))     ; 只在 [100, 200) 找
+;; save-restriction 結束、narrowing 恢復原狀
+#+end_src
+
+實作：每個 buffer 有 =*narrow-start-marker*= / =*narrow-end-marker*=
+（buffer-local vars，v0.31）。預設 =nil nil= = widened。=point-min=
+/ =point-max= 看這兩個 marker：nil → absolute、non-nil → marker
+position。
+
+**** E. Buffer life cycle Lisp wrapper
+
+底層 wire 已有 =bridge/engine-load= / =buffer/close=。Lisp 加薄薄一層
+對齊 Emacs API：
+
+#+begin_src lisp
+(buffer-list)                  ; → list of mode-buffers (runtime registry 既有)
+(get-buffer NAME-OR-ID)        ; → mode-buffer 或 nil
+(get-buffer-create NAME &key engine)  ; 沒就 bridge/engine-load
+(kill-buffer &optional BUF)    ; → bridge/buffer-close + clean up local state
+(rename-buffer NEW-NAME)       ; per-buffer hash mapping
+#+end_src
+
+**** Testing
+
+Unit ~60 tests：
+- A (~10)：=current-buffer= 預設值；=set-buffer= 改值；=buffer-name=
+  各種 buffer 類型
+- B (~10)：=with-current-buffer= dynamic restore；nested；非法 buffer 拋 error
+- C (~20)：=save-excursion= 點 / mark restore；body 在 point 前插入字、
+  restore 仍對；error 也 restore；nested save-excursion
+- D (~15)：narrow-to-region 後 point-min/max 對；=re-search-forward= 不
+  跨界；widen 解除；save-restriction nested
+- E (~5)：=get-buffer-create= 第二次同名拿同 buffer；=kill-buffer= 後
+  buffer-list 少一條
+
+Qt-tier ~2：
+- =with-current-buffer "*messages*" (insert ...)= 真的寫到 *messages*、
+  原 buffer 沒被動
+- =narrow-to-region= 後 =point-max= clip、widen 後 restore
+
+OS-tier ~1：
+- =batch-os-v030-save-excursion-edit=: spawn limn、用 save-excursion 在
+  buffer 前段插字、verify point 在原本字元上（不是平移過的位置）
+
+**** 依賴
+
+- v0.31 markers（save-excursion 點/mark restore 用 marker）
+- v0.31 buffer-local vars（narrow markers 是 buffer-local）
+
+**** 不做的
+
+- 不做視覺 narrowing（display 隱藏 outside 區域）—— 留 v0.34 用 overlay 做
+- 不做 =indirect-buffer=（多個 buffer 共享底層 text）—— Emacs 罕用、需要
+  C++ gap-buffer 多 view 支援、暫不做
+- 不做 =selective-display= / =buffer-display-table=
+
+*** v0.34 視覺系統：view/overlays :face + overlay-data + region 視覺化 ⏭ planned
+
+v0.25 已 ship faces (=defface= / =deftheme= / face registry) 跟
+text-properties（interval tree + =put-text-property=），而且 C++ 端
+=display/sync-faces= wire 也做了。但**還少最後三件**才能真的「東西按 face
+長相」：
+
+1. =view/overlays= wire 命令還沒接 =:face= 欄位——傳 face name 進 C++ 後
+   沒人查 registry、目前 paint 還是吃 =:color= hard-code
+2. 缺 **overlay 資料層**（=make-overlay= / =overlay-put= / =overlays-in=
+   等）——v0.25 只做 text-properties；overlay 是 sibling primitive，獨立
+   range + 自動 marker fixup、許多用例（region 高亮、isearch lazy-highlight、
+   annotation marker）非它不可
+3. 缺 **region 視覺化**（=transient-mark-mode= + 自動 =region= face 高亮）
+   ——v0.24 mark/region 純資料、設了 mark 畫面看不出來
+
+v0.34 補完這三件後，回頭把以下 hard-coded 顏色 retrofit 成 face references：
+- v0.26 isearch / occur 的 =*highlight-fn*= vtable production wire impl
+  → 用 =isearch-match= / =lazy-highlight= face
+- v0.29 pdf-search / pdf-annotation / modeline → 對應的 face
+
+**** A. =view/overlays= 接 =:face= 欄位
+
+C++ 改動（=limn_command.cpp= =cmd_view_overlays= 內、~20 行）：
+- 既有 payload 欄位 =:color "#FFD700"= 保留 backward-compat
+- 新欄位 =:face FACE-NAME=：優先；paint 時查 =LimnFaceRegistry=（v0.25 已
+  建）拿 =:foreground= / =:background= 屬性
+- 兩者都沒 → fallback default face
+
+Wire payload 範例：
+
+#+begin_src json
+{"id":"r80", "cmd":"view/overlays", "win-id":"w1",
+             "layers":[
+               {"type":"rect", "page":3, "rect":[x0,y0,x1,y1],
+                "face":"isearch-match", "opacity":0.6},
+               {"type":"rect", "page":3, "rect":[x0,y0,x1,y1],
+                "face":"lazy-highlight", "opacity":0.4}]}
+#+end_src
+
+Lisp 端（=limn-face.lisp= 已有 =resolve-face-attributes=）：v0.34 可選
+在 Lisp 送 wire 前 flatten inheritance、減少 C++ lookup；或一律 lazy
+flatten in C++。**走 lazy in C++**，避免 face 屬性改了 client 那邊 stale。
+
+**** B. Overlay 資料層（=limn-overlays.lisp= 新檔）
+
+跟 text-properties 的差異：overlay 是獨立 range object、不黏 text。
+插入 text 在 overlay 中段不會切開 overlay；overlay 可以單獨 move、單獨
+delete；overlay 不存進 buffer text、不會被 copy-paste 帶走。
+
+API：
+
+#+begin_src lisp
+(make-overlay START END &optional BUF FRONT-ADVANCE REAR-ADVANCE)
+(overlay-put OV PROP VALUE)
+(overlay-get OV PROP)
+(overlay-start OV)                ; → integer (從 marker 取)
+(overlay-end OV)
+(overlay-buffer OV)
+(delete-overlay OV)
+(move-overlay OV NEW-START NEW-END &optional NEW-BUF)
+(overlays-in START END &optional BUF) ; → list
+(overlays-at POS &optional BUF)
+(overlay-properties OV)            ; → plist
+#+end_src
+
+實作：overlay = struct =(start-marker end-marker plist buffer-id)=。
+start/end 是 marker（v0.31）、所以 auto-fixup 免費拿。per-buffer
+overlay list 用排序 vector + bisect 找 overlay-at (O(log n))。
+=FRONT-ADVANCE= / =REAR-ADVANCE= 對應 marker insertion-type
+（=:before= / =:after=）。
+
+支援 properties（同 text-property 慣例）：
+- =face= → 渲染（透過 face registry 走 §A 路徑）
+- =before-string= / =after-string= → 虛擬文字、paint 時插入顯示但不進 buffer
+- =display= → 顯示替換
+- =keymap= → 該 range 內按鍵走這 keymap（local override）
+- =mouse-face= → mouse hover 時的 face
+- =priority= → 重疊時順序
+- =window= → 只在指定 window 顯示
+
+**Rendering pipeline**（v0.34 後 isearch / region / pdf-annotation 全走這條）：
+
+#+begin_example
+1. view paint 觸發
+2. Lisp side: (overlays-in viewport-start viewport-end) + (next-text-properties...) 掃
+3. 對每個 active range 組 view/overlays layer with :face FACE-NAME
+4. wire 送出 → C++ paintGL 查 face registry 算實際顏色
+#+end_example
+
+**** C. Region 視覺化 + =transient-mark-mode=
+
+預設啟用 =transient-mark-mode=（同 Emacs 25+ 預設）：
+
+- 設 mark (=C-SPC=)：mark active
+- 接著任何 motion command：mark 仍 active、=[point, mark]= 區間用
+  =region= face 自動 highlight（透過 overlay §B）
+- 任何 edit command：mark deactivate、highlight 消失
+- =C-g=：deactivate
+- =(use-region-p)= → 看是否 active；許多命令（=upcase-region= 等）只在
+  active 時對 region 起作用、否則 fall back 到 word
+
+實作：=limn/mark= 內加 =*mark-active*= flag + =*region-overlay*=；
+mark active 時 cover =[point, mark]=、mark deactivate 時 delete。
+=v0.29.5 transient-mark hook= 訂閱所有 motion command（=post-command-hook=
+需要 v0.25 advice / 或新加 mechanism）。
+
+motion / edit 分類：用 =limn/cmd:*this-command*= 對照預存清單
+（=*motion-commands*= / =*edit-commands*=）；user-land 可以
+=push= 進去自訂。
+
+預設 motion：=forward-char= =backward-char= =next-line= =previous-line=
+=beginning-of-line= =end-of-line= =forward-word= =backward-word=
+=beginning-of-buffer= =end-of-buffer= =isearch-*=（v0.26 已 ship）。
+
+**** Testing
+
+Unit ~80 tests：
+
+A view/overlays :face (~15)：
+- =view/overlays= layer 帶 =:face= → Lisp wire payload 含對應欄位
+- 既有 =:color= hard-code 路徑仍可（backward-compat）
+- =:face= 不存在 registry → fallback 行為
+
+B overlay-data (~45)：
+- =make-overlay= / =move-overlay= / =delete-overlay=
+- =FRONT-ADVANCE= / =REAR-ADVANCE= 對應 marker =:after= / =:before=
+- =overlays-in= 範圍正確（partial overlap / contained / disjoint）
+- =overlays-at= O(log n) 排序 vector 對
+- multiple overlays 同位置 =:priority= 順序
+- =:window= 只在指定 window 篩出
+- =before-string= / =after-string= 在 render 時組對
+
+C region (~20)：
+- =transient-mark-mode= on/off toggle
+- =C-SPC= → =*mark-active*= = t、=*region-overlay*= 建立
+- motion command 後 mark 仍 active、overlay 跟著 point 移
+- edit command 後 mark deactivate、overlay 消失
+- =C-g= deactivate
+- =use-region-p= 對應 mark-active 狀態
+
+Qt-tier ~4：
+- 真實 buffer：=(make-overlay 5 10)= + =(overlay-put o 'face 'isearch-match)=
+  → screenshot 真出現高亮
+- pdf-search retrofit：v0.29 hard-code 黃改用 =pdf-search-match= face、
+  theme 切換 dark/light 真的反映
+- region highlight：=C-SPC= → 移動 → screenshot 出現 region 反白
+- =before-string=：buffer 顯示插入了虛擬文字、但 =buffer/text= 不含
+
+OS-tier ~2：
+- =batch-os-v032-region-highlight=: =C-SPC= + 移動 → screenshot 出現 region face
+- =batch-os-v032-pdf-retrofit=: v0.29 pdf-search 高亮顏色跟 face theme 同步
+
+**** C++ 改動
+
+| 地方 | 改動 | 行數 |
+|------+------+------|
+| =limn_command.cpp= =cmd_view_overlays= | 接 =:face= 欄位、查 =LimnFaceRegistry= | ~20 |
+| =pdf_view_opengl_widget.cpp= | paint 走 face attribute 而非 hard-code color | ~10 |
+| =LIMN-SPEC.org= §5.2 | =view/overlays= 欄位文件補 =:face= | — |
+
+**** 依賴
+
+- v0.25 face system（=defface= / face registry / =display/sync-faces= 已 ship）
+- v0.25 text-properties（已 ship、本版 overlay 是 sibling、共用 marker fixup）
+- v0.31 markers（overlay start/end）
+
+**** Retrofit 既有 hard-coded 顏色
+
+v0.34 ship 完，回頭把這幾個 v0.29 已 ship 的 hard-code 顏色改用 face：
+- v0.29 pdf-search 黃高亮 → =pdf-search-match= face
+- v0.29 pdf-annotation 黃高亮 → =pdf-annotation= face
+- modeline 顏色 → =mode-line= face
+
+注意：v0.26 isearch / occur 在本版前已 ship、retrofit 路徑見上方第一項；
+v0.37 query-replace 走 v0.35 regex + 本版 face 體系、從一開始就用
+=isearch-match= / =lazy-highlight= face、零 hard-code。
+
+**** 不做的
+
+- 不做 image text-property（=display= 屬性接圖片）—— 留更後面跟
+  image-in-buffer 一起
+- 不做 fringe（gutter 線號 / breakpoint 圖示）—— Qt 端要加 widget
+- 不做 box face 的 complex pixel-perfect rendering（Emacs box 細節
+  可大可小、本版只支援單色 1px box）
+
+**** v0.27–v0.37 依賴圖
+
+#+begin_example
+(shipped: v0.26 isearch + occur)
+     │
+     ├─> v0.27  ⏳ 由另一 agent 進行中（內容 TBD、此 spec 不預先佔位）
+     │
+     ├─> v0.28 Keymap completion + map! + which-key   ┐
+     │                                                  │ Batch A
+     ├─> v0.29 pdf-mode 正式版                          ┘
+     │
+v0.30 Wire-up + init.lisp.example  (bring-up runtime) ─┐ Batch B
+                                                        │
+v0.31 Markers + buffer-local       (independent of B) ─┘
+     │
+     ├─> v0.32 Syntax + Coding
+     │       │
+     │       └─> v0.36 file-notify + auto-revert + proc coding
+     │
+     ├─> v0.33 Control flow (current-buffer / save-excursion / narrow)
+     │       │
+     │       └─> v0.35 Regex (cl-ppcre + Emacs API)
+     │               │
+     │               └─> v0.37 query-replace + indent + column
+     │
+     └─> v0.34 Visual system (overlays-data + region + view/overlays :face)
+              │
+              └─> 回頭 retrofit v0.26 isearch / occur + v0.29 hard-coded 顏色
+
+平行 batch（版本號隨 batch 單調遞增；v0.27 由別組擁有、不計入本表）：
+- Batch A: v0.28 + v0.29              （無依賴；可平行兩 agent）
+- Batch B: v0.30 + v0.31              （v0.30 需 A 落地後寫 wire-up list；v0.31 獨立）
+- Batch C: v0.32 + v0.33 + v0.34      （需 v0.31；三 agent 平行）
+- Batch D: v0.35 + v0.36              （v0.35 需 v0.33、v0.36 需 v0.32）
+- Batch E: v0.37                      （需 v0.35 regex）
+
+注：v0.30 wire-up 載入清單需在 ship 前確認包含 v0.27 ship 出的模組（若有）
+跟 v0.28 / v0.29 的模組（命名見各章節）。
+#+end_example
+
+*** v0.35 Real regex engine (cl-ppcre) ⏭ planned
+
+把 =limn-search.lisp= 的 tiny regex 升級成真正的 regex 引擎，提供
+Emacs-style API。動機：v0.28 後的 isearch / query-replace / font-lock /
+syntax highlighting 全部要靠 regex；tiny regex 連 =\b= 跟 group capture
+都沒有。
+
+**** A. Vendor cl-ppcre
+
+cl-ppcre 是 Edi Weitz 寫的 PCRE-style regex、MIT-license、SBCL 環境最
+成熟的選擇。
+
+引入方式（避免讓使用者再裝 quicklisp）：
+1. Submodule =vendor/cl-ppcre/= 加入 repo
+2. =repl.lisp= / =run-unit.lisp= 啟動時 =(load "vendor/cl-ppcre/load.lisp")=
+3. =backend/limn-regex.lisp= wrap 成 Emacs-style API、不直接 export cl-ppcre
+
+**** B. Emacs-style API
+
+#+begin_src lisp
+;; In-buffer search（吃 *current-buffer*）
+(re-search-forward REGEX &optional BOUND NOERROR COUNT)
+(re-search-backward REGEX &optional BOUND NOERROR COUNT)
+(looking-at REGEX)                  ; at point
+(looking-back REGEX &optional LIMIT)
+(re-search-in-buffer REGEX BUF-ID)  ; explicit buffer
+(replace-match REPLACEMENT &optional FIXEDCASE LITERAL)
+
+;; String operations
+(string-match REGEX STRING &optional START)
+(replace-regexp-in-string REGEX REPLACEMENT STRING &key fixedcase literal)
+(split-string STRING &optional SEPARATOR-REGEX OMIT-NULLS)
+
+;; Match data (after a match)
+(match-string N &optional STRING)   ; group N capture
+(match-beginning N)                 ; position
+(match-end N)
+(match-data &optional INTEGERS)     ; raw
+(set-match-data DATA)
+#+end_src
+
+回傳值規範對齊 Emacs：=re-search-forward= 找到 → 把 point 移到 match
+end、回 point；找不到 → 看 NOERROR：nil 拋 =search-failed=、t 回 nil、
+其他 (e.g. 'limit) 回 nil 但 point 不動。
+
+**** C. Emacs regex syntax 相容
+
+Emacs 跟 PCRE 大方向同但細節差：
+- Emacs：=\\(group\\)= / =\\b= / =\\w= / =\\<= / =\\>=
+- PCRE：=(group)= / =\b= / =\w= / no =\<=
+
+兩條路：
+1. **語法 shim**（=emacs-regex-to-pcre=）：把 Emacs syntax 翻譯成 PCRE
+   再餵 cl-ppcre。優：使用者寫法跟 Emacs 一樣
+2. **直接 PCRE**：=re-search-forward= 直接吃 PCRE 語法、文件清楚標明
+   差異。優：實作簡單、無翻譯 bug
+
+v0.35 走 **path 1**——保 Emacs 慣例。translator 是 ~50 行純 string
+manipulation；測試覆蓋 Emacs regex 大全：=\\(...\\)=、=\\|=、=\\b=、
+=\\<=、=\\>=、=\\=`、=\\=`、=\\=B=、=\\w=、=\\W=、=\\s-=、=\\sw= 等。
+
+**** D. =limn-search.lisp= 升級
+
+舊 =limn/search:find-matches= 介面保留（=pdf-mode= 用），底層改用
+cl-ppcre。新 mode：
+
+#+begin_src lisp
+(find-matches words query
+              :case-sensitive ...
+              :regex t              ; 改用 cl-ppcre、不是 tiny-regex
+              :emacs-syntax t       ; 預設 t、走 syntax shim
+              ...)
+#+end_src
+
+**** Testing
+
+Unit ~100 tests：
+- A vendor (~5)：cl-ppcre load OK、CL-PPCRE package symbols 可解析
+- B API (~60)：每個 Emacs-style 函式正反案例；NOERROR 三種值；BOUND 限制
+  範圍；point 是否前進；match-data 正確；replace-match group 替換
+- C syntax shim (~30)：每個 Emacs 特殊語法 → translated PCRE 對；
+  literal =\\= 不被 escape 吃掉；=\\(?:non-cap\\)=；nested groups
+- D upgrade (~5)：舊 find-matches API 用 regex 模式回 ppcre-quality 結果、
+  搜 =\\b\\w+\\b= 在 pdf words 拆對
+
+Qt-tier ~2：
+- C-s '/regex' 一鍵跳 hit
+- replace-regexp 真的改 buffer
+
+OS-tier ~1：
+- =batch-os-v031-regex-realworld=: 用 fixture 一份 source code、=re-search-forward=
+  抓所有 =defun \\([a-z-]+\\)=、回符號數對
+
+**** 依賴
+
+- v0.33 =*current-buffer*=（=re-search-forward= 吃當前 buffer）
+- v0.31 markers（match data 內部用 marker 跟 buffer 鎖定）
+
+**** 不做的
+
+- 不做 =rx= S-expression regex builder（Emacs 有；user-land 可加）
+- 不做 PCRE recursive patterns / lookbehind variable-length（cl-ppcre
+  原生限制）
+- 不做 syntax-tables 整合（=\\sw= / =\\s-= 透過 v0.32 syntax tables 查、
+  不直接走 PCRE 的 =\\w=）—— 此整合是 v0.32 完成後的優化
+
+*** v0.36 file-notify + auto-revert + process I/O coding ⏭ planned
+
+把「外部世界變化」這條打通：檔案被別的程式改、subprocess 講不同編碼、
+都要進 Limn 不會破。
+
+**** A. file-notify — OS 檔案監視
+
+API（對齊 Emacs =filenotify.el=）：
+
+#+begin_src lisp
+(file-notify-add-watch PATH FLAGS CALLBACK)
+;; FLAGS: list of :change :attribute-change
+;; → descriptor (opaque)
+
+(file-notify-rm-watch DESCRIPTOR)
+
+;; CALLBACK 收 event plist:
+;; (:descriptor D :action :changed :file "/path/to/x")
+;; :action ∈ {:created :deleted :modified :renamed :attribute-changed}
+#+end_src
+
+實作：v0.23 =limn/process= spawn 一個 helper subprocess（macOS:
+=fswatch=、Linux: =inotifywait=、fallback: 自己寫的 polling）。helper
+stdout 每行一個 event JSON、Lisp parse 完 invoke callback。
+
+Helper 選擇邏輯：
+1. 開機時 probe：哪個 binary 在 PATH 上？
+2. 都沒有：fallback polling mode（每 N 秒 =stat=、比較 mtime + size）
+3. =*file-notify-backend*= 可手動 override
+
+Limn 啟動跑 single watcher process、所有 watch 多工進去（unsubscribe
+時送 stdin 命令拔 watch；watcher 死了 reaper 重啟）。
+
+**** B. =auto-revert-mode= minor mode
+
+每個有檔案 backing 的 buffer 可開：
+
+#+begin_src lisp
+(auto-revert-mode)             ; toggle on current buffer
+(global-auto-revert-mode)      ; 對所有 file buffers 啟用
+
+;; tail 模式：log 用、只 append、cursor 自動往下追
+(auto-revert-tail-mode)
+#+end_src
+
+當 file-notify 報 :modified、buffer 若沒未存改動，自動 =revert-buffer=
+（v0.24 limn-file 已有）；若有 modified、=message/echo= 警告但不動 buffer。
+
+interval fallback（無 file-notify）：=*auto-revert-interval*= 預設 5 秒。
+
+**** C. Process I/O coding 延伸 v0.32
+
+v0.32 加了 =*buffer-file-coding-system*= 給 find-file / save-buffer；
+v0.36 延伸同層到 subprocess pipe：
+
+#+begin_src lisp
+(make-process :name "p" :command '("..." "...")
+              :coding-system 'utf-8                  ; 雙向
+              :decode-coding-system 'big5            ; 只解 stdout
+              :encode-coding-system 'utf-8           ; 只編 stdin
+              ...)
+
+;; 預設全域
+*default-process-coding-system*  ; = '(utf-8 . utf-8)  (read . write)
+
+;; 也 buffer-local：當 process 接到 buffer 時用該 buffer 的
+*buffer-process-coding-system*
+#+end_src
+
+實作：=limn/process= 內部讀 stdout 改成讀 raw bytes、用 v0.32
+=decode-coding-string= 解；寫 stdin 反向 encode。
+
+**** Testing
+
+Unit ~70 tests：
+- A file-notify (~30)：subscribe / unsubscribe；callback 收對 event；
+  multiple watches；helper process 死 → reaper 重啟（mock subprocess）；
+  polling fallback；race（subscribe / event 同時到）
+- B auto-revert (~25)：modified buffer 不 revert；clean buffer 自動 revert；
+  tail mode；global toggle；interval 計時
+- C coding (~15)：process stdout 走 decode-coding-system；CJK 子程序正確；
+  encode failure error 路徑
+
+Qt-tier ~2：
+- 真實開 /tmp/x.txt、外部 =echo hi >> /tmp/x.txt=、buffer 內容自動更新
+- spawn =cat= 子程序、stdin / stdout 走 big5、雙向 round-trip
+
+OS-tier ~1：
+- =batch-os-v033-auto-revert-roundtrip=: spawn limn、find-file、container
+  內 =echo "new line" >> file=、verify buffer 在 1 秒內含新內容
+
+**** 依賴
+
+- v0.23 limn/process (helper subprocess)
+- v0.24 limn-file =revert-buffer=
+- v0.31 buffer-local vars (=*auto-revert-interval*=, etc.)
+- v0.32 coding systems (=decode-coding-string=)
+
+**** 不做的
+
+- 不做 TRAMP（遠端檔案）—— long-term，需要更厚的 process abstraction
+- 不做 git diff hook（VC）—— v0.34+
+- 不做 file-lock（=.#file=）—— Emacs 有，使用率低，留 v0.34+
+
+*** v0.37 query-replace + indent + current-column ⏭ planned
+
+把 v0.33 control flow + v0.35 regex 組裝成 =query-replace=——以及程式
+語言 mode 必備的 indent 系統與 column 處理。
+
+v0.26 已 ship =isearch= + =occur=（incremental search + 行式搜尋列表）；
+v0.35 ship 完 regex 後，v0.26 isearch 可以選擇性升級走 regex API
+（目前 isearch 用 codepoint substring），但這只是 v0.26 的內部優化、不
+屬於本版範圍。v0.34 視覺系統 ship 後 isearch / occur 的高亮也可改用
+=isearch-match= face、屬於 retrofit 工作、見 v0.34 章節。
+
+**** A. =query-replace= — M-%
+
+#+begin_src
+M-%          start query-replace
+M-x query-replace-regexp     start regexp 模式
+
+;; prompt 循環:
+y / SPC      replace this, move to next
+n / DEL      skip this, move to next
+!            replace all remaining
+q / RET      quit
+.            replace this then quit
+,            replace this and pause for confirmation
+^            go back to previous match
+#+end_src
+
+實作：純 Lisp，用 v0.35 regex API + v0.33 save-excursion + minibuffer
+prompt loop。
+
+**** B. Indent 系統
+
+| API | 行為 |
+|-----+------|
+| =(indent-to COL)= | 從 point 補 SPC / TAB 到 column COL |
+| =(current-column)= | 拿 point 的視覺 column（TAB 跨 *tab-width*、CJK = 2） |
+| =(move-to-column N &optional FORCE)= | 把 point 移到 column N |
+| =(back-to-indentation)= | 移到行首第一個非空白字元 |
+| =(indent-line-function)= | buffer-local function（v0.31），預設 =indent-relative= |
+| =(indent-region FROM TO)= | 每行呼叫 indent-line-function |
+| =(indent-rigidly FROM TO COUNT)= | 每行往右移 COUNT column |
+
+Buffer-local vars（v0.31 依賴）：
+- =*tab-width*= 預設 8
+- =*indent-tabs-mode*= 預設 t（用 TAB；nil 用 SPC）
+- =*fill-column*= 預設 70（給 =fill-paragraph= 用、本版只 plumb）
+
+新 keymap entry（text-mode）：
+- TAB → =indent-for-tab-command=
+- C-j → =newline-and-indent=
+
+**** C. =current-column= — 字寬 awareness
+
+純函式 =(char-display-width CHAR)=：
+- ASCII printable → 1
+- TAB → 動態：到下一個 tab-stop（=tab-width=）
+- newline / CR → 0
+- CJK fullwidth → 2
+- emoji → 2（最常見 widechar 規則；exact 走 East Asian Width 表）
+- 其他 control char → 顯示 =^X= 算 2、或 hex 算 4（看 buffer-display-table，本版固定 control = 2）
+
+=(current-column)= 從行首掃到 point、累 =char-display-width=。
+=(move-to-column N FORCE)=：找到目標位置；FORCE = 必要時補 SPC / 拆 TAB。
+
+**** Testing
+
+Unit ~80 tests：
+- A query-replace (~30)：y/n/!/q/./^ 各分支；regexp 模式 group reference；
+  range arg
+- B indent (~30)：indent-to 各種 col；tab-width 變化；indent-region；
+  indent-rigidly
+- C current-column (~20)：ASCII / TAB / CJK / emoji / mixed；move-to-column
+  with-force
+
+Qt-tier ~3：
+- M-% "foo" RET "bar" RET y y → buffer 內容換對
+- TAB 真的插入 tab、cursor 位置對
+- CJK buffer 中 =(current-column)= 對齊
+
+OS-tier ~1：
+- =batch-os-v036-query-replace-roundtrip=
+
+**** 依賴
+
+- v0.33 save-excursion / current-buffer
+- v0.35 regex
+- v0.31 buffer-local vars (=tab-width= etc.)
+- v0.26 isearch + occur (已 ship)
+
+**** 不做的
+
+- 不做 =isearch-yank-pop= 全套 yank 整合（基本 M-y 即可）
+- 不做 =Helm/Ivy/Vertico=-style isearch 候選列表 popup（user-land）
+- 不做 多檔 grep（=lgrep= / =rgrep=）—— 留 v0.36+
 
 *** 未來 milestone（待排序、未來再排）
 
