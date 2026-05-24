@@ -112,9 +112,19 @@ private:
 // Qt MainWindow per frame. For now every frame is registered abstractly
 // but only f1 has an actual visible MainWidget.
 
+class MainWidget;
+
 struct LimnFrame {
-    QString frame_id;
-    bool    focused = false;
+    QString     frame_id;
+    bool        focused = false;
+    // v0.18.1: real Qt MainWindow this frame owns. f1 points to the
+    // bootstrap MainWidget created in main.cpp (and which the registry
+    // does NOT own — it survives across the registry's lifetime).
+    // Frames created at runtime (f2, f3, ...) own their MainWidget;
+    // remove() deletes it. nullptr in headless contexts or if the
+    // frame was abstractly created (v0.18.0 back-compat path).
+    MainWidget* widget = nullptr;
+    bool        owns_widget = false;
 };
 
 class LimnFrameRegistry {

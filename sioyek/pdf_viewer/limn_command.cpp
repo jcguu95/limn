@@ -2752,7 +2752,26 @@ void LimnCommand::cmd_frame_list(const QString& id, const QJsonObject&) {
 
 void LimnCommand::cmd_frame_create(const QString& id, const QJsonObject&) {
     const QString new_id = frames->allocate_id();
-    frames->add(new_id);
+    LimnFrame* f = frames->add(new_id);
+    // v0.18.1: instantiate a real second Qt MainWindow. Each MainWidget
+    // builds its own DocumentManager / DB / DocumentView / PdfRenderer
+    // (see main_widget.cpp ctor), so they're functionally independent
+    // — shared state is just the module-level fz_context (cloned per
+    // worker thread inside PdfRenderer) and the static stub_config.
+    //
+    // Per-frame wire command routing (view/set, engine-load, etc.
+    // targeting a window in fN drives fN's MainWidget) is queued as
+    // v0.18.2. For v0.18.1 the second window appears, can be focused/
+    // raised, and gets cleaned up on frame/close; commands still flow
+    // through f1's MainWidget for compatibility.
+    if (f && main_widget) {
+        MainWidget* mw = new MainWidget();
+        mw->setWindowTitle(QString("Limn — %1").arg(new_id));
+        mw->resize(1200, 900);
+        mw->show();
+        f->widget      = mw;
+        f->owns_widget = true;
+    }
     QJsonObject ev;
     ev.insert("frame-id", new_id);
     bridge->push_event("frame-create", ev);
@@ -2782,6 +2801,13 @@ void LimnCommand::cmd_frame_close(const QString& id, const QJsonObject& msg) {
         LimnWindow* w = windows->get(wid);
         if (w && w->frame_id == fid) windows->remove(wid);
     }
+    // v0.18.1: tear down the Qt MainWindow if this frame owns one.
+    LimnFrame* f = frames->get(fid);
+    if (f && f->widget && f->owns_widget) {
+        f->widget->hide();
+        f->widget->deleteLater();   // safe inside an event handler
+        f->widget = nullptr;
+    }
     frames->remove(fid);
     QJsonObject ev;
     ev.insert("frame-id", fid);
@@ -2796,7 +2822,19 @@ void LimnCommand::cmd_frame_focus(const QString& id, const QJsonObject& msg) {
         return;
     }
     frames->set_focused(fid);
-    // v0.18.1 will also raise the corresponding Qt MainWindow here.
+    // v0.18.1: actually raise the corresponding OS window. For f1 we
+    // use main_widget (passed at construction); for fN > 1 we use the
+    // frame's owned widget. Skip in headless contexts where neither
+    // exists.
+    LimnFrame* f = frames->get(fid);
+    MainWidget* target = nullptr;
+    if (fid == "f1")           target = main_widget;
+    else if (f && f->widget)   target = f->widget;
+    if (target) {
+        target->show();
+        target->raise();
+        target->activateWindow();
+    }
     QJsonObject ev;
     ev.insert("frame-id", fid);
     bridge->push_event("frame-focus", ev);
