@@ -37,6 +37,10 @@
            ;; fixup entry points (called by event handler; direct in tests)
            #:process-insert
            #:process-delete
+           ;; event-stream subscription (call once at bootstrap to wire
+           ;; fixup to buffer-modified events from both the wire channel
+           ;; and the in-process keyword channel)
+           #:install-buffer-modified-handler
            ;; test introspection
            #:reset-markers
            #:marker-count-for
@@ -253,3 +257,58 @@
                (setf (marker-position m) from))
               (t                                ; at or after TO: shift left
                (setf (marker-position m) (- mp len))))))))))
+
+;;; ── event-stream subscription ──────────────────────────────────────────
+;;;
+;;; Bridge the buffer-modified event stream to process-insert / process-delete.
+;;; Two channels:
+;;;   - wire dispatch: string-keyed "event/buffer-modified" (fired by
+;;;     limn-dispatch when C++ pushes the event)
+;;;   - in-process keyword: :event/buffer-modified (fired by mock-buffer
+;;;     in tests and by Lisp code that mutates via the gap buffer)
+;;;
+;;; Wire payload shape (from limn-buffer-undo's normalization reference):
+;;;   :|buffer-id| / :buf-id   string
+;;;   :|op| / :op              "insert" | "delete" | :insert | :delete
+;;;   :|pos| / :pos            integer
+;;;   :|len| / :len            integer (length affected: inserted text /
+;;;                            (to - from) for delete)
+;;;
+;;; Insert event → process-insert buf-id pos len
+;;; Delete event → process-delete buf-id pos (pos + len)
+
+(defvar *handler-installed* nil)
+
+(defun %ev-getf (ev key1 key2)
+  (or (getf ev key1) (getf ev key2)))
+
+(defun %dispatch-event (ev)
+  (let* ((buf-id (or (%ev-getf ev :|buffer-id| :buf-id)
+                     (%ev-getf ev :|buf-id|    :buffer-id)))
+         (op-raw (%ev-getf ev :|op| :op))
+         (op     (cond ((null op-raw) nil)
+                       ((symbolp op-raw)
+                        (intern (string-upcase (symbol-name op-raw))
+                                :keyword))
+                       ((stringp op-raw)
+                        (intern (string-upcase op-raw) :keyword))
+                       (t nil)))
+         (pos    (%ev-getf ev :|pos| :pos))
+         (len    (%ev-getf ev :|len| :len)))
+    (when (and buf-id op pos len)
+      (case op
+        (:insert (process-insert buf-id pos len))
+        (:delete (process-delete buf-id pos (+ pos len)))))))
+
+(defun install-buffer-modified-handler ()
+  "Subscribe to buffer-modified events on both channels. Idempotent —
+   later calls are no-ops. Returns t."
+  (unless *handler-installed*
+    (let ((hooks (find-package '#:limn/hooks)))
+      (when hooks
+        (let ((add (find-symbol "ADD-HOOK" hooks)))
+          (when add
+            (funcall add "event/buffer-modified"  #'%dispatch-event)
+            (funcall add :event/buffer-modified   #'%dispatch-event)
+            (setf *handler-installed* t))))))
+  t)
