@@ -315,13 +315,16 @@
 (define-coding-system :gb18030
   :encoding :gbk :bom nil :eol :unix :doc "GB18030/GBK Simplified Chinese")
 
-;;; Big5 — SBCL may not have Big5 tables for all CJK chars; verify with a
-;;; full encode→decode roundtrip of known Big5 bytes (A7 41 = 你).
+;;; Big5 — SBCL may not have Big5 tables; verify with a real decode call.
+;;; CRITICAL: must use the decoded result (e.g., via length), otherwise
+;;; SBCL's optimizer treats octets-to-string as pure and eliminates the
+;;; call (no error → wrong "native" branch taken on platforms lacking Big5).
 (handler-case
     (let* ((bytes (make-array 2 :element-type '(unsigned-byte 8)
                                :initial-contents '(#xa7 #x41)))
-           (str (sb-ext:octets-to-string bytes :external-format :big5)))
-      (declare (ignore str))
+           (str (sb-ext:octets-to-string bytes :external-format :big5))
+           (n   (length str)))
+      (when (zerop n) (error "empty decode"))  ; force use of result
       (define-coding-system :big5
         :encoding :big5 :bom nil :eol :unix :doc "Big5 Traditional Chinese"))
   (error ()
@@ -337,9 +340,11 @@
   :encoding :euc-jp :bom nil :eol :unix :doc "EUC-JP Japanese")
 
 ;; iso-2022-jp: SBCL may not support natively; fallback with warning.
+;; CRITICAL: use the result so the optimizer can't eliminate the call.
 (handler-case
-    (progn
-      (sb-ext:string-to-octets "hi" :external-format :iso-2022-jp)
+    (let* ((octs (sb-ext:string-to-octets "hi" :external-format :iso-2022-jp))
+           (n    (length octs)))
+      (when (zerop n) (error "empty encode"))  ; force use of result
       (define-coding-system :iso-2022-jp
         :encoding :iso-2022-jp :bom nil :eol :unix :doc "ISO-2022-JP Japanese"))
   (error ()

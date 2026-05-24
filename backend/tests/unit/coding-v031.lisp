@@ -61,13 +61,31 @@
               :initial-contents octets))
 
 (defun %cod-native-cjk-p (cs-name &optional (test-cjk "你"))
-  "True if the coding system can encode/decode CJK content natively on this SBCL."
+  "True if the coding system can encode/decode CJK content natively on this SBCL.
+   Goes directly through sb-ext (not limn/coding) so the UTF-8 fallback path
+   doesn't fool us into thinking Big5 works when it actually doesn't.
+   IMPORTANT: must BIND the result so SBCL's optimizer doesn't elide the call."
+  (declare (ignore test-cjk))
   (with-coding-pkg
-    (handler-case
-      (let* ((cs    (%cod "FIND-CODING-SYSTEM" cs-name))
-             (bytes (%cod "ENCODE-CODING-STRING" test-cjk cs)))
-        (equal test-cjk (%cod "DECODE-CODING-STRING" bytes cs)))
-      (error () nil))))
+    (let* ((cs  (%cod "FIND-CODING-SYSTEM" cs-name))
+           (fmt (when cs
+                  (funcall (symbol-function
+                             (find-symbol "%CS-SBCL-FORMAT"
+                                          (find-package '#:limn/coding)))
+                           cs))))
+      (and fmt
+           ;; If the fallback path mapped this coding system to :utf-8, it's
+           ;; not really native — return nil so tests skip.
+           (not (and (not (eq cs-name :utf-8))
+                     (not (eq cs-name :utf-8-with-bom))
+                     (eq fmt :utf-8)))
+           (handler-case
+             (let* ((bytes (make-array 2 :element-type '(unsigned-byte 8)
+                                         :initial-contents '(#xa7 #x41)))
+                    (s (sb-ext:octets-to-string bytes :external-format fmt))
+                    (n (length s)))
+               (plusp n))
+             (error () nil))))))
 
 ;;; ── §B1. define-coding-system + find-coding-system ───────────────────────
 

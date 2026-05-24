@@ -47,17 +47,31 @@
 
 (defvar *read-file-fn*
   (lambda (path)
-    (with-open-file (s path :direction :input :if-does-not-exist :error)
-      (let ((buf (make-string (file-length s))))
+    ;; Read as bytes so limn/coding can detect/decode (Big5, GB18030, etc.).
+    ;; If limn/coding isn't loaded, %decode-file-content returns the raw
+    ;; bytes-as-string fallback via (or raw "").
+    (with-open-file (s path :direction :input
+                            :element-type '(unsigned-byte 8)
+                            :if-does-not-exist :error)
+      (let ((buf (make-array (file-length s)
+                             :element-type '(unsigned-byte 8))))
         (read-sequence buf s)
         buf))))
 
 (defvar *write-file-fn*
   (lambda (path content)
-    (with-open-file (s path :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create)
-      (write-string content s))))
+    ;; CONTENT may be a string (no buffer-local coding) or a byte vector
+    ;; (encoded via limn/coding).  Dispatch on type so both paths work.
+    (if (typep content '(vector (unsigned-byte 8)))
+        (with-open-file (s path :direction :output
+                                :element-type '(unsigned-byte 8)
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-sequence content s))
+        (with-open-file (s path :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-string content s)))))
 
 (defvar *file-exists-p-fn*
   (lambda (path) (probe-file path)))
