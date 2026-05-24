@@ -23,12 +23,20 @@
 ;; Framework
 (load (rel "unit-framework.lisp"))
 
+;; v0.23 shared helpers (with-timeout-bound, fake-clock, mock-buffer)
+(load (rel "v023-helpers.lisp"))
+
 ;; Backend implementation modules (loaded BEFORE tests so the unit-test
 ;; package-stubs are replaced by real packages).
 (dolist (impl '("limn-hooks.lisp"
+                "limn-log.lisp"
+                "limn-error.lisp"
+                "limn-timer.lisp"
+                "limn-process.lisp"
                 "limn-buffer.lisp"
                 "limn-bridge.lisp"
                 "limn-undo.lisp"
+                "limn-buffer-undo.lisp"
                 "limn-keys.lisp"
                 "limn-search.lisp"
                 "limn-client.lisp"
@@ -58,7 +66,13 @@
                 "minibuffer-read.lisp"
                 "keyboard-quit.lisp"
                 "init-load.lisp"
-                "introspect.lisp"))
+                "introspect.lisp"
+                ;; v0.23 RED tests — expected to fail until impl lands
+                "process-v023.lisp"
+                "timer-v023.lisp"
+                "condition-v023.lisp"
+                "buffer-undo-v023.lisp"
+                "logging-v023.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

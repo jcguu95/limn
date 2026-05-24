@@ -4,6 +4,58 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.23.0 — Runtime Core: process / timer / undo / condition / log
+:PROPERTIES:
+:DATE: 2026-05-23
+:END:
+
+純 Lisp 執行基礎建設 release。把 Emacs C-core 通常會做的五件事
+（subprocess、timer、condition catching、undo system、*Messages*）
+全用純 Lisp 補完，C++ 一行不改、SBCL 一個套件不加。哲學上證明：
+Lisp backend 已經厚到能裝這些東西，未來換 frontend (GTK / terminal
+/ web canvas) 成本只剩 frontend 那層、不用重寫 runtime。
+
+五個新 module：
+
+- =limn/log= : =message= / =*Messages*= ring / =with-log-level= /
+  =:event/message=（level 過濾）
+- =limn/error= : =with-error-protection= macro + =%call-with-protection=
+  function form / =*debugger-hook*= (with safe fallback if user hook
+  itself errors) / =*Backtrace*= ring / =:event/error=
+- =limn/timer= : =run-at-time= / =run-with-idle-timer= / =cancel-timer=
+  / =dispatch-due= (drift-free repeat, loops until no due) /
+  =*now-fn*= 可注入 fake clock / callback 包在 error-protection
+- =limn/process= : =make-process= 完整 =:stdout= 矩陣 (=:buffer= /
+  function filter / =:user-buffer= / =:discard= / pathname /
+  =:stdout= merge) / =:stderr= 同形 + =:stdout= merge / =:stdin
+  :closed= / =:env= / =:cwd= / =:timeout= / =:sentinel= /
+  =kill-process= 不阻塞 (對死 proc / zombie / stale handle 皆
+  ≤ 50ms return) / reader thread + reaper 設計 + close-on-timeout
+  fallback for grand-orphan pipe case / =shell-command= 同步 helper
+- =limn/buffer-undo= : 跟 v0.6 既有 =limn/undo= 樹型 primitive 並存
+  的新 package、訂閱 =:event/buffer-modified=、per-buffer 分支樹、
+  =undo= / =redo= 透過 =:buffer-undo/apply-inverse= hook、
+  serialize round-trip、=*before-undo-hook*= / =*after-undo-hook*=
+
+測試：695/695 unit-tier green（穩定 5 連跑都過），3/3 OS-tier batch
+PASS（=batch-os-v023-process-shell=、=batch-os-v023-process-self-die=、
+=batch-os-v023-timer-real=、wall-clock 量測 overhead ≤ 50ms）。
+
+實作過程發現五個關鍵設計修正，全部寫入 code 跟 SPEC：(1) Event
+名稱必須用 keyword 不能用 symbol（避免 per-package intern 造成
+emitter/listener 不同 symbol）；(2) Reader thread 對孤兒孫程序的
+pipe 永遠看不到 EOF — reaper 用 close-on-timeout 強制；(3)
+=:stderr :stdout= merge 時 SBCL 兩 accessor 返回同一 stream 物件、
+必須去重；(4) =*debugger-hook*= 跟 CL 內建衝突、需要 =(:shadow ...)=；
+(5) SBCL Loop =for x in y= 在閉包內 capture 最後一個值、不是每 iter
+fresh binding。
+
+延後到 v0.23.1（直接依賴 v0.22 gap-buffer 前端化）：
+- D8 Qt-tier (8 tests)：需要 C++ =gap_buffer.cpp= 在修改後 emit
+  =:event/buffer-modified=
+- D9 OS-tier (=batch-os-undo-roundtrip=)：在真實 text buffer 上
+  round-trip
+
 * v0.21.0 — consolidation + dogfood
 :PROPERTIES:
 :DATE: 2026-05-23

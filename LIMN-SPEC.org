@@ -1609,6 +1609,499 @@ v0.18.0 + v0.18.1 留下三項：
 依賴：v0.18.1 已 ship、v0.20 不阻擋（B/C 完全跟 v0.20 不相關；A
 跟 v0.20 都動 limn_command.cpp 但不同函式區、低衝突）。
 
+*** v0.23.0 Runtime Core — 純 Lisp 執行基礎 ✅ shipped (unit + OS-tier)
+
+Ship 結果：
+- Unit-tier: 695/695 green（穩定 5 連跑，含 §A 52 process + §B 25
+  timer + §C 20 condition + §D 28 buffer-undo + §E 15 logging）
+- OS-tier: 3/3 batch PASS（=process-shell= / =process-self-die= /
+  =timer-real=、wall-clock overhead 量測 ≤ 50ms）
+- *D8 Qt-tier + D9 OS-tier 暫緩到 v0.23.1*：依賴 C++ =gap_buffer.cpp=
+  emit =:event/buffer-modified=（與 v0.22 直接相依）
+
+實作過程發現五個設計修正（全部寫入 code）：
+1. Event 名稱用 keyword (=:event/error=)、不用 symbol，避免 per-
+   package intern 造成 emitter 跟 listener 不同 symbol。
+2. Reader thread + reaper close-on-timeout fallback：grand-orphan
+   案例 (=sh -c "trap '' TERM; sleep 5"= 然後 SIGKILL) sh 死掉但
+   sleep 變孤兒、繼續持有 pipe write 端，reader 永遠看不到 EOF。
+   從 parent 端 close 強制 EOF。
+3. =:stderr :stdout= merge 時 SBCL 兩 stream accessor 返回同一物件、
+   必須去重避免 race。
+4. =*debugger-hook*= 跟 CL 內建衝突、用 =(:shadow ...)= 解決。
+5. SBCL Loop =for x in y= 不會每 iter 新 binding，閉包要手動
+   =(let ((this-x x)) ...)=。
+
+[原始 SPEC 草案保留如下供 audit↓]
+
+*** v0.23 Runtime Core — 純 Lisp 執行基礎 (原始 SPEC 草案)
+
+v0.22 已被另一 agent 佔（gap-buffer 前端化）。v0.23 不碰 v0.22 的
+範疇、走平行的「runtime infra」軌道。
+
+哲學要點：vanilla-Emacs 的 C-core 寫 process / timer 是因為 Emacs
+runtime 就是 C；Limn backend 本身就是個獨立 SBCL，process / timer /
+condition / undo / logging 全部**可以純 Lisp 做**、C++ 只需要為
+undo 多 emit 一個 event。Lisp 層越厚、未來換 frontend（GTK / 終端
+/ web canvas）成本越低。
+
+**** A. =process= primitive — 純 Lisp
+
+底層用 =sb-ext:run-program=。設計對齊 Emacs =make-process=。
+
+- =limn/process:make-process= : =&key name command stdout-buffer
+  stderr-buffer sentinel filter env=
+  - 回 process object（struct=process= 帶 pid / status / streams）
+  - =:sentinel= 在 exit 時 fire、收到 process + exit-code + exit-status
+  - =:filter= 在每次 stdout 有新資料時 fire、收到 process + chunk
+- =limn/process:process-send-string= proc str
+- =limn/process:process-send-eof= proc
+- =limn/process:kill-process= proc &optional signal
+- =limn/process:process-status= proc → =:run= / =:exit= / =:signal=
+- =limn/process:process-exit-code= proc
+- =limn/process:shell-command= cmd → 同步、回 =(values stdout stderr exit-code)=
+- 全部 wire 事件 =event/process-exit=、=event/process-output=（push 給
+  bridge subscriber、與 buffer 整合）
+
+非阻塞策略：每個 process 配一個 SBCL thread 讀 stdout/stderr pipe、
+透過 mutex-protected queue 餵到主 event loop dispatch。**不開新
+C++ 命令、不動 Qt event loop**。
+
+**** B. =timer= / =async= primitive — 純 Lisp
+
+- =limn/timer:run-at-time= delay-secs callback &key repeat name → timer
+- =limn/timer:run-with-idle-timer= idle-secs callback &key name
+  - idle 定義 = 從上次 dispatch event 起算 N 秒沒新 event
+- =limn/timer:cancel-timer= timer
+- =limn/timer:list-timers= → list
+- 底層：單一 timer-thread + sorted heap by next-fire-time、wait on
+  =sb-thread:condition-wait= with timeout
+- 與 bridge 整合：callback 在主 event loop 跑（thread-safe queue
+  push）、不在 timer thread 跑（避免 user code race）
+
+**** C. =condition= / debugger — 純 Lisp
+
+- =*debugger-hook*= : function (condition prev-hook) → 預設 print +
+  push event/error
+- =limn/error:with-error-protection= macro: 包住 user callback、capture
+  condition、不讓崩 framework
+- =event/error= : push 給 frontend (chrome bar 紅字提示)
+- =*Backtrace*= buffer (text-only)：trace 寫進 buffer registry、user
+  可以開來看
+- 不做：full interactive debugger UI（user-land 自己做）
+
+**** D. =undo= / redo — 純 Lisp + 一個 C++ event
+
+C++ 改動只一處：
+
+- =gap_buffer.cpp= insert / delete / replace 在成功 mutate 後 emit
+  =event/buffer-modified= 帶 =:buf-id :op :pos :len :before :after=
+  - 透過 =LimnBridge::push_event= 走 wire
+  - 此 event 是 v0.20 ship 完 gap buffer 的自然延伸、不重複 v0.20 已
+    有的 wire（v0.20 ship 後檢查、若已 emit 就 reuse）
+
+Lisp 層：
+
+- =limn/undo:*buffer-undo-list*= per buffer (hash by buf-id)
+- =limn/undo:undo-boundary= (推 marker、user-visible undo step)
+- =limn/undo:undo= count → 反推 N step
+- =limn/undo:redo= count
+- =limn/undo:disable-undo= buf / =enable-undo= buf
+- =event/buffer-modified= subscriber 自動 append inverse op 到 undo
+  list
+- =*undo-tree*= structure（branching、非線性）為基礎、user-land 可加
+  視覺化（未來 milestone 仍開放）
+
+**** E. =logging= / =*Messages*= — 純 Lisp
+
+- =limn/log:message= fmt &rest args → 寫進 =*Messages*= ring + push
+  =event/message=
+- =limn/log:*messages-ring-size*= default 1000
+- =limn/log:get-messages= &optional count → list
+- =limn/log:with-log-level= macro 控制 verbosity
+- 整合到 condition：=*debugger-hook*= 預設 =log:message= 完整 backtrace
+- bridge: 統一所有 framework 內部 =format t= 改走 =log:message=（一次
+  refactor）
+
+**** Testing — TDD 三層覆蓋
+
+策略總則：
+- 異步等待統一用 =wait-for-event :timeout= helper、不用 =sleep=
+  輪詢。
+- 「不 hang」是 v0.23 一級公民。每個可能 block 的 API 都要有測、
+  並用 =with-timeout-bound= helper 把 hang 視為 fail。
+- Timer / undo unit test 用 fake clock + mock buffer、保證確定性；
+  真實時鐘行為留給 OS-tier。
+
+***** A. process — ~52 unit + 1 OS-tier batch
+
+- A1 基本生命週期 (5)
+  - spawn =/bin/true= status / exit
+  - spawn =/bin/false= exit-code 1
+  - 不存在 command 回 error 不崩
+  - 重複 kill 同 proc 不崩
+  - process-status 在 exit 後穩定回 =:exit=
+- A1' *Output redirection 矩陣* (12) — 每種捕捉路徑都要測
+  - stdout → buffer (預設)
+  - stdout → filter callback (chunk 串流)
+  - stdout → 另一具名 buffer object (整合 buffer registry)
+  - stdout → =:discard= (高吞吐丟棄、無記憶體累積)
+  - stderr → =:stdout= merge
+  - stderr → 獨立 buffer (預設分流)
+  - stdout → file path (寫盤)
+  - 雙向 stdin+stdout (cat round-trip)
+  - 無 stdin / closed stdin (子進程立刻 EOF)
+  - 同時大量 stdout + stderr 不交錯
+  - filter callback chunk 順序 = 子進程寫出順序
+  - stdout buffer 跨多次 read 累積完整
+- A1'' *自動死掉時序觀察* (1 unit + OS-tier batch)
+  - unit：fake-clock 推進 1.0s 後 status 變 :exit、sentinel 在 t≈1.0
+    fire
+  - OS-tier：spawn =sh -c "sleep 1; exit 0"=、wall-clock 量
+    (t1-t0) ∈ [0.8, 1.6]、exit-code 0、status :exit
+  - 同 OS-tier 再驗 sleep 0.3 / exit 7 區間
+- A2 I/O 流 (10)
+  - 收 stdout 單行 / 大量 (>64KB pipe buffer 不死鎖)
+  - stderr 獨立 / 同時雙流
+  - process-send-string 一次寫 / 多次累積
+  - process-send-eof 後子進程讀到 EOF
+  - filter chunk 順序 = 子進程順序
+  - *process-send-string 對已退出 proc 不 hang* (with-timeout-bound)
+  - *process-send-eof 對已 close stdin 不 hang*
+- A3 Sentinel (5)
+  - 只 fire 一次 / 收 exit-code / 收 exit-status (:exit vs :signal)
+  - sentinel callback throw 不破壞 framework
+  - 沒設 sentinel 退出不崩
+- A4 殺進程 / 信號 (6)
+  - kill :TERM 活 proc → :signal + signum
+  - kill :KILL 強殺
+  - *已退出 proc kill → ≤ 50ms return、不崩、不 hang*
+  - *同 proc 連 kill 三次 → 全 ≤ 50ms、不崩、不 hang*
+  - *kill zombie (exit 但 sentinel 未 fire) → 不崩、不 hang*
+  - kill stale handle → error 而非崩
+- A5 環境與 cwd (3)
+  - :env alist 子進程讀得到
+  - :cwd 改 pwd
+  - 不傳 :env 繼承父
+- A6 並發 (6)
+  - 10 short-lived 並發、全 sentinel 都 fire
+  - 100 short-lived 無 leak
+  - 不同 proc stdout 不交錯
+  - main thread dispatch 時另 thread spawn 不死鎖
+  - list-processes 自動清退出者
+  - *list-processes 在 spawn 風暴中不 hang*
+- A7 邊界 (5)
+  - 0 長度 stdout
+  - stdin 含 NUL 字節不截斷
+  - 非 UTF-8 byte 序列不讓 decode 崩
+  - command argv 必須 list 不可 string (避免 word splitting 不一致)
+  - timeout 選項 (若提供)
+
+***** B. timer — ~25 unit
+
+- B1 一次性 (6)：run-at-time 0 / 50ms / callback 參數 / 只 fire 一次
+  / cancel 不 fire / fire 後自動移除
+- B2 Repeat (5)：N 次 fire / cancel / callback throw 不破鏈 /
+  interval=0 拒絕 / 改 callback 不影響已排程
+- B3 Idle (4)：模擬無 event N ms fire / 有 event 重置 / idle=0 next
+  dispatch fire / cancel 乾淨
+- B4 Heap 順序 (5)：3 timer 順序 / 同時間 stable / 邊 fire 邊新增 /
+  邊 fire 邊 cancel / 100 timer O(log n) 軟斷言
+- B5 線程安全 (5)：callback 在主 loop run / 雙 thread cancel 不死鎖
+  / list-timers 快照 / shutdown 乾淨退出 / *cancel-timer 對已 fire
+  不 hang*
+
+***** C. condition / debugger — ~20 unit
+
+- C1 with-error-protection (6)：透明返回 / catch throw / event/error
+  push / payload 完整 (class+message+backtrace) / 嵌套內層先 catch /
+  非 error condition 透傳
+- C2 *debugger-hook* (4)：預設寫 *Messages* + event / user hook 覆蓋
+  / user throw fallback / unwind-protect 仍 run
+- C3 *Backtrace* buffer (4)：寫 buffer registry / 累積 / 上限 / 清空
+- C4 整合 (6)：sentinel throw catch / timer throw catch / 多線程
+  *Messages* 不竟態 / log:message 內 throw 不遞迴 / bridge handler
+  throw 不斷 socket / event/error 到 chrome bar (Qt-tier 一條)
+
+***** D. undo — ~30 unit + 8 Qt-tier + 1 OS-tier
+
+- D1 Insert undo (5)
+- D2 Delete undo (4)
+- D3 Replace undo (3)
+- D4 Branching / undo-tree (6)：undo 後新 insert 保留舊 redo 分支 /
+  branch 切換 API / 100 branch 性能 / branch ID 唯一 / 時間戳 /
+  serialize round-trip
+- D5 多 buffer 隔離 (4)
+- D6 邊界 (4)：空 list undo no-op / redo 無物 no-op / undo-boundary
+  折疊 / 大改不爆記憶體
+- D7 Hook (4)：before/after-undo-hook fire / payload / throw 不破壞
+  / undo-disabled-p
+- D8 Qt-tier (8)：event/buffer-modified 從 C++ 真送 / payload 全欄位
+  / 多 buffer :buf-id 正確 / delete payload / replace 是單一 event /
+  順序 / 不丟 (連續 100 次) / C++ undo cmd 與 Lisp 同步
+- D9 OS-tier batch =batch-os-undo-roundtrip=：真 text buffer / 鍵入
+  / undo / redo
+
+***** E. logging — ~15 unit
+
+- E1 message API (5)：基本 / format / 含 newline / 二進位字符 / 極長
+  截斷
+- E2 ring (4)：size N 滾動 / get-messages 順序 / 清空 / 並發 push
+- E3 event 與 level (4)：每 message push event/message /
+  with-log-level filter / level 比較順序 / level 不影響 ring
+- E4 整合 (2)：condition backtrace 寫 *Messages* / framework 內所有
+  =format t= 改 log:message (grep 檢查)
+
+***** OS-tier batch 清單 (4 個)
+
+- =batch-os-process-shell=：spawn echo / sh -c (stdout+stderr+exit
+  3) / cat round-trip
+- =batch-os-process-self-die=：sleep 1 / sleep 0.3 兩段、wall-clock
+  區間斷言 exit 時序、exit-code 傳遞、status :exit
+- =batch-os-timer-real=：500ms 單發 / 200ms × 5 repeat / cancel 後不
+  fire
+- =batch-os-undo-roundtrip=：真 text buffer round-trip
+
+***** 不測的（明確文檔化）
+
+- C++ 端 process spawn (用 SBCL run-program、C++ 無改動)
+- Sub-millisecond timer 精度
+- Process 孫進程 reaping (POSIX 灰區)
+- Undo serialize 格式向後兼容性 (v0.23 不承諾)
+- Logging 跨進程同步 (單 backend 進程)
+- with-error-protection 包無限迴圈 callback (不在範圍、文檔化)
+
+***** 共用 test helper (先寫、再寫各 suite)
+
+- =with-timeout-bound seconds &body= macro：超時即 fail、避免 hang
+  讓整個 suite 卡死
+- =wait-for-event :name :timeout :predicate= helper (v0.21 examples
+  已用、直接複用)
+- =fake-clock= for timer unit (timer 模組 export =*now-fn*=、let
+  覆蓋)
+- =mock-buffer= for undo unit (defstruct 含 text / events、手動
+  push event/buffer-modified)
+
+**** 不做的
+
+- 不做 TRAMP（remote file）
+- 不做 VC (git) — v0.24+
+- 不做 interactive debugger UI
+- 不做 process job control (=&=, =fg=, =bg= shell semantics)
+- 不做 timer with sub-millisecond precision
+
+依賴：v0.20 (gap-buffer) ship 完 — D 段需要 gap buffer 在 C++ 有
+真實的 modify hook 點。A/B/C/E 不依賴 v0.20、若 v0.22 還沒收尾、
+v0.23 可分階段（先做 A/B/C/E、最後補 D）。
+
+*** v0.24 Edit Model — 編輯模型基建 ⏭ planned
+
+純 Lisp、建在 v0.23 timer / logging / undo 上。對齊 Emacs 編輯模型
+全套。
+
+**** A. =kill-ring= / yank
+
+- =limn/kill:kill-ring= ring (default size 60)
+- =kill-new= str / =kill-append= str / =kill-region= start end buf
+- =yank= / =yank-pop= 對 buffer 在 point 插入
+- 與 OS clipboard 整合：wire =clipboard/set= / =clipboard/get= 走
+  C++ QClipboard
+- =interprogram-paste-function= / =interprogram-cut-function= hook
+
+**** B. =mark-ring= / point-history
+
+- per-buffer =mark-ring=、global =global-mark-ring=
+- =push-mark= / =pop-mark= / =exchange-point-and-mark=
+- =point-history= jump back (M-,) / forward
+
+**** C. =registers=
+
+- =register-alist= (single hash table)
+- =point-to-register= char、=jump-to-register= char
+- =copy-to-register= char start end、=insert-register= char
+- =window-configuration-to-register= char（暫存 frame layout）
+
+**** D. =kbd-macro=
+
+- =start-kbd-macro= / =end-kbd-macro=
+- 錄製：截 dispatch loop 的 key event 進 vector
+- =call-last-kbd-macro= count → 重新走 dispatch loop
+- =name-last-kbd-macro= name → 存成具名 command
+- =kmacro-counter= / =kmacro-insert-counter=
+
+**** E. File I/O — =find-file= / =save-buffer=
+
+- =limn/file:find-file= path → open buffer
+  - 若 path 是 PDF → 走 engine load
+  - 若 path 是 text → 走 gap buffer + utf-8 decode
+  - 其他 → binary buffer 或拒絕
+- =limn/file:save-buffer= buf &optional path
+- =limn/file:revert-buffer= buf
+- =find-file-hook= / =before-save-hook= / =after-save-hook=
+- 跨平台 path handling、symlink follow 策略
+
+**** F. =auto-save= — 建在 v0.23 timer
+
+- =auto-save-timeout= default 30 secs
+- =auto-save-interval= default 300 keystrokes
+- 自動寫 =#filename#= sidecar
+- =recover-file= 啟動時偵測未清理 auto-save
+
+**** G. =backup= files
+
+- =make-backup-files= flag
+- =backup-by-copying= / =backup-by-renaming= 策略選擇
+- =version-control= numbered backups
+- =kept-old-versions= / =kept-new-versions= 數量上限
+
+**** H. =recentf=
+
+- =recentf-list= LRU ring（default 50）
+- 開檔 → push 進 list
+- sidecar 持久化 =~/.limn/recentf.lisp=（沿用 v0.17 sidecar 模式）
+- =recentf-open= → completing-read 選一個（依賴 v0.25 completion、
+  v0.24 可暫用 numeric prefix 選）
+
+**** Testing
+
+- Unit ~120 tests（每個原語 12–15 個 deftest）
+- Qt-tier ~5 tests（clipboard 整合：set / get / 跨 buffer）
+- OS-tier ~3 batches
+  - =batch-os-find-file=: 真開檔 / 改 / 存 / verify disk
+  - =batch-os-auto-save=: 等 timer fire、驗 sidecar
+  - =batch-os-kill-yank-clipboard=: xclip put、Lisp yank、verify
+
+**** 不做的
+
+- 不做 file-name completion（v0.25 completion 框架做）
+- 不做 dired (檔案瀏覽 UI) — user-land
+- 不做 encoding detection beyond utf-8 / latin-1
+
+依賴：v0.23 (timer + logging + undo)、v0.22 (gap-buffer 前端) ship
+完。
+
+*** v0.25 Interaction & Introspection — 互動與自省 ⏭ planned
+
+純 Lisp（除 defface 渲染那塊）。把 Emacs user-facing infra 補齊。
+
+**** A. =defface= / theme — Lisp 宣告 + C++ 渲染
+
+Lisp 層：
+
+- =defface= name &body spec → push 進 =*face-table*=
+- =set-face-attribute= face attr value
+- =face-spec-set= face spec
+- =deftheme= / =enable-theme= / =disable-theme= / =custom-theme-set-faces=
+
+C++ 層（極小改動）：
+
+- 新增 wire =display/sync-faces= : 收 face-table 全量 → 存進
+  =LimnFaceRegistry=
+- 既有 overlay paint path、原本吃 color 參數的位置改吃 face-id、查
+  registry 拿屬性
+- 不引新 Qt API、只是 redirect
+
+**** B. =text-properties=
+
+- =put-text-property= start end prop value buf
+- =get-text-property= pos prop buf
+- =add-text-properties= / =remove-text-properties=
+- =next-property-change= / =previous-property-change=
+- 內部用 interval tree（O(log n) 區段查詢）
+- 與 face 整合：=face= property → 渲染時走 face registry
+
+**** C. =completion= 框架
+
+- =completing-read= prompt collection &key predicate require-match
+  initial-input history default annotation-function
+- collection 形態：list / hash / function
+- 整合 C++ 既有 fzf：當 collection > 100 條目走 fzf
+- =completion-styles=: =substring= / =flex= / =prefix=
+- =minibuffer-completion-help= → popup buffer 列候選
+
+**** D. =history= rings — 泛用
+
+- =define-history= name &key size → 建一個具名 ring
+- =add-to-history= name item
+- =minibuffer-history= / =command-history= / =search-history= 內建
+  幾個常用
+- sidecar 持久化 (=~/.limn/history/<name>.lisp=)
+
+**** E. =help= / =describe= — introspection
+
+- =describe-function= sym → 開 =*Help*= buffer
+- =describe-variable= sym
+- =describe-key= keyseq → 找 binding、含整條 keymap 鏈
+- =describe-mode= → 列 current major + active minors
+- =apropos= regex → 找 fbound / bound symbols
+- =apropos-command= / =apropos-variable= 細分
+
+**** F. =advice= 系統
+
+- =advice-add= place where function → wrap
+  - where: =:before= / =:after= / =:around= / =:override= / =:filter-args=
+    / =:filter-return=
+- =advice-remove= place function
+- =advice-mapc= function place
+
+**** G. =defcustom= / customize
+
+- =defcustom= sym default doc &key type group set get
+- =customize-set-variable= sym value → 觸發 :set hook
+- =customize-save-variable= 寫進 =~/.limn/custom.lisp=
+- =customize-group= → tree UI（陽春版、user-land 可加強）
+
+**** Testing
+
+- Unit ~180 tests
+  - defface: define / inherit / theme-switch / spec-merge
+  - text-prop: interval-tree-correctness / overlapping / cross-edit
+  - completion: substring / flex / large-collection-fzf / cancel
+  - history: ring-rollover / persist / load
+  - help: describe-function / describe-key-with-prefix / apropos-regex
+  - advice: order-of-around / multiple-before / remove-non-existent
+  - defcustom: set-trigger-hook / save-load-roundtrip
+- Qt-tier ~3 tests（defface paint：set face、check overlay 真的吃到）
+- OS-tier ~2 batches
+  - =batch-os-theme-switch=: enable dark theme、screenshot diff
+  - =batch-os-completing-read=: open prompt、type、verify selection
+
+**** 不做的
+
+- 不做 customize 的 widget GUI（Emacs 那種樹狀 toggle）— 留 user-land
+- 不做 imenu (mode-specific) — user-land
+- 不做 isearch — 需專屬 spec、未來 release
+
+依賴：v0.23 (logging + condition)、v0.24 (history 持久化 sidecar
+pattern reuse、completion 會被 recentf 用)。defface 不依賴 v0.24。
+
+**** v0.23–v0.25 依賴與並行性
+
+#+begin_example
+v0.23 Runtime Core   ────┐
+  (process/timer/         ├──> v0.24 Edit Model (auto-save 需 timer、
+   condition/undo/         │       find-file 需 logging、kill-ring
+   logging)                │       獨立)
+                           │
+                           └──> v0.25 Interaction (history 用 v0.24
+                                   sidecar pattern、completion 被
+                                   v0.24 recentf 用、help/describe/
+                                   advice/defface 全獨立)
+#+end_example
+
+並行可能性：
+
+- v0.23 必須先 ship（v0.24 / v0.25 都依賴）
+- v0.24 與 v0.25 在 v0.23 ship 後**可以平行**，但有兩處 soft
+  coupling：
+  1. v0.24 H (recentf) 用 v0.25 C (completion) — 若 v0.25 慢、v0.24
+     recentf 暫退 numeric prefix 選法
+  2. v0.24 / v0.25 都會擴 =backend/limn-modes.lisp=（增 helper），
+     git merge 需小心
+- v0.25 內部：A/B/C/D/E/F/G 全互相獨立，可一個 agent 全包、或拆
+  多 agent；但測試 framework 共用、最後 integrate 時需一次 full
+  regression
+
 *** 未來 milestone（待排序、未來再排）
 
 以下功能 SPEC 已釘住輪廓或哲學上預設、v0.19 之後再排：
