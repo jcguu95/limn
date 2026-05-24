@@ -87,7 +87,10 @@
                  ;; v0.34 regex engine (cl-ppcre + Emacs-style API)
                  "suites/regex-v034.lisp"
                  ;; v0.35 file-notify + auto-revert + process-coding
-                 "suites/file-notify-v035.lisp"))
+                 "suites/file-notify-v035.lisp"
+                 ;; v0.36 indent + query-replace (wire round-trip)
+                 "suites/indent-v036.lisp"
+                 "suites/query-replace-v036.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)

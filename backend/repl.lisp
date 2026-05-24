@@ -94,6 +94,10 @@
                 ;; v0.35 file-notify + auto-revert + process I/O coding
                 "limn-file-notify.lisp"
                 "limn-auto-revert.lisp"
+                ;; v0.36 indent + current-column
+                "limn-indent.lisp"
+                ;; v0.36 query-replace (depends on v0.32 + v0.34)
+                "limn-query-replace.lisp"
                 ;; bootstrap (last)
                 "limn.lisp"))
   (load (b/ file)))

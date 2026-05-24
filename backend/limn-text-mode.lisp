@@ -142,6 +142,44 @@
       (when buf
         (limn/text::%limn-call "buffer/save" :|buffer-id| buf)))))
 
+;;; v0.36 — TAB / C-j commands. Delegate to limn/indent; bind *current-buffer*
+;;; (and limn/local's parallel slot) to the focused text buffer so the
+;;; module's vtable picks up the right buf-id.
+
+(limn/cmd:defcommand indent-for-tab-command (:interactive nil)
+  (lambda ()
+    (let ((buf (limn/text::%focused-text-buffer))
+          (ipkg (find-package '#:limn/indent))
+          (xpkg (find-package '#:limn/excursion))
+          (lpkg (find-package '#:limn/local)))
+      (when (and buf ipkg)
+        (let* ((xsym (and xpkg (find-symbol "*CURRENT-BUFFER*" xpkg)))
+               (lsym (and lpkg (find-symbol "*CURRENT-BUFFER-ID*" lpkg)))
+               (live (remove-if (lambda (p) (null (car p)))
+                                (list (and xsym (cons xsym buf))
+                                      (and lsym (cons lsym buf))))))
+          (progv (mapcar #'car live) (mapcar #'cdr live)
+            (let ((fn (find-symbol "INDENT-FOR-TAB-COMMAND" ipkg)))
+              (when (and fn (fboundp fn))
+                (funcall fn)))))))))
+
+(limn/cmd:defcommand newline-and-indent (:interactive nil)
+  (lambda ()
+    (let ((buf (limn/text::%focused-text-buffer))
+          (ipkg (find-package '#:limn/indent))
+          (xpkg (find-package '#:limn/excursion))
+          (lpkg (find-package '#:limn/local)))
+      (when (and buf ipkg)
+        (let* ((xsym (and xpkg (find-symbol "*CURRENT-BUFFER*" xpkg)))
+               (lsym (and lpkg (find-symbol "*CURRENT-BUFFER-ID*" lpkg)))
+               (live (remove-if (lambda (p) (null (car p)))
+                                (list (and xsym (cons xsym buf))
+                                      (and lsym (cons lsym buf))))))
+          (progv (mapcar #'car live) (mapcar #'cdr live)
+            (let ((fn (find-symbol "NEWLINE-AND-INDENT" ipkg)))
+              (when (and fn (fboundp fn))
+                (funcall fn)))))))))
+
 (limn/cmd:defcommand find-file (:interactive "fFile: ")
   (lambda (path)
     ;; 1) Allocate a fresh text-engine buffer in w1.
@@ -207,6 +245,8 @@
         (c-eol   (intern "MOVE-END-OF-LINE"         :cl-user))
         (c-save  (intern "SAVE-BUFFER"              :cl-user))
         (c-find  (intern "FIND-FILE"                :cl-user))
+        (c-tab   (intern "INDENT-FOR-TAB-COMMAND"   :cl-user))
+        (c-nl    (intern "NEWLINE-AND-INDENT"       :cl-user))
         (sym-tm  (intern "TEXT-MODE"                :cl-user)))
 
     ;; Ensure fundamental-mode exists (limn.lisp bootstrap normally
@@ -231,6 +271,9 @@
       (%def-cmd km "<end>"   c-eol)
       (%def-cmd km "C-x C-s" c-save)
       (%def-cmd km "C-x C-f" c-find)
+      ;; v0.36: TAB → indent-for-tab-command, C-j → newline-and-indent.
+      (%def-cmd km "TAB"     c-tab)
+      (%def-cmd km "C-j"     c-nl)
 
       ;; Register the mode.
       (let ((fund (find-symbol "FUNDAMENTAL-MODE" :limn/runtime)))

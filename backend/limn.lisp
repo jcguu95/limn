@@ -320,6 +320,16 @@
             (error (e)
               (format *error-output*
                       "limn: marker handler install failed: ~a~%" e)))))
+      ;; v0.36: wire indent + query-replace vtables to live wire commands.
+      (dolist (pkg-name '(#:limn/indent #:limn/query-replace))
+        (let* ((pkg (find-package pkg-name))
+               (fn (and pkg (find-symbol "INSTALL-WIRE-VTABLE" pkg))))
+          (when (and fn (fboundp fn))
+            (handler-case (funcall (symbol-function fn))
+              (error (e)
+                (format *error-output*
+                        "limn: ~a install-wire-vtable failed: ~a~%"
+                        pkg-name e))))))
       (when init-chrome (funcall init-chrome)))))
 
 (defun start (socket-path)

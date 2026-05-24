@@ -98,7 +98,10 @@
                 "limn-regex.lisp"
                 ;; v0.35 modules — file-notify + auto-revert
                 "limn-file-notify.lisp"
-                "limn-auto-revert.lisp"))
+                "limn-auto-revert.lisp"
+                ;; v0.36 modules — indent + query-replace
+                "limn-indent.lisp"
+                "limn-query-replace.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -173,7 +176,10 @@
                 ;; v0.35 tests (GREEN — file-notify + auto-revert + process-coding)
                 "file-notify-v035.lisp"
                 "auto-revert-v035.lisp"
-                "process-coding-v035.lisp"))
+                "process-coding-v035.lisp"
+                ;; v0.36 tests — indent + query-replace
+                "indent-v036.lisp"
+                "query-replace-v036.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
