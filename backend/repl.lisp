@@ -36,6 +36,32 @@
                 "limn-runtime.lisp"
                 "limn-introspect.lisp"
                 "limn-text-mode.lisp"
+                ;; v0.23
+                "limn-process.lisp"
+                "limn-timer.lisp"
+                "limn-error.lisp"
+                "limn-buffer-undo.lisp"
+                "limn-log.lisp"
+                ;; v0.24
+                "limn-kill.lisp"
+                "limn-mark.lisp"
+                "limn-register.lisp"
+                "limn-kmacro.lisp"
+                "limn-file.lisp"
+                "limn-auto-save.lisp"
+                "limn-backup.lisp"
+                "limn-recentf.lisp"
+                ;; v0.25
+                "limn-face.lisp"
+                "limn-text-props.lisp"
+                "limn-completion.lisp"
+                "limn-history.lisp"
+                "limn-help.lisp"
+                "limn-advice.lisp"
+                "limn-custom.lisp"
+                ;; v0.26
+                "limn-isearch.lisp"
+                "limn-occur.lisp"
                 "limn.lisp"))
   (load (b/ file)))
 

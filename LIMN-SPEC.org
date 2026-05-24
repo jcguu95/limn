@@ -2667,6 +2667,62 @@ v0.23 Runtime Core   ────┐
   多 agent；但測試 framework 共用、最後 integrate 時需一次 full
   regression
 
+*** v0.26 isearch + occur — 互動式搜尋 ✅ shipped
+
+純 Lisp、建在 v0.25 history / text-props / completion 上。
+兩個獨立模組，均使用 vtable 動態變數做 I/O 隔離。
+
+**** §A =limn-isearch= — 互動式 incremental search
+
+- 狀態機：=isearch-start= → =isearch-update= ↔ =isearch-next=/=isearch-prev=
+  → =isearch-exit= or =isearch-abort=
+- 搜尋結果格式：=(start . end)= cons cells（codepoint offset）
+- 重疊匹配：允許（"aa" 在 "aaa" 中找到 2 個）
+- 方向：=:forward t/nil=；backward 起始選游標前最近的匹配、無則 wrap
+- 歷史：=isearch-exit= 且 query 非空且有匹配時，呼叫 =*history-push-fn*= 一次
+- Highlight：=*highlight-fn*=；exit/abort 均呼叫 =*clear-highlights-fn*= 一次
+- 大小寫折疊：=*isearch-case-fold*=（預設 t）
+
+vtable I/O 變數：
+  - =*buffer-text-fn*=      : (buf-id) → string
+  - =*buffer-cursor-fn*=    : (buf-id) → integer
+  - =*buffer-set-cursor-fn*=: (buf-id offset) → void
+  - =*highlight-fn*=        : (buf-id spans face) → void
+  - =*clear-highlights-fn*= : (buf-id) → void
+  - =*history-push-fn*=     : (query) → void
+  - =*isearch-case-fold*=   : boolean
+
+**** §B =limn-occur= — 行式搜尋列表
+
+- 每個匹配行為一個 =occur-match= struct（line-num, line-text, start, end, offset）
+- =occur-next=/=occur-prev= 環繞；=occur-jump= 把游標移到 source buffer
+- =format-occur-results= 產生人類可讀字串；=*occur-write-fn*= 寫入 =*occur*= buffer
+- 同一行有多個匹配 → 仍算一個 result（line-based）
+- =match-start= 指向該行內第一個匹配的起始位置
+- regexp mode：=:regexp t=；無效 regexp 不 crash，回傳空結果
+
+vtable I/O 變數：
+  - =*buffer-text-fn*=      : (buf-id) → string
+  - =*buffer-set-cursor-fn*=: (buf-id offset) → void
+  - =*occur-write-fn*=      : (occur-buf-id content) → void
+
+**** 不做的
+
+- *§C PDF search 整合*：在 PDF buffer 上用 =view/overlays= +
+  =limn/search:find-matches= 做 isearch。需複雜 wire 設置、留待
+  v0.27+ 或 PDF-mode 成熟後。
+
+- *=*search-history*= 真正 ring 整合*：unit 測試以 vtable mock
+  =*history-push-fn*= 隔離；production 呼叫
+  =limn/history:add-to-history= 搭配 =*search-history*= ring 的 wire
+  整合測試，歷史 ring behavior 已由 history-v025.lisp 覆蓋。
+
+- *isearch 多行跨行搜尋*：目前以 codepoint offset 搜尋整個 buffer
+  字串，可天然跨行；但「跨行 UI 反饋」（highlight span 跨行顯示）
+  行為 TBD，留給 text-props 渲染層決定。
+
+依賴：v0.25 (history, text-props)。v0.24 (kill/mark) 非必要。
+
 *** 未來 milestone（待排序、未來再排）
 
 以下功能 SPEC 已釘住輪廓或哲學上預設、v0.19 之後再排：
