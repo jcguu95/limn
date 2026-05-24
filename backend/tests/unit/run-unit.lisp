@@ -91,6 +91,9 @@
                 "limn-coding.lisp"
                 ;; v0.32 module
                 "limn-excursion.lisp"
+                ;; v0.33 modules — overlay data layer + region visualization
+                "limn-overlays.lisp"
+                "limn-region.lisp"
                 ;; v0.34 module — regex engine (depends on cl-ppcre vendor)
                 "limn-regex.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
@@ -158,6 +161,10 @@
                 "coding-v031.lisp"
                 ;; v0.32 RED tests — expected to fail until impl lands
                 "excursion-v032.lisp"
+                ;; v0.33 RED tests — overlay data + view/overlays :face + region
+                "overlays-v033.lisp"
+                ;; v0.33b RED tests — buffer-kind dispatch + codepoint-rects
+                "overlays-v033b.lisp"
                 ;; v0.34 RED tests — expected to fail until impl lands
                 "regex-v034.lisp"))
   (format t "[loading unit] ~a~%" file)

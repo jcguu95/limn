@@ -360,11 +360,41 @@
         (let ((loaded (funcall load-init)))
           (when loaded
             (format t "~&;; loaded init: ~a~%" loaded)))))
+    ;; v0.33b: wire-backed cursor I/O. Modules like limn/mark, limn/region,
+    ;; limn/kill, limn/isearch declare *buffer-cursor-fn* / *buffer-set-
+    ;; cursor-fn* vtables defaulting to no-ops; their real wire path is
+    ;; buffer/cursor-get / buffer/cursor-set. Install live bindings now so
+    ;; downstream callers (update-region-overlay, deactivate-mark, etc.)
+    ;; see actual cursor positions.
+    (%install-cursor-vtables)
     ;; Spawn a background pump thread so events the user generates in the
     ;; Qt window fire their bindings while the REPL is at the prompt. Tests
     ;; with mock clients can call STOP-PUMP-THREAD if they don't want it.
     (%call :limn/dispatch '#:start-pump-thread s)
     *session*))
+
+(defun %install-cursor-vtables ()
+  "Bind every package's *buffer-cursor-fn* / *buffer-set-cursor-fn* to a
+   wire round-trip via buffer/cursor-get / buffer/cursor-set. Modules that
+   declare these vtables: limn/mark, limn/region, limn/kill, limn/isearch.
+   Safe to call repeatedly — idempotent."
+  (let ((get-fn (lambda (bid)
+                  (or (ignore-errors
+                        (let ((r (call "buffer/cursor-get" :|buffer-id| bid)))
+                          (and (eq (getf r :|ok|) t)
+                               (getf (getf r :|data|) :|offset|))))
+                      0)))
+        (set-fn (lambda (bid off)
+                  (ignore-errors
+                    (call "buffer/cursor-set" :|buffer-id| bid :|offset| off))
+                  off)))
+    (dolist (pkg '(#:limn/mark #:limn/region #:limn/kill #:limn/isearch))
+      (let ((p (find-package pkg)))
+        (when p
+          (let ((g (find-symbol "*BUFFER-CURSOR-FN*"     p))
+                (s (find-symbol "*BUFFER-SET-CURSOR-FN*" p)))
+            (when (and g (boundp g)) (set g get-fn))
+            (when (and s (boundp s)) (set s set-fn))))))))
 
 (defun stop ()
   (when *session*
@@ -380,7 +410,24 @@
 (defun call (cmd &rest args)
   "Synchronous call. Returns the decoded response plist."
   (unless *session* (error "limn: not started"))
-  (apply (%sym :limn/dispatch '#:call) *session* cmd args))
+  (let ((resp (apply (%sym :limn/dispatch '#:call) *session* cmd args)))
+    ;; v0.33b: synchronous-registration shim. limn/overlays' default
+    ;; *buffer-kind-fn* queries limn/buffer to route text-buffer overlays
+    ;; through the "text-range" wire type. The buffer-opened event handler
+    ;; populates limn/buffer too but fires async — by the time callers
+    ;; chain view/overlays after bridge/engine-load, the registration may
+    ;; not have happened yet. Mirror it here from the response.
+    (when (and (equal cmd "bridge/engine-load")
+               (eq (getf resp :|ok|) t))
+      (let* ((data   (getf resp :|data|))
+             (bid    (and data (getf data :|buffer-id|)))
+             (engine (getf args :|engine|))
+             (path   (getf args :|path|))
+             (pkg    (find-package '#:limn/buffer))
+             (reg    (and pkg (find-symbol "REGISTER" pkg))))
+        (when (and bid engine reg (fboundp reg))
+          (ignore-errors (funcall reg bid (or path "") engine)))))
+    resp))
 
 (defun notify (cmd &rest args)
   "Fire-and-forget."

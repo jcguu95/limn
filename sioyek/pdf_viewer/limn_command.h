@@ -116,6 +116,20 @@ private:
     void cmd_buffer_load_file    (const QString& id, const QJsonObject& msg);
     void cmd_buffer_save         (const QString& id, const QJsonObject& msg);
 
+    // v0.33b — codepoint range → list of {page, rect} in text-widget pixels.
+    // Caller passes (buf-id, win-id, start, end); we walk the QPlainTextEdit's
+    // QTextDocument with cursorRect() to build one rect per visual line in
+    // the range. Returns ok=false if buf-id isn't a text buffer or the text
+    // widget isn't available.
+    void cmd_buffer_codepoint_rects(const QString& id, const QJsonObject& msg);
+
+    // Shared helper used by cmd_buffer_codepoint_rects and the text-range
+    // overlay paint branch in rebuild_overlay_raster. Returns a list of
+    // pixel rects (in text-widget local coords) covering codepoints
+    // [start, end) of the buffer mirrored in the text widget.
+    QVector<QRectF> compute_text_range_rects(const QString& buf_id,
+                                              int cp_start, int cp_end);
+
     // SPEC v0.22 §C — text-engine display
     // Sync the C++ QPlainTextEdit display to text_buffers[buf]. Called
     // after every mutation (insert / delete / load-file / set-text) so

@@ -27,7 +27,17 @@
            #:exchange-point-and-mark
            #:pop-global-mark
            #:*buffer-cursor-fn* #:*buffer-set-cursor-fn*
-           #:reset-marks #:mark-ring-for))
+           #:reset-marks #:mark-ring-for
+           ;; v0.33 §C — transient-mark-mode + region command classification
+           #:*transient-mark-mode*
+           #:*mark-active*
+           #:mark-active-p
+           #:activate-mark
+           #:deactivate-mark
+           #:use-region-p
+           #:*motion-commands*
+           #:*edit-commands*
+           #:note-command))
 
 (in-package #:limn/mark)
 
@@ -88,12 +98,15 @@
 
 (defun reset-marks (buf-id)
   "Reset all per-buffer mark state for BUF-ID (test isolation). Also
-   unlinks the markers from limn/marker's registry."
+   unlinks the markers from limn/marker's registry. v0.33: also clears
+   the transient-mark active flag."
   (let ((st (gethash buf-id *bufs*)))
     (when st
       (%unlink (bm-mark st))
       (dolist (m (bm-ring st)) (%unlink m))))
   (remhash buf-id *bufs*)
+  (when (boundp '*mark-active*)
+    (remhash buf-id *mark-active*))
   nil)
 
 (defun mark-ring-for (buf-id)
@@ -102,11 +115,17 @@
 
 (defun set-mark (pos buf-id)
   "Set the mark in BUF-ID to POS (integer), overwriting any previous
-   mark. Internally stores a marker so edits fix up the position."
+   mark. Internally stores a marker so edits fix up the position.
+   v0.33: when *transient-mark-mode* is on, also activates the region."
   (let* ((st  (%bm buf-id))
          (old (bm-mark st)))
     (%unlink old)
     (setf (bm-mark st) (%wrap-fresh pos buf-id)))
+  ;; v0.33: forward-reference to activate-mark is safe — defined later
+  ;; in the same file. *transient-mark-mode* is also defined later but
+  ;; the check is at call time, not load time, so this is fine.
+  (when (and (boundp '*transient-mark-mode*) *transient-mark-mode*)
+    (setf (gethash buf-id *mark-active*) t))
   pos)
 
 (defun mark (buf-id &key error-on-nil)
@@ -180,3 +199,109 @@
            (off   (%unwrap (cdr entry))))   ; cdr is int in v0.24+, robust to either
       (funcall *buffer-set-cursor-fn* bid off)
       entry)))
+
+;;; ════════════════════════════════════════════════════════════════════════
+;;; v0.33 §C — transient-mark-mode + region command classification
+;;;
+;;; *mark-active* is per-buffer (hash buf-id → t/nil). set-mark with
+;;; transient-mark on activates; deactivate-mark clears. After every
+;;; command, the dispatch layer calls (note-command CMD-NAME BUF) which:
+;;;   - keeps active if CMD-NAME is in *motion-commands*
+;;;   - deactivates if CMD-NAME is in *edit-commands*
+;;;   - keeps active otherwise (conservative; same as Emacs default).
+;;;
+;;; The *region-overlay* face highlight rendering lives in limn/region —
+;;; this module only owns the data state.
+;;; ════════════════════════════════════════════════════════════════════════
+
+(defvar *transient-mark-mode* t
+  "When true (Emacs 25+ default), set-mark activates the region and
+   subsequent edit commands deactivate it.")
+
+(defvar *mark-active* (make-hash-table :test 'equal)
+  "Per-buffer flag: buf-id → t/nil. t = region is currently active and
+   should be visually highlighted.")
+
+(defvar *region-deactivate-hook* nil
+  "Funcall'd with (buf-id) immediately after a mark is deactivated, so
+   the region-overlay layer can clear its overlay. limn/region installs
+   itself here at load time.")
+
+(defun mark-active-p (buf-id)
+  "Return t when the region in BUF-ID is currently active."
+  (gethash buf-id *mark-active*))
+
+(defun activate-mark (buf-id)
+  "Mark the region in BUF-ID as active. No-op when transient-mark-mode
+   is off."
+  (when *transient-mark-mode*
+    (setf (gethash buf-id *mark-active*) t)
+    t))
+
+(defun deactivate-mark (buf-id)
+  "Clear the active flag for BUF-ID's region. Fires
+   *region-deactivate-hook* so the overlay layer can drop its display."
+  (remhash buf-id *mark-active*)
+  (when *region-deactivate-hook*
+    (funcall *region-deactivate-hook* buf-id))
+  nil)
+
+(defun use-region-p (buf-id)
+  "Emacs-style: t when the region in BUF-ID is non-empty and active.
+   Many commands (upcase-region, etc.) only operate on the region when
+   this returns t."
+  (and *transient-mark-mode*
+       (mark-active-p buf-id)
+       (let ((m (mark buf-id))
+             (c (funcall *buffer-cursor-fn* buf-id)))
+         (and m (not (eql m c))))))
+
+;;; ── command classification ────────────────────────────────────────────
+
+(defvar *motion-commands*
+  '(forward-char backward-char next-line previous-line
+    beginning-of-line end-of-line
+    forward-word backward-word
+    beginning-of-buffer end-of-buffer
+    move-beginning-of-line move-end-of-line
+    isearch-forward isearch-backward
+    isearch-repeat-forward isearch-repeat-backward
+    scroll-up scroll-down
+    forward-paragraph backward-paragraph
+    forward-sexp backward-sexp
+    forward-sentence backward-sentence)
+  "Commands that should keep the region active when invoked.
+   User-land can push more onto this list.")
+
+(defvar *edit-commands*
+  '(self-insert-command
+    delete-char delete-backward-char backward-delete-char
+    kill-region kill-line kill-word backward-kill-word
+    yank yank-pop
+    newline open-line
+    transpose-chars transpose-words
+    capitalize-word upcase-word downcase-word
+    indent-for-tab-command
+    overwrite-mode)
+  "Commands that should deactivate the region (after they run).
+   User-land can push more onto this list.")
+
+(defun %cmd-sym= (a b)
+  "Name-based symbol equality so cmd lookups work across packages
+   (Emacs has one obarray; CL has packages — this bridges the gap)."
+  (or (eq a b)
+      (and (symbolp a) (symbolp b)
+           (string= (symbol-name a) (symbol-name b)))))
+
+(defun note-command (cmd-name buf-id)
+  "Called by the dispatch layer after every command, with the command's
+   symbol name. Classifies cmd against *motion-commands* / *edit-commands*
+   and updates region active state. Unknown commands keep active state
+   (conservative)."
+  (when *transient-mark-mode*
+    (cond
+      ((find cmd-name *motion-commands* :test #'%cmd-sym=)
+       t)
+      ((find cmd-name *edit-commands* :test #'%cmd-sym=)
+       (deactivate-mark buf-id))
+      (t t))))

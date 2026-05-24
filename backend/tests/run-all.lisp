@@ -80,6 +80,10 @@
                  "suites/syntax-coding-v031.lisp"
                  ;; v0.32 current-buffer / save-excursion / narrow
                  "suites/excursion-v032.lisp"
+                 ;; v0.33 視覺系統：overlays + face wire + region
+                 "suites/overlays-v033.lisp"
+                 ;; v0.33b: buffer/codepoint-rects + text-range layer
+                 "suites/overlays-v033b.lisp"
                  ;; v0.34 regex engine (cl-ppcre + Emacs-style API)
                  "suites/regex-v034.lisp"))
   (let ((path (rel suite)))

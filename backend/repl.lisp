@@ -86,6 +86,9 @@
                 "limn-coding.lisp"
                 ;; v0.32 current-buffer / save-excursion / narrow
                 "limn-excursion.lisp"
+                ;; v0.33 overlay data layer + region visualization
+                "limn-overlays.lisp"
+                "limn-region.lisp"
                 ;; v0.34 regex engine (depends on cl-ppcre vendor + v0.32)
                 "limn-regex.lisp"
                 ;; bootstrap (last)
