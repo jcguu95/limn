@@ -66,17 +66,28 @@
       (sleep interval))))
 
 (defun which (binary)
-  (let* ((out (make-string-output-stream))
-         (p (sb-ext:run-program "/usr/bin/env" (list "which" binary)
-                                 :search nil :wait t
-                                 :output out :error nil)))
-    (when (and (= (sb-ext:process-exit-code p) 0))
-      (string-trim '(#\Newline #\Space) (get-output-stream-string out)))))
+  "Locate BINARY on PATH. Works on FHS and NixOS (where /usr/bin/env exists)."
+  (let* ((out (make-string-output-stream)))
+    (handler-case
+        (let ((p (sb-ext:run-program "/usr/bin/env" (list "which" binary)
+                                      :search nil :wait t
+                                      :output out :error nil)))
+          (when (and p (= (sb-ext:process-exit-code p) 0))
+            (let ((line (string-trim '(#\Newline #\Space)
+                                      (get-output-stream-string out))))
+              (and (plusp (length line)) line))))
+      (error () nil))))
 
 (defun shell (cmd)
   (sb-ext:run-program "/bin/sh" (list "-c" cmd)
                        :search nil :wait t
                        :output nil :error nil))
+
+(defparameter *cat-bin*
+  (or (which "cat")
+      (loop for p in '("/bin/cat" "/usr/bin/cat" "/run/current-system/sw/bin/cat")
+            when (probe-file p) return p)
+      "/bin/cat"))
 
 ;; ── Ω1: probe a file-notify backend ─────────────────────────────────────
 
@@ -126,6 +137,10 @@
 
 ;; ── Ω3: auto-revert end-to-end ──────────────────────────────────────────
 
+;; NOTE: vtable functions must be installed via setf-symbol-value (a global
+;; binding), NOT progv (dynamic binding) — file-notify events arrive on the
+;; limn/process reader thread, which doesn't inherit our dynamic bindings.
+
 (format t "~%── Ω3: auto-revert auto-updates on external write ──~%")
 (let ((ar-pkg   (find-package '#:limn/auto-revert))
       (file-pkg (find-package '#:limn/file)))
@@ -135,33 +150,35 @@
     (t
      (let* ((path (format nil "/tmp/limn-v035-~D-ar.txt"
                           (sb-posix:getpid)))
-            (content-store (list "initial line~%"))
+            (content-store (list ""))
             (find-fn (symbol-function (find-symbol "FIND-FILE" file-pkg)))
             (cont-sym (find-symbol "*BUFFER-SET-CONTENT-FN*" file-pkg))
             (ar-fn (symbol-function
-                     (find-symbol "AUTO-REVERT-MODE" ar-pkg))))
+                     (find-symbol "AUTO-REVERT-MODE" ar-pkg)))
+            (saved-cont (symbol-value cont-sym)))
        (shell (format nil "echo initial > ~a" path))
+       (setf (symbol-value cont-sym)
+             (lambda (bid s) (declare (ignore bid))
+               (setf (first content-store) s)))
        (unwind-protect
             (handler-case
-                (progv (list cont-sym)
-                       (list (lambda (bid s) (declare (ignore bid))
-                               (setf (first content-store) s)))
-                  (let ((bid (funcall find-fn path)))
-                    (check "find-file returned a buffer id" bid)
-                    (when bid
-                      (funcall ar-fn bid)
-                      (sleep 0.3)
-                      (shell (format nil "echo appended >> ~a" path))
-                      (let ((got (poll-until
-                                   (lambda ()
-                                     (search "appended"
-                                             (first content-store)))
-                                   :timeout 5.0)))
-                        (check "buffer auto-updated within 5s" got
-                               (format nil "content: ~s"
-                                       (first content-store)))))))
+                (let ((bid (funcall find-fn path)))
+                  (check "find-file returned a buffer id" bid)
+                  (when bid
+                    (funcall ar-fn bid)
+                    (sleep 0.5)
+                    (shell (format nil "echo appended >> ~a" path))
+                    (let ((got (poll-until
+                                 (lambda ()
+                                   (search "appended"
+                                           (first content-store)))
+                                 :timeout 5.0)))
+                      (check "buffer auto-updated within 5s" got
+                             (format nil "content: ~s"
+                                     (first content-store))))))
               (error (e)
                 (check "no unhandled error" nil (format nil "~A" e))))
+         (setf (symbol-value cont-sym) saved-cont)
          (ignore-errors (delete-file path)))))))
 
 ;; ── Ω4: tail-mode follows append ────────────────────────────────────────
@@ -175,22 +192,31 @@
     (t
      (let* ((path (format nil "/tmp/limn-v035-~D-tail.txt"
                           (sb-posix:getpid)))
-            (content-store (list "first
-"))
+            (content-store (list ""))
             (cursor-store (list 0))
             (find-fn (symbol-function (find-symbol "FIND-FILE" file-pkg)))
             (cont-sym (find-symbol "*BUFFER-SET-CONTENT-FN*" file-pkg))
             (cur-sym  (find-symbol "*CURSOR-SET-FN*" ar-pkg))
+            (txt-sym  (find-symbol "*BUFFER-TEXT-FN*" ar-pkg))
             (tail-fn (symbol-function
-                       (find-symbol "AUTO-REVERT-TAIL-MODE" ar-pkg))))
+                       (find-symbol "AUTO-REVERT-TAIL-MODE" ar-pkg)))
+            (saved-cont (symbol-value cont-sym))
+            (saved-cur  (symbol-value cur-sym))
+            (saved-txt  (symbol-value txt-sym)))
        (shell (format nil "echo first > ~a" path))
+       (setf (symbol-value cont-sym)
+             (lambda (bid s) (declare (ignore bid))
+               (setf (first content-store) s))
+             (symbol-value cur-sym)
+             (lambda (bid pos) (declare (ignore bid))
+               (setf (first cursor-store) pos))
+             (symbol-value txt-sym)
+             ;; tail-mode needs the current text length to compute point-max
+             (lambda (bid) (declare (ignore bid))
+               (first content-store)))
        (unwind-protect
             (handler-case
-                (progv (list cont-sym cur-sym)
-                       (list (lambda (bid s) (declare (ignore bid))
-                               (setf (first content-store) s))
-                             (lambda (bid pos) (declare (ignore bid))
-                               (setf (first cursor-store) pos)))
+                (progn
                   (let ((bid (funcall find-fn path)))
                     (when bid
                       (funcall tail-fn bid)
@@ -209,6 +235,9 @@
                                        (first cursor-store)))))))
               (error (e)
                 (check "no unhandled error" nil (format nil "~A" e))))
+         (setf (symbol-value cont-sym) saved-cont
+               (symbol-value cur-sym)  saved-cur
+               (symbol-value txt-sym)  saved-txt)
          (ignore-errors (delete-file path)))))))
 
 ;; ── Ω5: process-coding UTF-8 round-trip ─────────────────────────────────
@@ -226,7 +255,7 @@
                 (eof  (symbol-function (find-symbol "PROCESS-SEND-EOF"    proc-pkg)))
                 (wait (symbol-function (find-symbol "PROCESS-WAIT"        proc-pkg)))
                 (out  (symbol-function (find-symbol "PROCESS-STDOUT"      proc-pkg)))
-                (p (funcall mk :command '("/bin/cat") :coding-system 'utf-8)))
+                (p (funcall mk :command (list *cat-bin*) :coding-system 'utf-8)))
            (funcall snd p "中文")
            (funcall eof p)
            (funcall wait p :timeout 5)
@@ -236,27 +265,30 @@
        (error (e)
          (check "no unhandled error" nil (format nil "~A" e)))))))
 
-;; ── Ω6: process-coding decode big5 ──────────────────────────────────────
+;; ── Ω6: process-coding decode GB18030 ───────────────────────────────────
 
-(format t "~%── Ω6: limn/process :decode-coding-system big5 ──~%")
+(format t "~%── Ω6: limn/process :decode-coding-system gb18030 ──~%")
 (let ((proc-pkg (find-package '#:limn/process))
       (cod-pkg  (find-package '#:limn/coding)))
   (cond
     ((not (and proc-pkg cod-pkg))
      (check "process/coding loaded" nil "RED"))
     (t
+     ;; GB18030 is natively supported in Linux SBCL (:gbk external-format).
+     ;; Big5 isn't always available — we use GB18030 here for the OS-tier
+     ;; smoke check; the Big5 path is covered by unit-tier on macOS.
      (handler-case
-         ;; "你好" in Big5: A4 41 A6 6E
+         ;; "你好" in GB18030 (= GBK): C4 E3 BA C3
          (let* ((mk   (symbol-function (find-symbol "MAKE-PROCESS"   proc-pkg)))
                 (wait (symbol-function (find-symbol "PROCESS-WAIT"   proc-pkg)))
                 (out  (symbol-function (find-symbol "PROCESS-STDOUT" proc-pkg)))
                 (p (funcall mk
                             :command '("/bin/sh" "-c"
-                                       "printf '\\xa4\\x41\\xa6\\x6e'")
-                            :decode-coding-system 'big5)))
+                                       "printf '\\xc4\\xe3\\xba\\xc3'")
+                            :decode-coding-system 'gb18030)))
            (funcall wait p :timeout 5)
            (let ((s (funcall out p)))
-             (check (format nil "decoded big5 stdout contains 你好; got ~s" s)
+             (check (format nil "decoded gb18030 stdout contains 你好; got ~s" s)
                     (search "你好" s))))
        (error (e)
          (check "no unhandled error" nil (format nil "~A" e)))))))

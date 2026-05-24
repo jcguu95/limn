@@ -46,13 +46,8 @@
 ;; ── helpers ──────────────────────────────────────────────────────────────
 
 (defun %tmp-path (suffix)
-  (format nil "/tmp/limn-v035-~D~A" (sb-ext:process-id (sb-ext:run-program
-                                                         "/bin/sh"
-                                                         '("-c" "echo $$")
-                                                         :search nil
-                                                         :wait t
-                                                         :output nil))
-          suffix))
+  (format nil "/tmp/limn-v035-~D-~D~A" (random 100000)
+          (get-internal-real-time) suffix))
 
 (defun %write-file (path content)
   (with-open-file (s path :direction :output
@@ -80,7 +75,11 @@
 
 (deftest v035-t1-auto-revert-file-roundtrip
   "Create file → find-file (Lisp side, using limn/file vtable) → enable
-   auto-revert-mode → external echo >> file → buffer content auto-updates."
+   auto-revert-mode → external echo >> file → buffer content auto-updates.
+
+   NOTE: must install vtable via setf-symbol-value (global), not progv —
+   file-notify events arrive on the limn/process reader thread which does
+   not inherit dynamic bindings."
   (let ((fn-pkg   (find-package '#:limn/file-notify))
         (ar-pkg   (find-package '#:limn/auto-revert))
         (file-pkg (find-package '#:limn/file)))
@@ -88,40 +87,44 @@
       (format t "  SKIP: limn/file-notify or limn/auto-revert not loaded~%")
       (return-from v035-t1-auto-revert-file-roundtrip))
     (let* ((path (%tmp-path "-t1.txt"))
-           (content-store (list "initial line~%"))   ; simulates the buffer
+           (content-store (list ""))
            (find-fn (symbol-function (find-symbol "FIND-FILE" file-pkg)))
-           (cont-sym (find-symbol "*BUFFER-SET-CONTENT-FN*" file-pkg)))
-      (unwind-protect
-           (progn
-             (%write-file path "initial line
+           (cont-sym (find-symbol "*BUFFER-SET-CONTENT-FN*" file-pkg))
+           (saved-cont (symbol-value cont-sym)))
+      (%write-file path "initial line
 ")
-             ;; Wire *buffer-set-content-fn* to mutate our content-store —
-             ;; that's what the "buffer" really is for this test.
-             (progv (list cont-sym)
-                    (list (lambda (bid str) (declare (ignore bid))
-                            (setf (first content-store) str)))
-               (let ((bid (funcall find-fn path)))
-                 (assert-true bid "find-file returned a buffer id")
-                 ;; Enable auto-revert on this buffer.
-                 (funcall (symbol-function
-                            (find-symbol "AUTO-REVERT-MODE" ar-pkg))
-                          bid)
-                 ;; External mutation.
-                 (%append-shell path "second line\\n")
-                 ;; Wait for auto-revert to fire (file-notify or polling tick).
-                 (let ((updated
-                         (%poll-until
-                           (lambda () (search "second line" (first content-store)))
-                           :timeout 5.0)))
-                   (assert-true updated
-                                (format nil "buffer auto-updated; got: ~s"
-                                        (first content-store)))))))
+      (setf (symbol-value cont-sym)
+            (lambda (bid str) (declare (ignore bid))
+              (setf (first content-store) str)))
+      (unwind-protect
+           (let ((bid (funcall find-fn path)))
+             (assert-true bid "find-file returned a buffer id")
+             (funcall (symbol-function
+                        (find-symbol "AUTO-REVERT-MODE" ar-pkg))
+                      bid)
+             (sleep 0.5)   ; give inotify time to set up
+             (%append-shell path "second line")
+             (let ((updated
+                     (%poll-until
+                       (lambda () (search "second line" (first content-store)))
+                       :timeout 5.0)))
+               (assert-true updated
+                            (format nil "buffer auto-updated; got: ~s"
+                                    (first content-store)))))
+        (setf (symbol-value cont-sym) saved-cont)
         (ignore-errors (delete-file path))))))
 
 ;; ── T2. process-coding pipe (Big5 round-trip via cat) ───────────────────
 
+(defparameter *cat-bin*
+  (or (loop for p in '("/bin/cat" "/usr/bin/cat"
+                       "/run/current-system/sw/bin/cat"
+                       "/root/.nix-profile/bin/cat")
+            when (probe-file p) return p)
+      "/bin/cat"))
+
 (deftest v035-t2-process-coding-cjk-pipe
-  "spawn /bin/cat with :coding-system utf-8; send '中文'; stdout has '中文'."
+  "spawn cat with :coding-system utf-8; send '中文'; stdout has '中文'."
   (let ((proc-pkg (find-package '#:limn/process))
         (cod-pkg  (find-package '#:limn/coding)))
     (unless (and proc-pkg cod-pkg)
@@ -133,7 +136,8 @@
            (wait (symbol-function (find-symbol "PROCESS-WAIT"       proc-pkg)))
            (out  (symbol-function (find-symbol "PROCESS-STDOUT"     proc-pkg))))
       (handler-case
-          (let ((p (funcall mk :command '("/bin/cat") :coding-system 'utf-8)))
+          (let ((p (funcall mk :command (list *cat-bin*)
+                              :coding-system 'utf-8)))
             (funcall snd p "中文")
             (funcall eof p)
             (funcall wait p :timeout 5)

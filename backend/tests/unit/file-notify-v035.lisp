@@ -154,7 +154,7 @@
            "/tmp/dual" '(:change) cb1)
           (limn/file-notify:file-notify-add-watch
            "/tmp/dual" '(:change) cb2)
-          (limn/file-notify:feed-helper-line "MODIFY /tmp/dual")
+          (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/dual~%"))
           (assert-eql 1 (length (funcall g1)))
           (assert-eql 1 (length (funcall g2))))))))
 
@@ -166,7 +166,7 @@
       (multiple-value-bind (getter cb) (%events)
         (limn/file-notify:file-notify-add-watch
          "/tmp/foo" '(:change) cb)
-        (limn/file-notify:feed-helper-line "MODIFY /tmp/foo")
+        (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/foo~%"))
         (let ((evs (funcall getter)))
           (assert-eql 1 (length evs))
           (let ((ev (first evs)))
@@ -181,7 +181,7 @@
       (multiple-value-bind (getter cb) (%events)
         (let ((d (limn/file-notify:file-notify-add-watch
                   "/tmp/match" '(:change) cb)))
-          (limn/file-notify:feed-helper-line "MODIFY /tmp/match")
+          (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/match~%"))
           (let ((ev (first (funcall getter))))
             (assert-true (eq d (getf ev :descriptor))
                          "descriptor in event = descriptor returned by add")))))))
@@ -201,7 +201,7 @@
     (with-helper-fake ()
       (multiple-value-bind (getter cb) (%events)
         (limn/file-notify:file-notify-add-watch "/tmp/c" '(:change) cb)
-        (limn/file-notify:feed-helper-line "CREATE /tmp/c")
+        (limn/file-notify:feed-helper-line (format nil "CREATE /tmp/c~%"))
         (assert-eq :created (getf (first (funcall getter)) :action))))))
 
 (deftest file-notify-a3-delete-action
@@ -209,7 +209,7 @@
     (with-helper-fake ()
       (multiple-value-bind (getter cb) (%events)
         (limn/file-notify:file-notify-add-watch "/tmp/d" '(:change) cb)
-        (limn/file-notify:feed-helper-line "DELETE /tmp/d")
+        (limn/file-notify:feed-helper-line (format nil "DELETE /tmp/d~%"))
         (assert-eq :deleted (getf (first (funcall getter)) :action))))))
 
 (deftest file-notify-a3-modify-action
@@ -217,7 +217,7 @@
     (with-helper-fake ()
       (multiple-value-bind (getter cb) (%events)
         (limn/file-notify:file-notify-add-watch "/tmp/m" '(:change) cb)
-        (limn/file-notify:feed-helper-line "MODIFY /tmp/m")
+        (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/m~%"))
         (assert-eq :modified (getf (first (funcall getter)) :action))))))
 
 (deftest file-notify-a3-rename-action
@@ -225,7 +225,7 @@
     (with-helper-fake ()
       (multiple-value-bind (getter cb) (%events)
         (limn/file-notify:file-notify-add-watch "/tmp/r" '(:change) cb)
-        (limn/file-notify:feed-helper-line "MOVED_FROM /tmp/r")
+        (limn/file-notify:feed-helper-line (format nil "MOVED_FROM /tmp/r~%"))
         (assert-eq :renamed (getf (first (funcall getter)) :action))))))
 
 (deftest file-notify-a3-attrib-action
@@ -233,7 +233,7 @@
     (with-helper-fake ()
       (multiple-value-bind (getter cb) (%events)
         (limn/file-notify:file-notify-add-watch "/tmp/a" '(:attribute-change) cb)
-        (limn/file-notify:feed-helper-line "ATTRIB /tmp/a")
+        (limn/file-notify:feed-helper-line (format nil "ATTRIB /tmp/a~%"))
         (assert-eq :attribute-changed
                    (getf (first (funcall getter)) :action))))))
 
@@ -244,7 +244,7 @@
       (multiple-value-bind (getter cb) (%events)
         (limn/file-notify:file-notify-add-watch
          "/tmp/aa" '(:attribute-change) cb)
-        (limn/file-notify:feed-helper-line "MODIFY /tmp/aa")
+        (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/aa~%"))
         (assert-eql 0 (length (funcall getter)))))))
 
 ;;; ─── A4. multiple watches / routing ──────────────────────────────────────
@@ -258,9 +258,9 @@
            "/tmp/path-x" '(:change) cb-x)
           (limn/file-notify:file-notify-add-watch
            "/tmp/path-y" '(:change) cb-y)
-          (limn/file-notify:feed-helper-line "MODIFY /tmp/path-x")
-          (limn/file-notify:feed-helper-line "MODIFY /tmp/path-y")
-          (limn/file-notify:feed-helper-line "MODIFY /tmp/path-y")
+          (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/path-x~%"))
+          (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/path-y~%"))
+          (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/path-y~%"))
           (assert-eql 1 (length (funcall g-x)))
           (assert-eql 2 (length (funcall g-y))))))))
 
@@ -275,8 +275,8 @@
                      "/tmp/bb" '(:change) cb-y)))
             (declare (ignore dy))
             (limn/file-notify:file-notify-rm-watch dx)
-            (limn/file-notify:feed-helper-line "MODIFY /tmp/aa")
-            (limn/file-notify:feed-helper-line "MODIFY /tmp/bb")
+            (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/aa~%"))
+            (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/bb~%"))
             (assert-eql 0 (length (funcall g-x)))
             (assert-eql 1 (length (funcall g-y)))))))))
 
@@ -294,7 +294,7 @@
           (dotimes (k 5)
             (declare (ignore k))
             (limn/file-notify:feed-helper-line
-             (format nil "MODIFY /tmp/stress-~D" i))))
+             (format nil "MODIFY /tmp/stress-~D~%" i))))
         (dolist (entry getters)
           (assert-eql 5 (length (funcall (cdr entry)))))))))
 
@@ -321,7 +321,7 @@
       (multiple-value-bind (g cb) (%events)
         (limn/file-notify:file-notify-add-watch "/tmp/sv" '(:change) cb)
         (limn/file-notify:simulate-helper-exit)
-        (limn/file-notify:feed-helper-line "MODIFY /tmp/sv")
+        (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/sv~%"))
         (assert-eql 1 (length (funcall g)))))))
 
 ;;; ─── A6. polling fallback ────────────────────────────────────────────────
@@ -493,7 +493,7 @@
         (limn/file-notify:file-notify-add-watch "/tmp/burst" '(:change) cb)
         (dotimes (i 50)
           (limn/file-notify:feed-helper-line
-           (format nil "MODIFY /tmp/burst")))
+           (format nil "MODIFY /tmp/burst~%")))
         (let ((evs (funcall g)))
           (assert-eql 50 (length evs)
                       "all 50 events delivered, none dropped"))))))
@@ -505,11 +505,17 @@
     (with-helper-fake ()
       (multiple-value-bind (g cb) (%events)
         (limn/file-notify:file-notify-add-watch "/tmp/chunk" '(:change) cb)
-        ;; multiple lines in one chunk
+        ;; 3 complete \n-terminated lines in one chunk
         (limn/file-notify:feed-helper-line
-         (format nil "MODIFY /tmp/chunk~%MODIFY /tmp/chunk~%MODIFY /tmp/chunk"))
+         (format nil "MODIFY /tmp/chunk~%MODIFY /tmp/chunk~%MODIFY /tmp/chunk~%"))
         (assert-eql 3 (length (funcall g))
-                    "3 lines in 1 chunk → 3 events")))))
+                    "3 lines in 1 chunk → 3 events")
+        ;; Now feed a partial line then complete it across calls.
+        (limn/file-notify:feed-helper-line "MODI")
+        (limn/file-notify:feed-helper-line
+         (format nil "FY /tmp/chunk~%"))
+        (assert-eql 4 (length (funcall g))
+                    "split-across-chunks line reassembled")))))
 
 ;;; ─── A9. callback error containment ─────────────────────────────────────
 
@@ -526,8 +532,8 @@
           (limn/file-notify:file-notify-add-watch
            "/tmp/good" '(:change) cb-good)
           (assert-no-error
-            (limn/file-notify:feed-helper-line "MODIFY /tmp/bad"))
-          (limn/file-notify:feed-helper-line "MODIFY /tmp/good")
+            (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/bad~%")))
+          (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/good~%"))
           (assert-eql 1 (length (funcall g-good))
                       "good cb still got its event"))))))
 
@@ -539,9 +545,9 @@
       (multiple-value-bind (g cb) (%events)
         (let ((d (limn/file-notify:file-notify-add-watch
                   "/tmp/un" '(:change) cb)))
-          (limn/file-notify:feed-helper-line "MODIFY /tmp/un")
+          (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/un~%"))
           (limn/file-notify:file-notify-rm-watch d)
-          (limn/file-notify:feed-helper-line "MODIFY /tmp/un")
+          (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/un~%"))
           (assert-eql 1 (length (funcall g))
                       "only 1 event (before rm)"))))))
 
@@ -559,7 +565,7 @@
     (with-helper-fake ()
       (multiple-value-bind (g cb) (%events)
         (limn/file-notify:file-notify-add-watch "/tmp/dir" '(:change) cb)
-        (limn/file-notify:feed-helper-line "CREATE /tmp/dir/newfile")
+        (limn/file-notify:feed-helper-line (format nil "CREATE /tmp/dir/newfile~%"))
         (let ((evs (funcall g)))
           (assert-eql 1 (length evs))
           (assert-equal "/tmp/dir/newfile" (getf (first evs) :file)))))))
@@ -581,7 +587,7 @@
         (limn/file-notify:file-notify-add-watch
          "/tmp/arity" '(:change)
          (lambda (&rest args) (setf arity-got (length args))))
-        (limn/file-notify:feed-helper-line "MODIFY /tmp/arity")
+        (limn/file-notify:feed-helper-line (format nil "MODIFY /tmp/arity~%"))
         (assert-eql 1 arity-got "callback called with 1 arg")))))
 
 (deftest file-notify-a11-helper-not-spawned-until-first-add

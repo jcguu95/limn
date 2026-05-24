@@ -52,6 +52,10 @@
 
 (in-package #:limn/file-notify)
 
+;;; Forward declaration so %spawn-real-helper compiles without style-warning
+;;; (real definition is below, after the dispatch helpers).
+(declaim (ftype (function (t) t) %dispatch-chunk))
+
 ;;; ── configuration vars ──────────────────────────────────────────────────
 
 (defvar *file-notify-backend* :auto
@@ -107,6 +111,8 @@
 (defvar *helper-respawn-count* 0)
 (defvar *poll-cache* (make-hash-table :test 'equal))
 (defvar *last-poll-time* 0)
+(defvar *line-fragment* ""        ; bytes seen since last newline
+  "Accumulator for incomplete helper-stdout lines across read chunks.")
 
 (defun reset-file-notify ()
   "Clear all watches and helper state. Intended for tests."
@@ -116,7 +122,8 @@
                      (find-symbol "KILL-PROCESS" '#:limn/process))))
       (when kill (handler-case (funcall kill *helper-proc*) (error () nil)))))
   (setf *helper-proc* nil
-        *helper-respawn-count* 0)
+        *helper-respawn-count* 0
+        *line-fragment* "")
   (clrhash *poll-cache*)
   (setf *last-poll-time* 0)
   nil)
@@ -144,7 +151,8 @@
 
 (defun %spawn-real-helper (kind)
   "Spawn the real OS helper. Returns the limn/process handle.
-   The helper writes one event per line to stdout."
+   The helper writes one event per line to stdout. Resolves the binary
+   via %which so NixOS / non-FHS systems work."
   (let ((mk (and (find-package '#:limn/process)
                  (symbol-function (find-symbol "MAKE-PROCESS"
                                                 '#:limn/process)))))
@@ -152,25 +160,41 @@
       (error "limn/file-notify: limn/process not loaded; cannot spawn helper"))
     (ecase kind
       (:inotify
-       (funcall mk
-                :command '("inotifywait" "--monitor" "--recursive"
-                           "--event" "modify"
-                           "--event" "create"
-                           "--event" "delete"
-                           "--event" "move"
-                           "--event" "attrib"
-                           "--format" "%e %w%f"
-                           "--quiet"
-                           "/tmp")
-                :stdout (lambda (proc chunk)
-                          (declare (ignore proc))
-                          (%dispatch-chunk chunk))))
+       (let ((bin    (or (%which "inotifywait")
+                         (error "limn/file-notify: inotifywait not on PATH")))
+             (stdbuf (%which "stdbuf")))
+         ;; inotifywait fully-buffers stdout when piped; wrap with stdbuf -oL
+         ;; so events flush per-line. Falls back to no-stdbuf on systems
+         ;; without it (macOS Homebrew gstdbuf, BSD etc.).
+         (let ((cmd (if stdbuf
+                        (list stdbuf "-oL" bin)
+                        (list bin))))
+           (funcall mk
+                    :command (append cmd
+                                      '("--monitor" "--recursive"
+                                        "--event" "modify"
+                                        "--event" "create"
+                                        "--event" "delete"
+                                        "--event" "move"
+                                        "--event" "attrib"
+                                        "--format" "%e %w%f"
+                                        "--quiet"
+                                        "/tmp"))
+                    :stdout (lambda (proc chunk)
+                              (declare (ignore proc))
+                              (%dispatch-chunk chunk))))))
       (:fswatch
-       (funcall mk
-                :command '("fswatch" "-x" "/tmp")
-                :stdout (lambda (proc chunk)
-                          (declare (ignore proc))
-                          (%dispatch-chunk chunk)))))))
+       (let ((bin    (or (%which "fswatch")
+                         (error "limn/file-notify: fswatch not on PATH")))
+             (stdbuf (%which "stdbuf")))
+         (let ((cmd (if stdbuf
+                        (list stdbuf "-oL" bin)
+                        (list bin))))
+           (funcall mk
+                    :command (append cmd '("-x" "/tmp"))
+                    :stdout (lambda (proc chunk)
+                              (declare (ignore proc))
+                              (%dispatch-chunk chunk)))))))))
 
 (defun %helper-alive-p ()
   "True if the current *helper-proc* is a real, still-running process."
@@ -314,16 +338,23 @@
 
 (defun feed-helper-line (line-or-chunk)
   "Test entry point AND dispatch helper for real subprocess stdout.
-   Splits the chunk on newlines, parses each non-empty line, and
-   delivers to matching watches."
-  (let ((chunk (or line-or-chunk "")))
+   Concatenates the chunk with any prior fragment, splits on newlines,
+   parses each complete line, and stashes the trailing partial line
+   into *line-fragment* for the next call."
+  (let* ((chunk (concatenate 'string *line-fragment* (or line-or-chunk ""))))
+    (setf *line-fragment* "")
     (loop with start = 0
           for nl = (position #\Newline chunk :start start)
-          for line = (subseq chunk start (or nl (length chunk)))
-          do (multiple-value-bind (action path) (%parse-line line)
-               (when (and action path)
-                 (%deliver action path)))
-             (if nl (setf start (1+ nl)) (return)))))
+          while nl
+          do (let ((line (subseq chunk start nl)))
+               (multiple-value-bind (action path) (%parse-line line)
+                 (when (and action path)
+                   (%deliver action path))))
+             (setf start (1+ nl))
+          finally
+            ;; Stash whatever is past the last newline as a fragment.
+            (when (< start (length chunk))
+              (setf *line-fragment* (subseq chunk start))))))
 
 (defun %dispatch-chunk (chunk)
   "Called from the real helper subprocess stdout-filter; same parse as

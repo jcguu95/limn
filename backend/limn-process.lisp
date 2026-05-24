@@ -173,18 +173,34 @@
 ;;; ─── Stream readers ──────────────────────────────────────────────────
 
 (defun %read-loop (stream on-chunk)
-  "Read STREAM and dispatch chunks. Uses READ-SEQUENCE for bulk;
-   the reaper closes the stream after the child exits, which causes
-   blocked READ-SEQUENCE to return short with EOF."
+  "Read STREAM and dispatch chunks. Strategy: block on one char (via
+   READ-CHAR), then drain whatever else is immediately available with
+   READ-CHAR-NO-HANG, and emit as a single chunk. This avoids two
+   pathologies:
+     (1) READ-SEQUENCE on a fixed buffer blocks until the buffer is
+         full, starving long-running monitor processes (inotifywait,
+         fswatch, tail -f) whose output is line-rate.
+     (2) Pure per-char delivery would crush throughput on bulk output.
+   The reaper closes the stream after the child exits, which causes
+   blocked READ-CHAR to return :eof and end the loop."
   (when (and stream (open-stream-p stream))
-    (let ((buf (make-string 4096)))
+    (let ((buf (make-array 256 :element-type 'character
+                                :adjustable t :fill-pointer 0)))
       (handler-case
           (loop
-            (let ((n (handler-case (read-sequence buf stream)
-                       (end-of-file () 0)
-                       (error () 0))))
-              (cond ((zerop n) (return))
-                    (t (funcall on-chunk (subseq buf 0 n))))))
+            (setf (fill-pointer buf) 0)
+            (let ((c (handler-case (read-char stream nil :eof)
+                       (error () :eof))))
+              (when (eq c :eof) (return))
+              (vector-push-extend c buf)
+              ;; Drain anything else already buffered without blocking.
+              (loop
+                (let ((c2 (handler-case (read-char-no-hang stream nil :eof)
+                            (error () nil))))
+                  (cond ((null c2)         (return))   ; nothing pending
+                        ((eq c2 :eof)      (return))   ; stream closed mid-drain
+                        (t (vector-push-extend c2 buf)))))
+              (funcall on-chunk (coerce buf 'simple-string))))
         (error () nil)))))
 
 (defun %make-stdout-thread (p)
