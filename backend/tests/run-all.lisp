@@ -77,7 +77,9 @@
                  ;; v0.30 markers + buffer-local (wire round-trip)
                  "suites/marker-v030.lisp"
                  ;; v0.32 current-buffer / save-excursion / narrow
-                 "suites/excursion-v032.lisp"))
+                 "suites/excursion-v032.lisp"
+                 ;; v0.34 regex engine (cl-ppcre + Emacs-style API)
+                 "suites/regex-v034.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)
