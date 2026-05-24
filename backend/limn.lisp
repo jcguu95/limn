@@ -43,8 +43,9 @@
 (defvar *global-keymap* nil
   "Top-level keymap. Created lazily on first START.")
 
-(defvar *key-prefix* '()
-  "Accumulated key prefix while walking a multi-key sequence.")
+;; v0.19 β: *key-prefix* lives in limn/keys: now (was limn:: internal).
+;; All reads/writes routed through limn/keys:*key-prefix* / set-key-prefix
+;; so user-land which-key can subscribe to event/key-prefix-changed.
 
 (defvar *prefix-arg-acc* ""
   "Accumulator for numeric prefix arg. e.g. user typing '5g' sees:
@@ -107,7 +108,7 @@
     ;; First non-digit ends accumulation, value goes into
     ;; limn/cmd:*prefix-arg* dynamic binding for that dispatch.
     (when (and (null mods)
-               (null *key-prefix*)
+               (null limn/keys:*key-prefix*)
                (= 1 (length spec))
                (let ((c (char spec 0)))
                  (and (char>= c #\0) (char<= c #\9))))
@@ -115,7 +116,7 @@
       (setf *prefix-arg-acc* (concatenate 'string *prefix-arg-acc* spec))
       (return-from %dispatch-key nil))
 
-    (let* ((sequence   (append *key-prefix* (list spec)))
+    (let* ((sequence   (append limn/keys:*key-prefix* (list spec)))
            (win-id  (or (getf ev :|win-id|) "w1"))
            (rt      (find-package :limn/runtime))
            (mb-fn   (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW" rt)))
@@ -130,9 +131,9 @@
       (setf *prefix-arg-acc* "")
       (cond
         ((eq result :prefix)
-         (setf *key-prefix* sequence))
+         (limn/keys:set-key-prefix sequence))
         ((functionp result)
-         (setf *key-prefix* '())
+         (limn/keys:set-key-prefix '())
          (let ((cmd-pkg (find-package :limn/cmd)))
            (if (and acc-int cmd-pkg)
                (let ((slot (find-symbol "*PREFIX-ARG*" cmd-pkg)))
@@ -151,7 +152,7 @@
                                     "limn: binding for ~{~a~^ ~} errored: ~a~%"
                                     sequence e))))))
         (t
-         (setf *key-prefix* '()))))))
+         (limn/keys:set-key-prefix '()))))))
 
 (defun %mode-stack-lookup (mode-buffer sequence lookup-seq)
   "Walk SEQUENCE through MODE-BUFFER's keymap stack (minor newest first →
@@ -344,7 +345,8 @@
     (ignore-errors (%call :limn/dispatch '#:stop-pump-thread *session*))
     (let ((c (%call :limn/dispatch '#:session-client *session*)))
       (ignore-errors (%call :limn/client '#:disconnect c)))
-    (setf *session* nil *running* nil *key-prefix* '()))
+    (setf *session* nil *running* nil)
+    (limn/keys:set-key-prefix '()))
   t)
 
 ;;; ── public messaging API ───────────────────────────────────────────────

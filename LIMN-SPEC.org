@@ -1436,22 +1436,43 @@ VM workspace 測試（在 nix container 內、用 openbox X11 multi-desktop）�
 
 C++ + container WM 設定為主。
 
-*** v0.19 keymap α + β（純 Lisp）⏭ planned
-
-純 Lisp 改、C++ 一行不動。分兩階段：
+*** v0.19.0 keymap α + β ✅ shipped — 純 Lisp、C++ 零改動
 
 α — 半缺補完（既有 SPEC contract 補齊、無 contract 變動）：
-- =define-mode :parent= 真的 wire（目前 reserved、user 要手動 setf
-  keymap parent）
-- =describe-bindings= 遞迴 walk prefix sub-keymap（目前只回 top-level）
-- =lookup-key= 自動 fallback global keymap（目前 caller 自己處理）
 
-β — 新 primitive（§9.1 contract 擴張、v0.19 ship 完 bump v0.8 → v0.9）：
-- =*key-prefix*= 提升成 package var + =key-prefix-changed= hook
+- =define-mode :parent= 真的 wire：
+  + validate parent 存在、否則 error
+  + cycle detect、a→b→a 拒絕
+  + 自動 lazy-create 雙方 keymap (if nil)
+  + re-define-mode :parent NEW 即時更新 link
+  + Emacs-way：嚴格但便利
+- =describe-bindings= 遞迴 walk prefix sub-keymap：
+  + "C-x f" 出來是 flat string、不是 nested alist
+  + 多層 prefix ("C-x 4 f") 都展開
+  + own bindings only、parent 不混入 (Emacs default)
+- =lookup-key= 自動 fallback =limn/mode:*global-keymap*=：
+  + transient → local → minors (newest first) → major → global 五層
+  + 任何一層撞 nil 都 graceful、不 crash
+
+β — 新 primitive（§9.1 contract 擴張、v0.19 ship 完 SPEC 從 v0.8 → v0.9）：
+
+- =limn/keys:*key-prefix*= 提升成 package var + =event/key-prefix-changed=
+  hook (set-key-prefix setter)：
+  + idempotent (same value → no hook)
+  + 多訂閱者全 fire
+  + remove-hook 後不再 fire
+  + hook info plist 帶 =:|old|= / =:|new|=
   → 解鎖 user-land 寫 which-key
-- =set-transient-map= + =*transient-keymap*= lookup 最頂層
+- =limn/keys:set-transient-map km [:on-exit fn]= + =*transient-keymap*=
+  lookup 最頂層：
+  + km=nil 清空
+  + 替換時舊 :on-exit 先 fire (Emacs convention)
+  + 沒 binding 預設 fall-through (callers 自己決定 one-shot 行為)
   → 解鎖 user-land 寫 hydra / repeat-mode
-- mode-buffer 加 =local-keymap= slot + =lookup-key= 多一層
+- mode-buffer 加 =local-keymap= slot + =limn/mode:set-local-keymap= 設值：
+  + lookup 優先序高過 minors / major、低於 transient
+  + buffer-local、跨 mode activate/deactivate 不消失
+  + nil 清空 → 回歸正常 mode lookup
   → 解鎖 user-land 寫 =local-set-key=
 
 刻意 *不做* 的（這些是 user-land ergonomic 該自己長的 macro）：
@@ -1461,6 +1482,10 @@ C++ + container WM 設定為主。
 
 framework 提供 primitive、user 自己組生態系。對齊 vanilla Emacs C
 core + elisp 內建 keymap.el 的分工。
+
+測試：backend/tests/unit/keymap-v019.lisp 34 deftests、全綠。
+unit-tier 372/372、Qt-tier 1328 passed (5 pre-existing) / OS-tier
+40/40 batches 全綠、0 regression。
 
 *** v0.20 gap-buffer primitive ⏭ planned
 

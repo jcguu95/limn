@@ -10,10 +10,13 @@
 (defpackage #:limn/keys
   (:use #:cl)
   (:export #:make-keymap #:define-key #:lookup #:lookup-sequence
-           #:parse-key-spec #:keymap-p
+           #:parse-key-spec #:keymap-p #:keymap-parent
            #:invoke #:define-parent #:describe-bindings
            #:undefine-key
-           #:lookup-with-prefix))
+           #:lookup-with-prefix
+           ;; v0.19 β
+           #:*key-prefix* #:set-key-prefix
+           #:*transient-keymap* #:set-transient-map))
 
 (in-package #:limn/keys)
 
@@ -171,7 +174,90 @@
   (setf (keymap-parent child) parent))
 
 (defun describe-bindings (km)
-  "Returns alist ((key . action) ...) — top-level bindings only."
+  "Returns alist ((full-key-string . action) ...) — recursively walks
+   prefix sub-keymaps, producing flat space-separated keys like 'C-x f'.
+
+   v0.19 α: previously only top-level bindings appeared (sub-keymap
+   values leaked as keymap objects in cdr); now we recurse so user-
+   land which-key / discoverability can render the whole tree.
+
+   Own bindings only — parent-inherited bindings are NOT included
+   (caller can walk (keymap-parent km) manually if they want)."
+  (%describe-bindings-prefixed km ""))
+
+(defun %describe-bindings-prefixed (km prefix)
   (let ((out '()))
-    (maphash (lambda (k v) (push (cons k v) out)) (keymap-bindings km))
+    (maphash
+      (lambda (k v)
+        (let ((full (if (zerop (length prefix))
+                        k
+                        (format nil "~a ~a" prefix k))))
+          (cond
+            ((keymap-p v)
+             (setf out (nconc out (%describe-bindings-prefixed v full))))
+            (t (push (cons full v) out)))))
+      (keymap-bindings km))
     out))
+
+;;; ── v0.19 β: *key-prefix* + key-prefix-changed hook ──────────────────
+;;;
+;;; Promoted from limn::*key-prefix* (internal) to limn/keys:: (public).
+;;; User-land which-key implementations subscribe to event/key-prefix-
+;;; changed to render the current sequence + likely next keys.
+
+(defvar *key-prefix* '()
+  "The framework's accumulator while walking a multi-key sequence.
+   E.g. after the user presses C-x, this is ('C-x'); after C-x C-f
+   it'd be ('C-x' 'C-f'). Reset to () when a complete binding fires
+   or an unbound key terminates the sequence.
+
+   Read freely; WRITE via set-key-prefix so the change hook fires.")
+
+(defun set-key-prefix (new-value)
+  "Set *key-prefix*, firing event/key-prefix-changed if value actually
+   changed. Idempotent: re-setting to the current value is a no-op.
+
+   Hook receives a plist (:|old| OLD :|new| NEW)."
+  (let ((old *key-prefix*))
+    (unless (equal old new-value)
+      (setf *key-prefix* new-value)
+      (let ((run-hook (find-symbol "RUN-HOOK" :limn/hooks)))
+        (when run-hook
+          (funcall run-hook "event/key-prefix-changed"
+                   (list :|old| old :|new| new-value)))))))
+
+;;; ── v0.19 β: set-transient-map + *transient-keymap* ──────────────────
+;;;
+;;; Looked up FIRST by lookup-key (over local / minor / major / global).
+;;; Unlocks user-land hydra / repeat-mode without framework opinion on
+;;; how those features should work — they're just keymaps that fire,
+;;; and clearing is explicit via (set-transient-map nil) or implicit
+;;; via :on-exit you wire yourself.
+
+(defvar *transient-keymap* nil
+  "Currently-active transient keymap, or nil. Consulted before any
+   mode/local/global lookups when non-nil. SET via set-transient-map.")
+
+(defvar *transient-on-exit* nil
+  "Thunk to call when *transient-keymap* is replaced or cleared.
+   Captured at set-transient-map time; cleared after firing.")
+
+(defun set-transient-map (km &key on-exit)
+  "Install KM as the topmost keymap consulted by lookup. KM=nil clears.
+
+   :on-exit is a thunk called when this transient is either explicitly
+   cleared (via set-transient-map nil) or replaced by another (Emacs
+   convention — replacement counts as 'leaving' the previous one).
+
+   The transient does NOT auto-clear on bound/unbound keystrokes
+   by default — callers wanting that semantic can call (set-transient-
+   map nil) from their bound actions, or use :on-exit + an external
+   trigger (e.g. mode change)."
+  ;; Fire prev :on-exit BEFORE swapping, with the on-exit slot cleared
+  ;; so re-entry inside the thunk is safe.
+  (when *transient-on-exit*
+    (let ((fn *transient-on-exit*))
+      (setf *transient-on-exit* nil)
+      (funcall fn)))
+  (setf *transient-keymap*  km
+        *transient-on-exit* (and km on-exit)))
