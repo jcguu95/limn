@@ -289,11 +289,26 @@
         (funcall define-mode fund-sym :type :major :modeline "Fund"))
       (when (and define-mode mini-sym)
         (funcall define-mode mini-sym :type :major :modeline "Mini"))
-      ;; mupdf is the only engine right now; bind it to fundamental-mode
-      ;; for now (pdf-mode is a v0.9 user-init concept — adding bindings
-      ;; rather than a built-in mode keeps the runtime engine-agnostic).
+      ;; mupdf engine: v0.27 ships limn-pdf-mode as the default. If the
+      ;; pdf-mode module is loaded, its install function registers itself
+      ;; as engine-default-mode for "mupdf" (overrides our fundamental-mode
+      ;; fallback) and rebuilds its keymap idempotently. If not loaded,
+      ;; we keep the fundamental-mode fallback so the binary still works.
       (when (and reg-default fund-sym)
         (funcall reg-default "mupdf" fund-sym))
+      (let* ((pdf-pkg (find-package '#:limn/pdf-mode))
+             (pdf-install (and pdf-pkg (find-symbol "INSTALL" pdf-pkg))))
+        (when (and pdf-install (fboundp pdf-install))
+          (handler-case (funcall (symbol-function pdf-install))
+            (error (e)
+              (format *error-output*
+                      "limn: pdf-mode install failed: ~a~%" e)))))
+      ;; Same idea for text-mode (v0.22).
+      (let* ((tpkg (find-package '#:limn/text))
+             (tinstall (and tpkg (find-symbol "INSTALL" tpkg))))
+        (when (and tinstall (fboundp tinstall))
+          (handler-case (funcall (symbol-function tinstall))
+            (error () nil))))
       (when init-chrome (funcall init-chrome)))))
 
 (defun start (socket-path)

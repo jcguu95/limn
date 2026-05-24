@@ -135,6 +135,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "buffer/close")         { cmd_buffer_close        (id, msg); return; }
     if (cmd == "buffer/toc")           { cmd_buffer_toc          (id, msg); return; }
     if (cmd == "buffer/text")          { cmd_buffer_text         (id, msg); return; }
+    if (cmd == "buffer/search")        { cmd_buffer_search       (id, msg); return; }
     if (cmd == "buffer/links")         { cmd_buffer_links        (id, msg); return; }
     if (cmd == "buffer/metadata")      { cmd_buffer_metadata     (id, msg); return; }
     if (cmd == "buffer/render")        { cmd_buffer_render       (id, msg); return; }
@@ -2123,6 +2124,25 @@ void LimnCommand::cmd_buffer_links(const QString& id, const QJsonObject& msg) {
     const int page = msg.value("page").toInt();
     try {
         bridge->send_ok_array(id, LimnMupdf::extract_page_links(doc, page));
+    } catch (const std::exception& e) {
+        bridge->send_fail(id, QString::fromUtf8(e.what()));
+    }
+}
+
+// v0.27 §B: full-document text search.
+//
+// Wire shape:
+//   { cmd:"buffer/search", buffer-id, query, case-sensitive }
+//   →  { ok:true, data:{ hits:[ {page:N, rects:[[x0,y0,x1,y1],...]}, ... ] } }
+//
+// Empty query returns hits:[]. Missing buffer-id / unknown buffer → ok:false.
+void LimnCommand::cmd_buffer_search(const QString& id, const QJsonObject& msg) {
+    Document* doc = resolve_buffer(bridge, registry, id, msg);
+    if (!doc) return;
+    const QString query = msg.value("query").toString();
+    const bool case_sensitive = msg.value("case-sensitive").toBool();
+    try {
+        bridge->send_ok(id, LimnMupdf::extract_search_hits(doc, query, case_sensitive));
     } catch (const std::exception& e) {
         bridge->send_fail(id, QString::fromUtf8(e.what()));
     }
