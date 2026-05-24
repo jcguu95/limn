@@ -16,7 +16,9 @@
            #:lookup-with-prefix
            ;; v0.19 β
            #:*key-prefix* #:set-key-prefix
-           #:*transient-keymap* #:set-transient-map))
+           #:*transient-keymap* #:set-transient-map
+           ;; v0.28 — leader key + leader keymap
+           #:*leader-key* #:*leader-keymap*))
 
 (in-package #:limn/keys)
 
@@ -241,6 +243,24 @@
 (defvar *transient-on-exit* nil
   "Thunk to call when *transient-keymap* is replaced or cleared.
    Captured at set-transient-map time; cleared after firing.")
+
+;;; ── v0.28 — leader key + leader keymap ───────────────────────────────
+;;;
+;;; *leader-key* names the key (Emacs-spec string, default "SPC") that
+;;; introduces a dispatch through *leader-keymap*.  v0.28 map! macro's
+;;; :leader option binds into *leader-keymap*; runtime dispatch (callers
+;;; like the keystroke handler in repl.lisp) consults it when the leader
+;;; key is pressed outside the minibuffer.
+;;;
+;;; The defvar guards preserve user overrides across reloads.
+
+(defvar *leader-key* "SPC"
+  "Key spec that opens *leader-keymap* dispatch.  Default \"SPC\" (Doom).
+   Set via (setf limn/keys:*leader-key* ...).")
+
+(defvar *leader-keymap* (make-keymap)
+  "Global keymap consulted when *leader-key* is pressed.  Populated by
+   user-land via (map! :leader ...) and friends.")
 
 (defun set-transient-map (km &key on-exit)
   "Install KM as the topmost keymap consulted by lookup. KM=nil clears.
