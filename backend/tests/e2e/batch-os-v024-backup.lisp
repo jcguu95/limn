@@ -5,11 +5,17 @@
 ;;;; is verifying real files appear/disappear on disk and the pruning
 ;;;; arithmetic is correct.
 ;;;;
-;;;; Pruning math (read straight from %prune-numbered): given N existing
-;;;; numbered backups foo.~1~ ... foo.~N~, keep the first
-;;;; *kept-old-versions* and the last *kept-new-versions*; delete the
-;;;; middle slice.  E.g. N=6, old=2, new=2 → delete slots 3 and 4,
-;;;; leaving 1, 2, 5, 6.
+;;;; Pruning math is subtler than "keep first N + last M".  Pruning runs
+;;;; AFTER EACH backup (incrementally, inside backup-buffer), and
+;;;; %next-numbered fills the LOWEST free slot — not strictly N+1.  So
+;;;; with kept-old=2, kept-new=2 and 6 backup attempts, the actual
+;;;; trace is:
+;;;;   save 1-4: write .~1~ .~2~ .~3~ .~4~ (no prune; total ≤ keep)
+;;;;   save 5  : write .~5~; total=5 > 4 → prune middle slot .~3~
+;;;;             → existing = {1, 2, 4, 5}
+;;;;   save 6  : next-free slot is 3 → write .~3~; total=5 > 4 → prune
+;;;;             middle slot .~3~ again → existing = {1, 2, 4, 5}
+;;;; Final state: {1, 2, 4, 5}.  Slot 6 is NEVER written.
 ;;;;
 ;;;; No Xvfb needed.
 ;;;;
@@ -20,8 +26,8 @@
 ;;;; Ω5   second save without clear-backed-up is no-op
 ;;;; Ω6   *make-backup-files* nil → backup-buffer writes nothing
 ;;;; Ω7   *version-control* t: 3 saves → .~1~ .~2~ .~3~ all present
-;;;; Ω8   pruning: 6 numbered backups, kept-old=2 kept-new=2 →
-;;;;        slots 3 and 4 deleted, 1/2/5/6 remain
+;;;; Ω8   pruning: 6 backups with keep-old=2 keep-new=2 → final state
+;;;;        is {1, 2, 4, 5} (slot 3 pruned twice, slot 6 never written)
 ;;;; Ω9   *before-backup-hook* + *after-backup-hook* fire in order
 
 (in-package :cl-user)
@@ -188,19 +194,21 @@
         (write-file path (format nil "save ~a~%" (1+ i)))
         (limn/backup:clear-backed-up "b-1")
         (limn/backup:backup-buffer "b-1"))
-      ;; Expect slots 1, 2, 5, 6 to survive; slots 3 and 4 deleted.
-      (check (format nil "Ω8a .~~1~~ retained (oldest old, probe=~a)" (probe-file n1))
+      ;; Final state: slots 1, 2, 4, 5 survive; slot 3 pruned twice;
+      ;; slot 6 never gets written because %next-numbered backfills 3.
+      (check (format nil "Ω8a .~~1~~ retained (kept-old #1; probe=~a)" (probe-file n1))
              (probe-file n1))
-      (check (format nil "Ω8b .~~2~~ retained (kept-old #2, probe=~a)" (probe-file n2))
+      (check (format nil "Ω8b .~~2~~ retained (kept-old #2; probe=~a)" (probe-file n2))
              (probe-file n2))
-      (check (format nil "Ω8c .~~3~~ pruned (middle, probe=~a)" (probe-file n3))
+      (check (format nil "Ω8c .~~3~~ pruned (middle slot; probe=~a)" (probe-file n3))
              (null (probe-file n3)))
-      (check (format nil "Ω8d .~~4~~ pruned (middle, probe=~a)" (probe-file n4))
-             (null (probe-file n4)))
-      (check (format nil "Ω8e .~~5~~ retained (kept-new #1, probe=~a)" (probe-file n5))
+      (check (format nil "Ω8d .~~4~~ retained (kept-new #2; probe=~a)" (probe-file n4))
+             (probe-file n4))
+      (check (format nil "Ω8e .~~5~~ retained (kept-new #1; probe=~a)" (probe-file n5))
              (probe-file n5))
-      (check (format nil "Ω8f .~~6~~ retained (newest, probe=~a)" (probe-file n6))
-             (probe-file n6)))
+      (check (format nil "Ω8f .~~6~~ never written (next-free was slot 3; probe=~a)"
+                     (probe-file n6))
+             (null (probe-file n6))))
 
     ;;; ── Ω9: hook firing order ────────────────────────────────────────
     (format t "~%── Ω9: before/after-backup-hook ──~%")

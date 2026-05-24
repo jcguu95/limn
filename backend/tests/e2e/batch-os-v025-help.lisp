@@ -89,7 +89,7 @@
   (let ((out (limn/help:describe-function 'v025-help-fixture-documented)))
     (check (format nil "Ω1a output contains fn name (out=~s)"
                    (subseq out 0 (min 60 (length out))))
-           (search "v025-help-fixture-documented" out))
+           (search "v025-help-fixture-documented" (string-downcase out)))
     (check "Ω1b output contains the doc string"
            (search "Doubles X" out)))
 
@@ -114,7 +114,7 @@
   (format t "~%── Ω4: describe-variable ──~%")
   (let ((out (limn/help:describe-variable '*v025-help-fixture-var*)))
     (check "Ω4a output contains var name"
-           (search "v025-help-fixture-var" out))
+           (search "v025-help-fixture-var" (string-downcase out)))
     (check (format nil "Ω4b output contains value 42 (out=~s)"
                    (subseq out 0 (min 80 (length out))))
            (search "42" out))
@@ -191,7 +191,7 @@
   (let ((stored (limn/help:help-buffer-contents)))
     (check "Ω11 help-buffer-contents has the most recent describe output"
            (and (stringp stored)
-                (search "v025-help-fixture-var" stored))))
+                (search "v025-help-fixture-var" (string-downcase stored)))))
 
   (ignore-errors (limn:stop))
   (sleep 0.1)

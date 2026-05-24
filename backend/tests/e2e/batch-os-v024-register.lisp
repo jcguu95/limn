@@ -132,8 +132,10 @@
       ;; "Hello world from buf-A" — substring [6, 11) = "world"
       (limn/register:copy-to-register #\c 6 11 a)
       (let ((v (limn/register:get-register #\c)))
-        (check (format nil "Ω3 register has (string \"world\") (got ~s)" v)
-               (equal v '(string "world"))))
+        ;; copy-to-register uses (cons 'string text) — a dotted pair,
+        ;; NOT (list 'string text).  So the value is (STRING . "world").
+        (check (format nil "Ω3 register has (string . \"world\") cons (got ~s)" v)
+               (equal v (cons 'string "world"))))
 
       ;;; ── Ω4: insert-register cross-buffer ─────────────────────────────
       (format t "~%── Ω4: insert-register into buf-B ──~%")
@@ -164,8 +166,12 @@
       (format t "~%── Ω7: window-config stub ──~%")
       (limn/register:window-configuration-to-register #\w)
       (let ((v (limn/register:get-register #\w)))
+        ;; The 'window-config symbol is interned in limn/register's
+        ;; package — compare by name across packages.
         (check (format nil "Ω7a window-config entry has type tag (got ~s)" v)
-               (and (consp v) (eq (car v) 'window-config))))
+               (and (consp v)
+                    (symbolp (car v))
+                    (string-equal (symbol-name (car v)) "WINDOW-CONFIG"))))
       ;; jump to window-config is a documented no-op in v0.24.
       (limn:call "buffer/cursor-set" :|buffer-id| a :|offset| 9)
       (limn/register:jump-to-register #\w)
