@@ -17,6 +17,10 @@
            #:*buffer-insert-fn*
            #:*buffer-delete-fn*
            #:*kill-new-fn*
+           ;; v0.31 §A — syntax-table vtable + helpers
+           #:*syntax-table-fn*
+           #:skip-syntax-forward
+           #:skip-syntax-backward
            #:next-line #:previous-line
            #:move-beginning-of-line #:move-end-of-line
            #:forward-word #:backward-word
@@ -43,6 +47,11 @@
 (defvar *buffer-delete-fn*     (lambda (bid from to) (declare (ignore bid from to))))
 (defvar *kill-new-fn*          (lambda (str) (declare (ignore str))))
 
+;; v0.31 §A — syntax table vtable
+(defvar *syntax-table-fn* nil
+  "When non-nil, (syntax-table-fn BUF-ID) → syntax-table object for that buffer.
+   nil = no syntax table, fall back to %word-char-p defaults.")
+
 (defun %text   (bid)         (funcall *buffer-text-fn*       bid))
 (defun %cursor (bid)         (funcall *buffer-cursor-fn*     bid))
 (defun %scur   (bid off)     (funcall *buffer-set-cursor-fn* bid off))
@@ -53,10 +62,30 @@
 ;;; ── helpers ───────────────────────────────────────────────────────────────
 
 (defun %word-char-p (c)
-  "Word char: alphanumeric, underscore, or non-ASCII (CJK etc. count as word)."
+  "Legacy word char predicate (used when no syntax table is wired):
+   alphanumeric, underscore, or non-ASCII."
   (or (alphanumericp c)
       (char= c #\_)
       (> (char-code c) 127)))
+
+(defun %get-syntax-table (bid)
+  "Return syntax table for BID by calling *syntax-table-fn*, or nil."
+  (when *syntax-table-fn*
+    (funcall *syntax-table-fn* bid)))
+
+(defun %char-syntax-class (c table)
+  "Return syntax class for C.  When TABLE is non-nil and limn/syntax is
+   loaded, delegates to limn/syntax:char-syntax.  Otherwise uses legacy rules."
+  (if (and table (find-package '#:limn/syntax))
+      (funcall (symbol-function (find-symbol "CHAR-SYNTAX" '#:limn/syntax))
+               c table)
+      ;; legacy fallback — matches old %word-char-p :word/:other convention
+      (if (%word-char-p c) :word :punct)))
+
+(defun %word-or-symbol-p (c table)
+  "True if C's syntax class in TABLE is :word or :symbol."
+  (let ((cls (%char-syntax-class c table)))
+    (or (eq cls :word) (eq cls :symbol))))
 
 (defun %line-start (text pos)
   "Offset of the first char on the line containing POS."
@@ -131,20 +160,76 @@
 
 (defun forward-word (bid)
   (setf *goal-column* nil)
-  (let* ((text (%text bid))
-         (len  (length text))
-         (p    (%cursor bid)))
-    ;; Skip leading non-word, then word chars.
-    (loop while (and (< p len) (not (%word-char-p (char text p)))) do (incf p))
-    (loop while (and (< p len)      (%word-char-p (char text p)))  do (incf p))
+  (let* ((text  (%text bid))
+         (len   (length text))
+         (table (%get-syntax-table bid))
+         (p     (%cursor bid)))
+    (loop while (and (< p len)
+                     (not (%word-or-symbol-p (char text p) table)))
+          do (incf p))
+    (loop while (and (< p len)
+                     (%word-or-symbol-p (char text p) table))
+          do (incf p))
     (%scur bid p)))
 
 (defun backward-word (bid)
   (setf *goal-column* nil)
-  (let* ((text (%text bid))
-         (p    (%cursor bid)))
-    (loop while (and (> p 0) (not (%word-char-p (char text (1- p))))) do (decf p))
-    (loop while (and (> p 0)      (%word-char-p (char text (1- p))))  do (decf p))
+  (let* ((text  (%text bid))
+         (table (%get-syntax-table bid))
+         (p     (%cursor bid)))
+    (loop while (and (> p 0)
+                     (not (%word-or-symbol-p (char text (1- p)) table)))
+          do (decf p))
+    (loop while (and (> p 0)
+                     (%word-or-symbol-p (char text (1- p)) table))
+          do (decf p))
+    (%scur bid p)))
+
+;;; ── skip-syntax-forward / backward (v0.31 §A) ───────────────────────────
+
+(defun %class-str-to-keywords (class-str)
+  "Parse a syntax class string into a list of keyword symbols.
+   \"w\" → :word  \"_\" → :symbol  \"-\" → :whitespace
+   \"(\" → :open  \")\" → :close   \"\\\"\" → :string
+   \"\\\\ \" → :escape  \".\" → :punct  \"<\" → :comment-start
+   \">\" → :comment-end"
+  (loop for c across class-str
+        for kw = (case c
+                   (#\w :word)
+                   (#\_ :symbol)
+                   (#\- :whitespace)
+                   (#\( :open)
+                   (#\) :close)
+                   (#\" :string)
+                   (#\\ :escape)
+                   (#\. :punct)
+                   (#\< :comment-start)
+                   (#\> :comment-end))
+        when kw collect kw))
+
+(defun skip-syntax-forward (class-str bid)
+  "Move cursor forward past consecutive chars whose syntax is in CLASS-STR."
+  (setf *goal-column* nil)
+  (let* ((text    (%text bid))
+         (len     (length text))
+         (table   (%get-syntax-table bid))
+         (classes (%class-str-to-keywords class-str))
+         (p       (%cursor bid)))
+    (loop while (and (< p len)
+                     (member (%char-syntax-class (char text p) table) classes))
+          do (incf p))
+    (%scur bid p)))
+
+(defun skip-syntax-backward (class-str bid)
+  "Move cursor backward past consecutive chars whose syntax is in CLASS-STR."
+  (setf *goal-column* nil)
+  (let* ((text    (%text bid))
+         (table   (%get-syntax-table bid))
+         (classes (%class-str-to-keywords class-str))
+         (p       (%cursor bid)))
+    (loop while (and (> p 0)
+                     (member (%char-syntax-class (char text (1- p)) table) classes))
+          do (decf p))
     (%scur bid p)))
 
 ;;; ── RET / DEL / C-d ─────────────────────────────────────────────────────
@@ -181,13 +266,18 @@
   "Kill from cursor to end of next word (including any preceding non-word
    chars).  No-op at end-of-buffer."
   (setf *goal-column* nil)
-  (let* ((text (%text bid))
-         (cur  (%cursor bid))
-         (len  (length text)))
+  (let* ((text  (%text bid))
+         (cur   (%cursor bid))
+         (len   (length text))
+         (table (%get-syntax-table bid)))
     (when (< cur len)
       (let ((p cur))
-        (loop while (and (< p len) (not (%word-char-p (char text p)))) do (incf p))
-        (loop while (and (< p len)      (%word-char-p (char text p)))  do (incf p))
+        (loop while (and (< p len)
+                         (not (%word-or-symbol-p (char text p) table)))
+              do (incf p))
+        (loop while (and (< p len)
+                         (%word-or-symbol-p (char text p) table))
+              do (incf p))
         (when (> p cur)
           (let ((killed (subseq text cur p)))
             (%kill killed)
