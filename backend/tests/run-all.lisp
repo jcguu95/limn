@@ -75,7 +75,9 @@
                  ;; v0.27 pdf-mode
                  "suites/pdf-mode-v027.lisp"
                  ;; v0.30 markers + buffer-local (wire round-trip)
-                 "suites/marker-v030.lisp"))
+                 "suites/marker-v030.lisp"
+                 ;; v0.32 current-buffer / save-excursion / narrow
+                 "suites/excursion-v032.lisp"))
   (let ((path (rel suite)))
     (format t "[loading] ~a~%" suite)
     (handler-case (load path)
