@@ -1,4 +1,4 @@
-;;;; limn-file — find-file / save-buffer / revert-buffer + hooks (v0.24 §E).
+;;;; limn-file — find-file / save-buffer / revert-buffer + hooks (v0.24 §E, v0.31 §B).
 ;;;;
 ;;;; This module wraps v0.22's basic file open/save with the hook chain
 ;;;; (find-file-hook / before-save-hook / after-save-hook /
@@ -141,11 +141,14 @@
         (progn
           (unless (funcall *file-exists-p-fn* abs)
             (error "limn/file: file does not exist: ~s" abs))
-          (let* ((kind (file-type abs))
-                 (id   (%fresh-id))
+          (let* ((kind  (file-type abs))
+                 (id    (%fresh-id))
+                 (raw   (if (eq kind :pdf)
+                            nil
+                            (funcall *read-file-fn* abs)))
                  (content (if (eq kind :pdf)
                               ""
-                              (or (funcall *read-file-fn* abs) ""))))
+                              (%decode-file-content raw abs id))))
             (when (eq kind :pdf)
               (handler-case (funcall *engine-load-fn* abs id)
                 (error () nil)))
@@ -156,6 +159,40 @@
                     (gethash abs *by-path*) id))
             (%run-hooks-safely *find-file-hook* id abs)
             id)))))
+
+(defun %decode-file-content (raw abs buf-id)
+  "If limn/coding is available and RAW is a byte vector, detect coding
+   and decode to string.  Otherwise return raw as-is (string fallback)."
+  (let ((cod-pkg (find-package '#:limn/coding)))
+    (cond
+      ;; Byte vector + coding available → full detection path
+      ;; (stringp check needed: strings are vectors in CL, (vectorp "x") = T)
+      ((and cod-pkg (typep raw '(vector (unsigned-byte 8))))
+       (let* ((detect-fn (symbol-function (find-symbol "DETECT-CODING-SYSTEM" cod-pkg)))
+              (decode-fn (symbol-function (find-symbol "DECODE-CODING-STRING" cod-pkg)))
+              (set-fn    (symbol-function (find-symbol "SET-BUFFER-FILE-CODING-SYSTEM" cod-pkg)))
+              (cs        (funcall detect-fn raw abs))
+              (text      (funcall decode-fn raw cs)))
+         (funcall set-fn buf-id cs)
+         text))
+      ;; String (old path, no coding needed)
+      (t (or raw "")))))
+
+(defun %encode-buffer-content (content buf-id)
+  "If limn/coding is available and the buffer has a coding system,
+   encode CONTENT to bytes.  Otherwise return CONTENT (string) unchanged."
+  (let ((cod-pkg   (find-package '#:limn/coding))
+        (local-pkg (find-package '#:limn/local)))
+    (if (and cod-pkg local-pkg)
+        (let* ((bcfs-sym (find-symbol "*BUFFER-FILE-CODING-SYSTEM*" cod-pkg))
+               (get-fn   (find-symbol "BUFFER-LOCAL-VALUE" local-pkg))
+               (cs (when (and bcfs-sym get-fn)
+                     (funcall (symbol-function get-fn) bcfs-sym buf-id))))
+          (if cs
+              (funcall (symbol-function (find-symbol "ENCODE-CODING-STRING" cod-pkg))
+                       content cs)
+              content))
+        content)))
 
 (defun save-buffer (buf-id &optional path)
   "Save the buffer's contents to PATH (or its visited-file-name when
@@ -170,13 +207,15 @@
     ;; before-save hooks: errors propagate (cancels save)
     (dolist (h *before-save-hook*)
       (funcall h buf-id))
-    (let ((content (fbuf-content b)))
-      (when (and *require-final-newline*
-                 (or (zerop (length content))
-                     (not (char= (char content (1- (length content)))
-                                 #\newline))))
-        (setf content (concatenate 'string content (string #\newline))))
-      (funcall *write-file-fn* target content))
+    (let* ((raw-content (fbuf-content b))
+           (content (if (and *require-final-newline*
+                             (or (zerop (length raw-content))
+                                 (not (char= (char raw-content (1- (length raw-content)))
+                                             #\newline))))
+                        (concatenate 'string raw-content (string #\newline))
+                        raw-content))
+           (payload (%encode-buffer-content content buf-id)))
+      (funcall *write-file-fn* target payload))
     (setf (fbuf-modified-p b) nil)
     (unless (equal target (fbuf-path b))
       (setf (gethash (fbuf-path b) *by-path*) nil
