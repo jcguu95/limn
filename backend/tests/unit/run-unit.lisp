@@ -36,7 +36,8 @@
                 "limn-mode.lisp"
                 "limn-cmd.lisp"
                 "limn-runtime.lisp"
-                "limn-introspect.lisp"))
+                "limn-introspect.lisp"
+                "limn-text-mode.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -47,6 +48,7 @@
 (dolist (file '("bridge-client.lisp"
                 "keymap.lisp"
                 "keymap-v019.lisp"
+                "text-mode-v022.lisp"
                 "undo.lisp"
                 "hooks.lisp"
                 "buffer-registry.lisp"
