@@ -74,7 +74,10 @@
                 ;; v0.28 modules
                 "limn-text-nav.lisp"
                 "limn-map-macro.lisp"
-                "limn-which-key.lisp"))
+                "limn-which-key.lisp"
+                ;; v0.30 modules
+                "limn-marker.lisp"
+                "limn-local.lisp"))
   (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
                                          *unit-dir*))))
     (format t "[loading impl] ~a~%" impl)
@@ -124,12 +127,15 @@
                 ;; v0.26 RED tests — expected to fail until impl lands
                 "isearch-v026.lisp"
                 "occur-v026.lisp"
-                ;; v0.27 RED tests — expected to fail until limn-pdf-mode lands
+                ;; v0.27 tests
                 "pdf-mode-v027.lisp"
-                ;; v0.28 RED tests — expected to fail until impl lands
+                ;; v0.28 tests
                 "text-nav-v028.lisp"
                 "map-macro-v028.lisp"
-                "which-key-v028.lisp"))
+                "which-key-v028.lisp"
+                ;; v0.30 tests
+                "markers-v030.lisp"
+                "buffer-local-v030.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
