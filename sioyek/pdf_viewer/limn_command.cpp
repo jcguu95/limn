@@ -2134,6 +2134,19 @@ void LimnCommand::emit_buffer_opened(const QString& buffer_id, Document* doc,
     ev.insert("buffer-id",  buffer_id);
     ev.insert("engine",     engine);
     ev.insert("page-count", doc ? doc->num_pages() : 0);
+    // v0.37 Phase F: include the source path so Lisp hooks
+    // (pdf-mode-on-buffer-opened, which loads sidecar annotations +
+    // restores last-position) can look up the right sidecar without a
+    // synchronous round-trip.  For mupdf buffers, use doc->get_path();
+    // for text-engine buffers, check buffer_paths (set by buffer/load-file).
+    // Either may be empty — Lisp side already guards `(when path ...)`.
+    QString path;
+    if (doc) {
+        path = doc->get_path();
+    } else if (buffer_paths.contains(buffer_id)) {
+        path = buffer_paths.value(buffer_id);
+    }
+    ev.insert("path", path);
     bridge->push_event("buffer-opened", ev);
 }
 
