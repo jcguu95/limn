@@ -44,7 +44,7 @@
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-uf"))
 
 ;; G1 + G2 both want the demo init.lisp pre-loaded.
-(sb-posix:setenv "LIMN_INIT" (b/ "init.lisp.example") 1)
+(sb-posix:setenv "LIMN_INIT" (b/ "tests/e2e/demo-init.lisp") 1)
 
 (load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 

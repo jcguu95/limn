@@ -26,12 +26,7 @@
     (dolist (f (ignore-errors (directory (merge-pathnames "*.lisp" dir))))
       (ignore-errors (delete-file f)))))
 
-(dolist (f '("limn-hooks.lisp" "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp"  "limn-undo.lisp"   "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp"  "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -122,9 +117,9 @@
 ;;; ── Ω4: 第一次 annotate 時 sidecar 目錄自動建 ──────────────
 
     (format t "~%── Ω4: ~~/.limn/annotations/ 自動建立 ──~%")
-    (limn:call "view/selection-set"
-                :|win-id| "w1" :|page| 0
-                :|rects| (list (list 0.1 0.2 0.5 0.25)))
+    (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.25))
     (sleep 0.1)
     (key "h") (sleep 0.3)
     (let* ((dir (merge-pathnames ".limn/annotations/" (user-homedir-pathname))))

@@ -50,7 +50,7 @@
   (unless ok (push msg *failures*)))
 
 ;; Load demo init.lisp so K3 has demo bindings to inspect.
-(sb-posix:setenv "LIMN_INIT" (b/ "init.lisp.example") 1)
+(sb-posix:setenv "LIMN_INIT" (b/ "tests/e2e/demo-init.lisp") 1)
 
 (let* ((sock (format nil "/tmp/limn-e2e-lrt-~a" (sb-posix:getpid)))
        (limn-bin (or (sb-posix:getenv "LIMN_BIN") "/limn/sioyek/limn"))

@@ -32,7 +32,7 @@
 ;; Use the demo init.lisp as the user's init file.
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-os"))
-(sb-posix:setenv "LIMN_INIT" (b/ "init.lisp.example") 1)
+(sb-posix:setenv "LIMN_INIT" (b/ "tests/e2e/demo-init.lisp") 1)
 
 (load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 

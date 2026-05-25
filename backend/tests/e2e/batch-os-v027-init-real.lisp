@@ -83,8 +83,9 @@
        (proc (start-session sock "/tmp/limn-os-v027ir1.log")))
   (let ((b (engine-load *fixture*)))
     (when b
-      (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                  :|rects| (list (list 0.1 0.2 0.5 0.25)))
+      (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.25))
       (sleep 0.1)
       (key "h") (sleep 0.3)
       ;; Read back the sidecar; color should be #ff00ff

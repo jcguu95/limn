@@ -51,7 +51,7 @@
         do (sleep 0.1)))
 
 (defun overlays-of ()
-  (let ((r (limn:call "view/overlays-get" :|win-id| "w1")))
+  (let ((r (limn:call "view/get" :|win-id| "w1")))
     (when (ok? r) (or (getf (data r) :|overlays|) '()))))
 
 (defun list-sidecars ()
@@ -93,8 +93,9 @@
 ;;; ── Ω1: cp copy-a copy-b → 兩 path 看到同 annotation ────────
 
     (format t "~%── Ω1: cp 後同 annotation ──~%")
-    (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                :|rects| (list (list 0.1 0.2 0.5 0.25)))
+    (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.25))
     (sleep 0.1)
     (key "h") (sleep 0.3)
     (let ((n1 (length (list-sidecars))))
@@ -135,8 +136,9 @@
     (let ((bc (engine-load cjk)))
       (check (format nil "Ω3a — CJK 檔名載入 ok (~a)" bc) (stringp bc))
       (when bc
-        (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                    :|rects| (list (list 0.1 0.3 0.5 0.35)))
+        (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.3)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.35))
         (sleep 0.1)
         (key "h") (sleep 0.3)
         (limn:call "buffer/close" :|buffer-id| bc) (sleep 0.2)
