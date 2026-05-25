@@ -780,12 +780,17 @@
 ;;; ═════════════════════════════════════════════════════════════════════
 
 (defun limn/pdf-mode::%current-pdf-path ()
-  "Get :path of the focused PDF buffer (for sidecar key)."
-  (let* ((bid (limn/pdf-mode::%focused-buffer-id))
-         (r (and bid (limn/pdf-mode::%limn-call "buffer/state"
-                                                  :|buffer-id| bid)))
-         (d (and r (limn/pdf-mode::%response-data r))))
-    (and d (getf d :|path|))))
+  "Get :path of the focused PDF buffer (for sidecar key).
+   v0.37 Phase F: the original implementation called the wire command
+   buffer/state — which doesn't exist in the C++ bridge, so it always
+   returned NIL.  %add-annotation fell back to \"/tmp/unknown.pdf\",
+   so the sidecar got keyed on that fake path and never matched the
+   real file's content-hash key on reload (v027-annotate Ω3 / v027-
+   content-move / v027-workflow Ω10 all hit this).  Use the
+   *buffer-id-to-path* cache populated by pdf-mode-on-buffer-opened
+   (which now receives the real path from emit_buffer_opened)."
+  (let ((bid (limn/pdf-mode::%focused-buffer-id)))
+    (and bid (gethash bid limn/pdf-mode::*buffer-id-to-path*))))
 
 (defun limn/pdf-mode::%selection ()
   "Get the current selection as a (:|page| P :|rects| ((x1 y1 x2 y2)))
@@ -1029,7 +1034,8 @@
 (defun limn/pdf-mode:pdf-mode-on-buffer-opened (&key buffer-id path engine)
   "Called when a buffer is opened. For mupdf buffers: load sidecar
    annotations, restore last-position, update modeline."
-  (when (and (stringp engine) (string= engine "mupdf") path)
+  (when (and (stringp engine) (string= engine "mupdf") path
+             (plusp (length path)))
     ;; Track buffer-id → path so buffer-closed can save last-position
     (when buffer-id
       (setf (gethash buffer-id limn/pdf-mode::*buffer-id-to-path*) path))
