@@ -628,6 +628,24 @@
         (assert-true (%mock-call-of "view/overlays")
                      "isearch-quit 應送 view/overlays 清空")))))
 
+(deftest v027-b-view-overlays-uses-layers-arg
+  "v0.37 Phase F regression: view/overlays wire call MUST send the
+   layers array under the :|layers| key, not :|overlays|.  The C++
+   side reads msg.value(\"layers\") and silently treats a missing key
+   as 'clear all overlays' — which is exactly what happened before
+   this fix: sidecars saved correctly but no rect appeared on screen,
+   and any subsequent view/get returned overlays=[]."
+  (with-mock-bridge ()
+    (let ((r (%call-cmd "PDF-ISEARCH-QUIT")))
+      (unless (eq r :missing)
+        (let* ((args (%mock-call-of "view/overlays"))
+               (layers-pos (position :|layers| args))
+               (overlays-pos (position :|overlays| args)))
+          (assert-true layers-pos
+                       "view/overlays kwargs must include :|layers|")
+          (assert-true (null overlays-pos)
+                       "view/overlays kwargs must NOT use :|overlays|"))))))
+
 (deftest v027-b-current-hit-higher-opacity
   "overlay 中 current hit 的 opacity > others。"
   (let* ((pkg (find-package '#:limn/pdf-mode))

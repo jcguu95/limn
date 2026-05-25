@@ -37,7 +37,9 @@
            #:use-region-p
            #:*motion-commands*
            #:*edit-commands*
-           #:note-command))
+           #:note-command
+           ;; v0.37 Phase F — auto-deactivate on buffer-modified
+           #:install-auto-deactivate-handler))
 
 (in-package #:limn/mark)
 
@@ -312,3 +314,45 @@
       ((find cmd-name *edit-commands* :test #'%cmd-sym=)
        (deactivate-mark buf-id))
       (t t))))
+
+;;; ── v0.37 Phase F: buffer-modified → deactivate-mark ─────────────────
+;;;
+;;; In real Emacs the dispatch loop calls (note-command sym buf) after
+;;; every command, classifying self-insert / yank / delete-char as
+;;; *edit-commands* and dropping the region.  Limn's keymap dispatch
+;;; doesn't call note-command for text-widget input (xdotool type, IME
+;;; commit, paste, anything where the QPlainTextEdit handles the
+;;; keystroke directly), so the region used to stick around through
+;;; arbitrary edits — and the v033b-edit-during-active-region test
+;;; reports "mark auto-deactivated after key (active=T)" instead of
+;;; the expected NIL.
+;;;
+;;; Hook buffer-modified directly: any insert / delete on a buffer
+;;; with an active mark and transient-mark-mode on → deactivate.  This
+;;; mirrors the *edit-commands* classification exactly; it just
+;;; bypasses the dispatch-layer indirection for edits that never went
+;;; through it.  Idempotent — multiple calls install once.
+
+(defvar *auto-deactivate-installed* nil)
+
+(defun install-auto-deactivate-handler ()
+  "Subscribe to event/buffer-modified so any edit on a buffer with an
+   active region drops the mark (Emacs transient-mark-mode semantics).
+   Idempotent; safe to call from %bootstrap-runtime on every START."
+  (unless *auto-deactivate-installed*
+    (let ((hooks (find-package '#:limn/hooks)))
+      (when hooks
+        (let ((add (find-symbol "ADD-HOOK" hooks)))
+          (when add
+            (funcall add "event/buffer-modified"
+                     (lambda (ev)
+                       (let ((bid (or (getf ev :|buffer-id|)
+                                      (getf ev :buf-id)
+                                      (getf ev :|buf-id|)
+                                      (getf ev :buffer-id))))
+                         (when (and bid
+                                    *transient-mark-mode*
+                                    (mark-active-p bid))
+                           (deactivate-mark bid)))))
+            (setf *auto-deactivate-installed* t))))))
+  t)

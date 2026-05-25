@@ -320,6 +320,20 @@
             (error (e)
               (format *error-output*
                       "limn: marker handler install failed: ~a~%" e)))))
+      ;; v0.37 Phase F: wire buffer-modified → deactivate-mark so the
+      ;; region drops automatically when text-widget input edits the
+      ;; buffer (xdotool type, IME commit, paste — anything that
+      ;; bypasses the dispatch layer's note-command callback).
+      ;; Idempotent; harmless if limn/mark isn't loaded.
+      (let* ((mkpkg (find-package '#:limn/mark))
+             (mkinstall (and mkpkg
+                             (find-symbol "INSTALL-AUTO-DEACTIVATE-HANDLER"
+                                          mkpkg))))
+        (when (and mkinstall (fboundp mkinstall))
+          (handler-case (funcall (symbol-function mkinstall))
+            (error (e)
+              (format *error-output*
+                      "limn: mark auto-deactivate install failed: ~a~%" e)))))
       ;; v0.36: wire indent + query-replace vtables to live wire commands.
       (dolist (pkg-name '(#:limn/indent #:limn/query-replace))
         (let* ((pkg (find-package pkg-name))

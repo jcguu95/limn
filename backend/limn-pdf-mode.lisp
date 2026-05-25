@@ -262,7 +262,7 @@
 (defun pdf-search-reset ()
   "Clear *pdf-search-state* and emit empty overlays."
   (setf *pdf-search-state* nil)
-  (%limn-call "view/overlays" :|win-id| "w1" :|overlays| '()))
+  (%limn-call "view/overlays" :|win-id| "w1" :|layers| '()))
 
 (defun pdf-search-advance (state)
   "Move current-index forward (wrap). Safe on empty/nil hits."
@@ -510,7 +510,7 @@
 (defun %refresh-overlays (path anns)
   (declare (ignore path))
   (%limn-call "view/overlays" :|win-id| "w1"
-               :|overlays| (pdf-annotations-overlay-payload anns)))
+               :|layers| (pdf-annotations-overlay-payload anns)))
 
 (defun pdf-annotations-export-org (anns path)
   "Format ANNS as an org-mode document."
@@ -692,7 +692,7 @@
           (when state
             (limn/pdf-mode::%limn-call
              "view/overlays" :|win-id| "w1"
-             :|overlays| (limn/pdf-mode:pdf-search-overlay-payload state))
+             :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
             ;; Jump view to first hit page if any.
             (let ((hits (limn/pdf-mode:pdf-search-state-hits state)))
               (when (and hits (consp hits))
@@ -722,7 +722,7 @@
               (when (integerp p) (limn/pdf-mode::%page-set p))))
           (limn/pdf-mode::%limn-call
            "view/overlays" :|win-id| "w1"
-           :|overlays| (limn/pdf-mode:pdf-search-overlay-payload s)))))))
+           :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-prev nil
   (lambda ()
@@ -737,7 +737,7 @@
               (when (integerp p) (limn/pdf-mode::%page-set p)))))
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
-         :|overlays| (limn/pdf-mode:pdf-search-overlay-payload s))))))
+         :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-quit nil
   (lambda ()
@@ -803,9 +803,15 @@
                    :page page :rects rects :note note)))
         (let ((all (append filtered (list new))))
           (limn/pdf-mode:pdf-annotations-save path all)
+          ;; v0.37 Phase F: the wire schema for view/overlays takes
+          ;; :|layers| (an array of overlay objects), NOT :|overlays|.
+          ;; Sending the latter silently sets layers to NULL — the C++
+          ;; side treats that as "clear all overlays".  Result: sidecar
+          ;; saved fine, but no rect appeared on screen and view/get
+          ;; returned overlays=[].  Fixed schema name.
           (limn/pdf-mode::%limn-call
            "view/overlays" :|win-id| "w1"
-           :|overlays| (limn/pdf-mode:pdf-annotations-overlay-payload all)))))))
+           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload all)))))))
 
 (limn/pdf-mode::%defcmd pdf-highlight-selection nil
   (lambda ()
@@ -1000,7 +1006,7 @@
       (when anns
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
-         :|overlays| (limn/pdf-mode:pdf-annotations-overlay-payload anns))))
+         :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload anns))))
     ;; Restore last-position
     (handler-case
         (limn/pdf-mode:pdf-mode-restore-last-position
