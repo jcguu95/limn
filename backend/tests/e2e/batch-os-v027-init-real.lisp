@@ -15,13 +15,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-ir"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp" "limn-undo.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -89,8 +83,9 @@
        (proc (start-session sock "/tmp/limn-os-v027ir1.log")))
   (let ((b (engine-load *fixture*)))
     (when b
-      (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                  :|rects| (list (list 0.1 0.2 0.5 0.25)))
+      (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.25))
       (sleep 0.1)
       (key "h") (sleep 0.3)
       ;; Read back the sidecar; color should be #ff00ff

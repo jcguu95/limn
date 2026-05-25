@@ -44,14 +44,9 @@
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-uf"))
 
 ;; G1 + G2 both want the demo init.lisp pre-loaded.
-(sb-posix:setenv "LIMN_INIT" (b/ "init.lisp.example") 1)
+(sb-posix:setenv "LIMN_INIT" (b/ "tests/e2e/demo-init.lisp") 1)
 
-(dolist (f '("limn-hooks.lisp" "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp"  "limn-undo.lisp"   "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp"  "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)

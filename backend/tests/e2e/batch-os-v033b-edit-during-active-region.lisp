@@ -19,21 +19,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-v033bedit"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-timer.lisp" "limn-process.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-undo.lisp" "limn-buffer-undo.lisp"
-             "limn-keys.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp"
-             "limn-text-mode.lisp"
-             "limn-marker.lisp" "limn-local.lisp" "limn-mark.lisp"
-             "limn-face.lisp"
-             "limn-overlays.lisp" "limn-region.lisp"
-             "limn.lisp"))
-  (handler-case (load (b/ f))
-    (error (e) (format t "  !! skipped ~A: ~A~%" f e))))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)

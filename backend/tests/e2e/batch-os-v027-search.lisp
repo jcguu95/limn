@@ -18,12 +18,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-v027sr"))
 
-(dolist (f '("limn-hooks.lisp" "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp"  "limn-undo.lisp"   "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp"  "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -41,7 +36,7 @@
 
 (defun overlays-of ()
   ;; view/overlays-get 在 v0.14 後存在；若沒有就用 fallback。
-  (let ((r (limn:call "view/overlays-get" :|win-id| "w1")))
+  (let ((r (limn:call "view/get" :|win-id| "w1")))
     (when (ok? r)
       (or (getf (data r) :|overlays|) '()))))
 

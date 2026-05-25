@@ -32,14 +32,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-v024mk"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp" "limn-undo.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"
-             "limn-marker.lisp" "limn-mark.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -79,20 +72,13 @@
         (lambda (b off)
           (limn:call "buffer/cursor-set" :|buffer-id| b :|offset| off)))
 
-  ;;; ── wire buffer-modified handler to limn/marker fixup engines ────────
-  ;; C++ emits buffer-modified after each insert/delete (v0.23.1 §D8).
-  ;; The runtime layer normally installs this; tests do it explicitly.
-  (limn/hooks:add-hook "event/buffer-modified"
-    (lambda (ev)
-      (let* ((bid (or (getf ev :|buffer-id|) (getf ev :buffer-id)))
-             (op  (or (getf ev :|op|)        (getf ev :op)))
-             (pos (or (getf ev :|pos|)       (getf ev :pos)))
-             (len (or (getf ev :|len|)       (getf ev :len))))
-        (cond
-          ((or (equal op "insert") (eq op :insert))
-           (limn/marker:process-insert bid pos len))
-          ((or (equal op "delete") (eq op :delete))
-           (limn/marker:process-delete bid pos (+ pos len)))))))
+  ;;; ── buffer-modified handler ──────────────────────────────────────────
+  ;; v0.37 Phase F (driver-D2): the runtime layer auto-installs limn/marker's
+  ;; buffer-modified handler during (limn:start ...) via %bootstrap-runtime
+  ;; → install-buffer-modified-handler.  An earlier version of this driver
+  ;; added its OWN hook on top, which caused process-insert to fire twice
+  ;; per event — markers shifted by 2 * len instead of len ("5 + 2 = 7, got
+  ;; 9" in Ω5).  Trust the auto-install; do not add a manual hook here.
 
   (let* ((r-a (limn:call "bridge/engine-load"
                           :|engine| "text" :|path| "" :|win-id| "w1"))

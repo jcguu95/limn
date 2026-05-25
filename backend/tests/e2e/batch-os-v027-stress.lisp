@@ -15,13 +15,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-st"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp" "limn-undo.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -39,17 +33,37 @@
   (sb-ext:run-program "xdotool" args :search t :wait t :output nil :error nil))
 (defun page-of () (getf (data (limn:call "view/get" :|win-id| "w1")) :|page|))
 (defun overlays-of ()
-  (let ((r (limn:call "view/overlays-get" :|win-id| "w1")))
+  (let ((r (limn:call "view/get" :|win-id| "w1")))
     (when (ok? r) (or (getf (data r) :|overlays|) '()))))
 
 (defun limn-rss (pid)
-  "Return RSS in KB via ps."
-  (let ((out (with-output-to-string (s)
-               (sb-ext:run-program "ps" (list "-o" "rss=" "-p"
-                                                (princ-to-string pid))
-                                     :search t :wait t :output s :error nil))))
-    (parse-integer (string-trim '(#\Space #\Newline) out)
-                    :junk-allowed t)))
+  "Return RSS in KB.  Prefer /proc/<pid>/status (Linux containers
+   including the nix-based docker image), fall back to ps for macOS
+   host.  Returns NIL when neither is available — downstream RSS
+   ratio checks handle NIL as 'skip'.
+   v0.37 Phase F (driver-C2): nix containers ship without ps on PATH,
+   so the original `sb-ext:run-program \"ps\"` raised 'Couldn't
+   execute ps: No such file or directory' and aborted the whole
+   driver before any stress assertion could run."
+  (let ((status-path (format nil "/proc/~a/status" pid)))
+    (cond
+      ((probe-file status-path)
+       (with-open-file (in status-path :direction :input)
+         (loop for line = (read-line in nil nil)
+               while line
+               when (search "VmRSS:" line)
+                 return (parse-integer line :junk-allowed t))))
+      (t
+       (handler-case
+           (let ((out (with-output-to-string (s)
+                        (sb-ext:run-program "ps"
+                                              (list "-o" "rss=" "-p"
+                                                    (princ-to-string pid))
+                                              :search t :wait t
+                                              :output s :error nil))))
+             (parse-integer (string-trim '(#\Space #\Newline) out)
+                            :junk-allowed t))
+         (error () nil))))))
 
 (defun wait-for-window ()
   (loop repeat 50 for found =

@@ -15,13 +15,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-cr"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp" "limn-undo.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -82,8 +76,9 @@
 (let* ((sock (format nil "/tmp/limn-e2e-cr1-~a" (sb-posix:getpid)))
        (proc (start-session sock "/tmp/limn-os-v027cr1.log")))
   (engine-load *fixture*) (sleep 0.2)
-  (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-              :|rects| (list (list 0.1 0.2 0.5 0.25)))
+  (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.25))
   (sleep 0.1) (key "h") (sleep 0.5)        ; let save complete
   (sigkill-session proc))
 
@@ -117,8 +112,9 @@
 (let* ((sock (format nil "/tmp/limn-e2e-cr2-~a" (sb-posix:getpid)))
        (proc (start-session sock "/tmp/limn-os-v027cr2.log")))
   (engine-load *fixture*) (sleep 0.2)
-  (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-              :|rects| (list (list 0.2 0.3 0.6 0.4)))
+  (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.2 :|y| 0.3)
+              :|end|   (list :|page| 0 :|x| 0.6 :|y| 0.4))
   (sleep 0.1) (key "h") (sleep 0.5)
   (let ((sidecars (ignore-errors
                     (directory
@@ -162,8 +158,9 @@
     (declare (ignore b))
     (sleep 0.3))
   ;; Trigger a save to force re-serialize at v1
-  (limn:call "view/selection-set" :|win-id| "w1" :|page| 1
-              :|rects| (list (list 0.1 0.5 0.4 0.6)))
+  (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 1 :|x| 0.1 :|y| 0.5)
+              :|end|   (list :|page| 1 :|x| 0.4 :|y| 0.6))
   (sleep 0.1) (key "h") (sleep 0.5)
 
   (let* ((anno-pkg (find-package '#:limn/pdf-mode))
@@ -190,8 +187,9 @@
   ;; Drop 5 annotations rapidly
   (dotimes (i 5)
     (let ((y (+ 0.1 (* 0.1 i))))
-      (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                  :|rects| (list (list 0.1 y 0.5 (+ y 0.05))))
+      (limn:call "view/selection-set" :|win-id| "w1"
+                  :|begin| (list :|page| 0 :|x| 0.1 :|y| y)
+                  :|end|   (list :|page| 0 :|x| 0.5 :|y| (+ y 0.05)))
       (sleep 0.05)
       (key "h") (sleep 0.15)))
   (sigkill-session proc))

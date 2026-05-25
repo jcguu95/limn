@@ -64,6 +64,11 @@
 
 (format t "  binary: ~a~%" *limn-bin*)
 
+;;; ── load backend modules via ASDF — must happen BEFORE any defuns
+;;; ── below reference the LIMN:* / LIMN/*:* packages at read time.
+
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
+
 ;;; ── helpers ──────────────────────────────────────────────────────────────
 
 (defun ok? (r) (eq (getf r :|ok|) t))
@@ -92,37 +97,6 @@
   (when init-path (ignore-errors (sb-posix:unsetenv "LIMN_INIT")))
   (ignore-errors (sb-ext:process-kill proc 15))
   (ignore-errors (sb-ext:process-wait proc)))
-
-;;; ── load backend modules (minimal set for the test harness itself) ───────
-;;;
-;;; We load the FULL v0.29 target module list here, mirroring what
-;;; repl.lisp should do after v0.29 is implemented.  This is the
-;;; Lisp client side; the Qt process is spawned separately.
-
-(dolist (f '("limn-hooks.lisp"
-             "limn-log.lisp" "limn-error.lisp"
-             "limn-timer.lisp" "limn-process.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-undo.lisp" "limn-buffer-undo.lisp"
-             "limn-keys.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp"
-             "limn-kill.lisp" "limn-mark.lisp"
-             "limn-register.lisp" "limn-kmacro.lisp"
-             "limn-file.lisp" "limn-auto-save.lisp"
-             "limn-backup.lisp" "limn-recentf.lisp"
-             "limn-history.lisp" "limn-custom.lisp"
-             "limn-advice.lisp" "limn-face.lisp"
-             "limn-text-props.lisp" "limn-help.lisp"
-             "limn-completion.lisp"
-             "limn-isearch.lisp" "limn-occur.lisp"
-             "limn-text-nav.lisp" "limn-text-mode.lisp"
-             "limn-map-macro.lisp" "limn-which-key.lisp"
-             "limn-pdf-mode.lisp"
-             "limn.lisp"))
-  (handler-case (load (b/ f))
-    (error (e) (format t "  !! ~a: ~a~%" f e))))
 
 ;;; ── stash any existing init ──────────────────────────────────────────────
 
@@ -174,12 +148,24 @@
                                 (not (search "error-protection" line))
                                 (not (search "with-error" line))
                                 (not (search "limn-error" line))))
-                         (loop for start = 0 then (1+ pos)
-                               for pos = (position #\Newline log-content :start start)
-                               while pos
-                               collect (subseq log-content start pos)
-                               finally (when (< start (length log-content))
-                                         (collect (subseq log-content start)))))))
+                         ;; v0.37 Phase F: the original wrote
+                         ;; `(loop ... collect X ... finally (when ... (collect Y)))`
+                         ;; but COLLECT is a loop CLAUSE, not a function —
+                         ;; calling it outside a loop body errors with
+                         ;; "function COLLECT is undefined".  Rewrite as an
+                         ;; explicit accumulator so the trailing-line case
+                         ;; still composes.
+                         (let ((acc nil)
+                               (start 0)
+                               pos)
+                           (loop
+                             (setf pos (position #\Newline log-content :start start))
+                             (unless pos (return))
+                             (push (subseq log-content start pos) acc)
+                             (setf start (1+ pos)))
+                           (when (< start (length log-content))
+                             (push (subseq log-content start) acc))
+                           (nreverse acc)))))
                  (check (format nil "Ω1 — log has no raw error lines (~a found)" error-lines)
                         (= 0 error-lines)
                         (when (> error-lines 0)
