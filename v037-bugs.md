@@ -11,6 +11,12 @@ Receipts log. Each entry: symptom → root cause → commit hash (filled at comm
 - **Regression coverage:** the smoke path itself — `LIMN_NO_SPAWN=1 sbcl --load backend/repl.lisp` should exit 0. Will be CI-enforced as part of Phase A3 / nix-pinning unification.
 - **Commit:** TBD
 
+### #5 — macOS `make` skips recompile when only DEFINES change → binary's git-hash stamp goes stale
+- **Symptom:** rebuild the macOS binary after a commit, `./limn --version` still reports the OLD commit hash.  Confusing because the rebuild "succeeded" — link ran, mtime updated.
+- **Root cause:** the build-provenance values (LIMN_BUILD_GIT_HASH etc.) are passed to the compiler as `-D` macros at qmake time.  qmake re-runs and emits a new Makefile when .qmake.stash is deleted, but make is mtime-based and won't recompile .cpp if the .o is newer — so the .o files keep their previous -D values.  Link picks up the stale .o set.
+- **Fix:** add `scripts/build-macos.sh` wrapper that does a clean rebuild (rm -f *.o pdf_viewer/*.o) before qmake/make, then asserts the resulting binary's git stamp matches HEAD.  Mirrors `scripts/build-docker.sh`'s pattern.  Discovered while verifying Phase A1c claims against a fresh binary.
+- **Commit:** TBD
+
 ### #4 — macOS `mac { }` .pro block linked vendored mupdf → fresh worktree can't link
 - **Symptom:** `nix develop --command make` on a fresh worktree fails at link: `ld: warning: directory not found for option '-L.../sioyek/mupdf/build/release'` then `library not found for -lmupdf-third`.
 - **Root cause:** the `mac { }` block in `pdf_viewer_build_config.pro` hardcoded `-L$$PWD/mupdf/build/release -lmupdf -lmupdf-third -lmupdf-threads`. Required the mupdf git submodule + a separate `./build_mac.sh mupdf` cold build (~10 min). Worktrees / fresh clones don't have submodules initialized.
