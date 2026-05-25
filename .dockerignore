@@ -23,11 +23,11 @@ sioyek/Makefile
 limn-repl.log
 /tmp/
 
-# v0.37 A1c: .git/ IS needed in docker build context so qmake can
-# run `git rev-parse HEAD` and bake the commit hash into the binary
-# via DEFINES (see pdf_viewer_build_config.pro).  Without it, the
-# binary's --version reports "unknown" and provenance is broken.
-# Cost: ~29 MB build context — acceptable for the dogfood guarantee.
+# git internals — NOT copied because the worktree's .git is a `gitdir:`
+# pointer to a host abs path which doesn't exist inside the container.
+# Build provenance comes in via --build-arg instead (see Dockerfile
+# and scripts/build-docker.sh).
+.git/
 .gitignore
 
 # direnv / build outputs (not needed inside container)

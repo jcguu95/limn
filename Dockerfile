@@ -44,11 +44,21 @@ RUN nix develop /limn#docker --command true
 COPY sioyek/  /limn/sioyek/
 COPY backend/ /limn/backend/
 
-# v0.37 A1c: COPY .git/ so qmake can resolve `git rev-parse HEAD` and
-# bake the commit hash into the binary.  ~29 MB cost; the alternative
-# (passing git info as docker --build-arg) loses determinism since
-# the build context becomes argv-dependent.
-COPY .git/    /limn/.git/
+# v0.37 A1c: build provenance (git hash / dirty / build time) is passed
+# in via --build-arg → ENV so qmake's $$(VAR) substitution sees it.
+# Defaults to "unknown" so plain `docker build .` still works (binary
+# just prints unknown for the missing field).  Canonical way to build
+# with full provenance: use scripts/build-docker.sh wrapper.
+#
+# Not via COPY .git because git worktrees' .git is a `gitdir:` pointer
+# to an absolute host path that doesn't exist inside the container —
+# libgit2 then refuses to open /limn as a flake input.
+ARG LIMN_BUILD_GIT_HASH=unknown
+ARG LIMN_BUILD_GIT_DIRTY=unknown
+ARG LIMN_BUILD_TIME=unknown
+ENV LIMN_BUILD_GIT_HASH=$LIMN_BUILD_GIT_HASH
+ENV LIMN_BUILD_GIT_DIRTY=$LIMN_BUILD_GIT_DIRTY
+ENV LIMN_BUILD_TIME=$LIMN_BUILD_TIME
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Build Limn — with ccache via buildkit cache mount.

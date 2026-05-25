@@ -11,6 +11,13 @@ Receipts log. Each entry: symptom → root cause → commit hash (filled at comm
 - **Regression coverage:** the smoke path itself — `LIMN_NO_SPAWN=1 sbcl --load backend/repl.lisp` should exit 0. Will be CI-enforced as part of Phase A3 / nix-pinning unification.
 - **Commit:** TBD
 
+### #4 — macOS `mac { }` .pro block linked vendored mupdf → fresh worktree can't link
+- **Symptom:** `nix develop --command make` on a fresh worktree fails at link: `ld: warning: directory not found for option '-L.../sioyek/mupdf/build/release'` then `library not found for -lmupdf-third`.
+- **Root cause:** the `mac { }` block in `pdf_viewer_build_config.pro` hardcoded `-L$$PWD/mupdf/build/release -lmupdf -lmupdf-third -lmupdf-threads`. Required the mupdf git submodule + a separate `./build_mac.sh mupdf` cold build (~10 min). Worktrees / fresh clones don't have submodules initialized.
+- **Fix:** mac block now uses nix-pinned mupdf same as Linux block (single `-lmupdf` + system harfbuzz / freetype / jpeg / openjp2 / jbig2dec / gumbo). Host ≡ container library versions. Removes 10-min cold dependency on submodule init.
+- **Discovery:** A1d macOS rebuild from this worktree.
+- **Commit:** TBD (Phase A1d)
+
 ### #3 — `sioyek/fzf/` + `begin.png` + `end.png` + `tutorial.pdf` + `pdf_viewer/shaders/` gitignored but build-required → docker build dies in any fresh worktree
 - **Symptom:** docker build from any worktree fails: first `make: *** No rule to make target 'fzf/fzf.c'`, then after fzf fix `make: *** No rule to make target 'end.png'`. Each iteration unmasks the next missing dep.
 - **Root cause:** `.gitignore` excluded `sioyek/fzf/`, `sioyek/begin.png`, `sioyek/end.png`, `sioyek/tutorial.pdf`, and `sioyek/pdf_viewer/shaders/` — but the .pro file references `fzf/fzf.c` and `resources.qrc` embeds the other four into the binary. The main checkout works only because previous build sessions left these files in place untracked; every fresh clone / worktree / docker COPY context is broken out of the gate.
