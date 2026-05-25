@@ -1,8 +1,8 @@
 ;;;; v0.29 — Runtime wire-up structural + semantic tests  (8 tests)
 ;;;;
-;;;; 三個結構測試（SPEC §v0.29 Testing 原定）：
-;;;;   1. wireup-load-lists-match        repl.lisp list ≡ run-unit.lisp impl list
-;;;;   2. wireup-all-files-exist         清單每個檔真的在 backend/ 存在
+;;;; 三個結構測試：
+;;;;   1. wireup-asd-system-loadable     limn.asd parses; (find-system :limn) ≠ NIL.
+;;;;   2. wireup-all-files-exist         limn.asd 每個 :file component 對應的 .lisp 存在
 ;;;;   3. wireup-init-example-parses     init.lisp.example read 無 error
 ;;;;
 ;;;; 五個語義測試（dogfood-driven，防範十天後踩的坑）：
@@ -12,9 +12,9 @@
 ;;;;   7. wireup-pdf-mode-engine-registered  "mupdf" → pdf-mode 在 registry
 ;;;;   8. wireup-init-example-evaluates      example eval 不爆 unhandled error
 ;;;;
-;;;; 預期結果：
-;;;;   - 測試 1 在 v0.29 實作前 RED（repl.lisp 缺 v0.28 三模組）。
-;;;;   - 測試 2-8 在全模組載入的 unit runner 環境下應全 GREEN。
+;;;; v0.37 A2: tests 1+2 rewritten — pre-A2 they parsed repl.lisp's
+;;;; dolist for the module list, which we replaced with an ASDF system.
+;;;; The contract is now: limn.asd's :components is the canonical list.
 
 (in-package #:limn/unit-test)
 
@@ -42,81 +42,73 @@
 ;;;   (dolist (VAR '("file1.lisp" "file2.lisp" ...)) body...)
 ;;; %extract-string-dolist finds the FIRST such form and returns the list.
 
-(defun %extract-string-dolist (path)
-  "Open PATH and return the first (dolist (VAR '(STRING...))) string list.
-   Returns NIL if not found or on read error.  *read-eval* is disabled."
+(defun %extract-asd-components (path)
+  "Return a list of component file basenames (without .lisp) from limn.asd's
+   :components clause.  NIL on parse failure.  *read-eval* off."
   (let ((*read-eval* nil))
     (with-open-file (s path :direction :input :if-does-not-exist nil)
       (unless s
-        (format t "  [%extract-string-dolist] file not found: ~a~%" path)
-        (return-from %extract-string-dolist nil))
+        (format t "  [%extract-asd-components] file not found: ~a~%" path)
+        (return-from %extract-asd-components nil))
       (handler-case
           (loop for form = (read s nil :eof)
                 until (eq form :eof)
-                thereis
-                  (and (listp form)
-                       (eq (first form) 'dolist)
-                       (let* ((binding  (second form))
-                              (init-val (and (listp binding) (second binding))))
-                         (and (listp init-val)
-                              (eq (first init-val) 'quote)
-                              (listp (second init-val))
-                              (every #'stringp (second init-val))
-                              (second init-val)))))
+                when (and (listp form)
+                          (member (first form) '(defsystem)
+                                  :test (lambda (a b)
+                                          (string-equal (string a) (string b)))))
+                  do
+                    (let ((comp-tail (member :components form)))
+                      (when (and comp-tail (listp (second comp-tail)))
+                        (return
+                          (loop for c in (second comp-tail)
+                                when (and (listp c)
+                                          (eq (first c) :file)
+                                          (stringp (second c)))
+                                  collect (second c))))))
         (error (e)
-          (format t "  [%extract-string-dolist error ~a] ~a~%" path e)
+          (format t "  [%extract-asd-components error ~a] ~a~%" path e)
           nil)))))
 
 ;;; ══════════════════════════════════════════════════════════════════════════
 ;;; 結構測試 1 — load list 一致
 ;;; ══════════════════════════════════════════════════════════════════════════
 
-(deftest wireup-load-lists-match
-  "repl.lisp 的模組清單（去除 limn.lisp）與 run-unit.lisp 的 impl 清單相同，
-   且相對順序一致。  v0.29 實作前 RED（缺 limn-text-nav / map-macro /
-   which-key，且部份順序不同）。"
-  (let* ((repl-path (%wu-path "repl.lisp"))
-         (ru-path   (%wu-path "tests/unit/run-unit.lisp"))
-         (repl-raw  (%extract-string-dolist repl-path))
-         (ru-raw    (%extract-string-dolist ru-path)))
-    ;; assert-true returns nil (from check), so we guard on the values directly,
-    ;; then call assert-true for display output.
-    (assert-true repl-raw "repl.lisp: dolist string list found")
-    (assert-true ru-raw   "run-unit.lisp: dolist string list found")
-    (when (and repl-raw ru-raw)
-      ;; limn.lisp is the bootstrap sentinel; run-unit never loads it.
-      (let* ((repl-list (remove "limn.lisp" repl-raw :test #'equal))
-             (extra     (set-difference repl-list ru-raw   :test #'equal))
-             (missing   (set-difference ru-raw   repl-list :test #'equal)))
-        (check (null extra)
-               "repl.lisp has no extra files absent from run-unit"
-               "extra in repl: ~s" extra)
-        (check (null missing)
-               "repl.lisp has no files missing vs run-unit"
-               "missing from repl: ~s" missing)
-        ;; Relative order: project repl-list onto ru-raw and compare.
-        (let* ((repl-projected
-                 (remove-if-not (lambda (f) (member f ru-raw :test #'equal))
-                                repl-list))
-               (order-ok (equal repl-projected ru-raw)))
-          (check order-ok
-                 "relative load order matches run-unit.lisp"
-                 "repl order: ~s~%  run-unit order: ~s"
-                 repl-projected ru-raw))))))
+(deftest wireup-asd-system-loadable
+  "limn.asd parses cleanly and ASDF can find the :limn system.
+   v0.37 A2: replaces the pre-A2 dolist-list-equality check between
+   repl.lisp and run-unit.lisp.  Single source of truth = limn.asd."
+  (let* ((asd-path (%wu-path "limn.asd"))
+         (comps    (%extract-asd-components asd-path)))
+    (assert-true (probe-file asd-path) "limn.asd exists in backend/")
+    (assert-true comps "limn.asd :components parsed (≥ 1 entry)")
+    (when comps
+      (check (>= (length comps) 50)
+             (format nil "limn.asd has ≥ 50 components (got ~a)" (length comps))
+             nil))
+    ;; ASDF resolves the system.  It's loaded by the runner before us,
+    ;; so find-system should be cached and O(1).
+    (let ((asdf-pkg (find-package '#:asdf)))
+      (when asdf-pkg
+        (let ((find-sym (find-symbol "FIND-SYSTEM" asdf-pkg)))
+          (when (and find-sym (fboundp find-sym))
+            (check (not (null (funcall (symbol-function find-sym) :limn)))
+                   "asdf:find-system :limn returns non-NIL" nil)))))))
 
 ;;; ══════════════════════════════════════════════════════════════════════════
 ;;; 結構測試 2 — 每個列出的模組都存在
 ;;; ══════════════════════════════════════════════════════════════════════════
 
 (deftest wireup-all-files-exist
-  "repl.lisp 模組清單中每一個檔名對應的 backend/<name> 都存在於磁碟。"
-  (let* ((repl-raw (%extract-string-dolist (%wu-path "repl.lisp"))))
-    (if (null repl-raw)
-        (check nil "repl.lisp load list could not be read" nil)
-        (dolist (fname repl-raw)
-          (let ((full (%wu-path fname)))
+  "limn.asd 每個 :file component 對應的 backend/<name>.lisp 存在。"
+  (let* ((asd-path (%wu-path "limn.asd"))
+         (comps    (%extract-asd-components asd-path)))
+    (if (null comps)
+        (check nil "limn.asd :components could not be read" nil)
+        (dolist (basename comps)
+          (let ((full (%wu-path (concatenate 'string basename ".lisp"))))
             (check (probe-file full)
-                   (format nil "backend/~a exists" fname)
+                   (format nil "backend/~a.lisp exists" basename)
                    "file not found: ~a" full))))))
 
 ;;; ══════════════════════════════════════════════════════════════════════════

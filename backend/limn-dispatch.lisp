@@ -47,8 +47,10 @@
   pump-thread)
 
 (defun %resolve-io (client)
-  "If CLIENT is a real limn/client:client, look up the symbols. Returns
-   (values write try-read blocking) or NIL if the package isn't loaded."
+  "Returns (values write try-read blocking) symbols from limn/client if
+   that package is loaded, else NIL.  CLIENT itself is unused — the
+   resolved symbols apply to any limn/client instance."
+  (declare (ignore client))
   (let ((pkg (find-package :limn/client)))
     (when pkg
       (values (find-symbol "WRITE-LINE!"        pkg)

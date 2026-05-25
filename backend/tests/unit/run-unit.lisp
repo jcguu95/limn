@@ -23,87 +23,27 @@
 ;; Framework
 (load (rel "unit-framework.lisp"))
 
-;; v0.34 — cl-ppcre (nix-pinned via flake.nix sbclWithLibs). Loaded before
-;; backend modules so limn-regex can resolve cl-ppcre at compile-time.
-;; v0.37: was a vendored git submodule, now provided by sbcl.withPackages.
-(require :cl-ppcre)
+;; v0.37 A2: load backend via ASDF system — compile-then-load in
+;; topological order, zero forward-ref STYLE-WARNING.  cl-ppcre comes
+;; in via the system's :depends-on, no manual (require) needed.
+;;
+;; sb-bsd-sockets MUST be required before ASDF compiles limn-client
+;; (whose defpackage :uses #:sb-bsd-sockets — the use list resolves at
+;; compile time, before its own top-level (require ...) has a chance
+;; to run under FASL semantics).
+(require :asdf)
+(require :sb-bsd-sockets)
+(let ((backend-dir (namestring (merge-pathnames "../../" *unit-dir*))))
+  (push backend-dir asdf:*central-registry*))
+(asdf:load-system :limn)
 
-;; v0.23 shared helpers (with-timeout-bound, fake-clock, mock-buffer)
+;; v0.23 shared helpers (with-timeout-bound, fake-clock, mock-buffer).
+;; Loaded AFTER the backend (which provides limn/cmd etc.) so the
+;; helpers can reference real packages, not stubs.
 (load (rel "v023-helpers.lisp"))
 
 ;; v0.24 shared helpers (cursor-aware mock-buf24, with-kill-buf, with-mark-buf)
 (load (rel "v024-helpers.lisp"))
-
-;; Backend implementation modules (loaded BEFORE tests so the unit-test
-;; package-stubs are replaced by real packages).
-(dolist (impl '("limn-hooks.lisp"
-                "limn-log.lisp"
-                "limn-error.lisp"
-                "limn-timer.lisp"
-                "limn-process.lisp"
-                "limn-buffer.lisp"
-                "limn-bridge.lisp"
-                "limn-undo.lisp"
-                "limn-buffer-undo.lisp"
-                "limn-keys.lisp"
-                "limn-search.lisp"
-                "limn-client.lisp"
-                "limn-dispatch.lisp"
-                "limn-mode.lisp"
-                "limn-cmd.lisp"
-                "limn-runtime.lisp"
-                "limn-introspect.lisp"
-                "limn-text-mode.lisp"
-                ;; v0.24 modules
-                "limn-kill.lisp"
-                "limn-mark.lisp"
-                "limn-register.lisp"
-                "limn-kmacro.lisp"
-                "limn-file.lisp"
-                "limn-auto-save.lisp"
-                "limn-backup.lisp"
-                "limn-recentf.lisp"
-                ;; v0.25 modules
-                "limn-history.lisp"
-                "limn-custom.lisp"
-                "limn-advice.lisp"
-                "limn-face.lisp"
-                "limn-text-props.lisp"
-                "limn-help.lisp"
-                "limn-completion.lisp"
-                ;; v0.26 modules
-                "limn-isearch.lisp"
-                "limn-occur.lisp"
-                ;; v0.27 — pdf-mode (depends on v0.25 + v0.26)
-                "limn-pdf-mode.lisp"
-                ;; v0.28 modules
-                "limn-text-nav.lisp"
-                "limn-map-macro.lisp"
-                "limn-which-key.lisp"
-                ;; v0.30 modules
-                "limn-marker.lisp"
-                "limn-local.lisp"
-                ;; v0.31 modules
-                "limn-syntax.lisp"
-                "limn-coding.lisp"
-                ;; v0.32 module
-                "limn-excursion.lisp"
-                ;; v0.33 modules — overlay data layer + region visualization
-                "limn-overlays.lisp"
-                "limn-region.lisp"
-                ;; v0.34 module — regex engine (depends on cl-ppcre vendor)
-                "limn-regex.lisp"
-                ;; v0.35 modules — file-notify + auto-revert
-                "limn-file-notify.lisp"
-                "limn-auto-revert.lisp"
-                ;; v0.36 modules — indent + query-replace
-                "limn-indent.lisp"
-                "limn-query-replace.lisp"))
-  (let ((p (namestring (merge-pathnames (concatenate 'string "../../" impl)
-                                         *unit-dir*))))
-    (format t "[loading impl] ~a~%" impl)
-    (handler-case (load p)
-      (error (e) (format t "  !! ~a: ~a~%" impl e)))))
 
 ;; All unit-test files
 (dolist (file '("bridge-client.lisp"

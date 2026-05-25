@@ -23,83 +23,22 @@
 
 (defun b/ (p) (namestring (merge-pathnames p *backend-dir*)))
 
-;;; ── v0.34: cl-ppcre (nix-pinned via flake) ────────────────────────────
-;;; Loaded before backend modules so limn-regex.lisp can resolve cl-ppcre
-;;; at compile time. v0.37: was a vendored git submodule, now provided by
-;;; sbcl.withPackages [cl-ppcre] in flake.nix.
+;;; ── load all backend modules via ASDF (v0.37 A2) ─────────────────────
+;;; Replaces a dolist that LOAD'd 51 .lisp files in dependency order.
+;;; ASDF compiles each component to FASL in topological order, so
+;;; forward references resolve at load time — no STYLE-WARNING noise
+;;; from undefined functions during compile.  cl-ppcre is declared in
+;;; the system's :depends-on, no manual (require :cl-ppcre) needed.
+;;;
+;;; FASLs cache under ASDF's user output cache (~/.cache/common-lisp/),
+;;; so subsequent loads after the first compile are essentially free.
 
-(require :cl-ppcre)
-
-;;; ── load all backend modules in dependency order ──────────────────────
-
-(dolist (file '(;; v0.7-v0.22 core
-                "limn-hooks.lisp"
-                "limn-log.lisp"               ; v0.23
-                "limn-error.lisp"             ; v0.23
-                "limn-timer.lisp"             ; v0.23 — must precede which-key
-                "limn-process.lisp"           ; v0.23 — must precede buffer
-                "limn-buffer.lisp"
-                "limn-bridge.lisp"
-                "limn-undo.lisp"
-                "limn-buffer-undo.lisp"       ; v0.23.1
-                "limn-keys.lisp"
-                "limn-search.lisp"
-                "limn-client.lisp"
-                "limn-dispatch.lisp"
-                "limn-mode.lisp"
-                "limn-cmd.lisp"
-                "limn-runtime.lisp"
-                "limn-introspect.lisp"
-                "limn-text-mode.lisp"
-                ;; v0.24 edit model
-                "limn-kill.lisp"
-                "limn-mark.lisp"
-                "limn-register.lisp"
-                "limn-kmacro.lisp"
-                "limn-file.lisp"
-                "limn-auto-save.lisp"
-                "limn-backup.lisp"
-                "limn-recentf.lisp"
-                ;; v0.25 interaction
-                "limn-history.lisp"
-                "limn-custom.lisp"
-                "limn-advice.lisp"
-                "limn-face.lisp"
-                "limn-text-props.lisp"
-                "limn-help.lisp"
-                "limn-completion.lisp"
-                ;; v0.26 search UI
-                "limn-isearch.lisp"
-                "limn-occur.lisp"
-                ;; v0.27 pdf-mode (depends on v0.25 + v0.26)
-                "limn-pdf-mode.lisp"
-                ;; v0.28 keymap + nav (text-nav needs kill; which-key needs timer)
-                "limn-text-nav.lisp"
-                "limn-map-macro.lisp"
-                "limn-which-key.lisp"
-                ;; v0.30 markers + buffer-local vars (foundation for v0.32)
-                "limn-marker.lisp"
-                "limn-local.lisp"
-                ;; v0.31 syntax tables + coding systems
-                "limn-syntax.lisp"
-                "limn-coding.lisp"
-                ;; v0.32 current-buffer / save-excursion / narrow
-                "limn-excursion.lisp"
-                ;; v0.33 overlay data layer + region visualization
-                "limn-overlays.lisp"
-                "limn-region.lisp"
-                ;; v0.34 regex engine (depends on cl-ppcre vendor + v0.32)
-                "limn-regex.lisp"
-                ;; v0.35 file-notify + auto-revert + process I/O coding
-                "limn-file-notify.lisp"
-                "limn-auto-revert.lisp"
-                ;; v0.36 indent + current-column
-                "limn-indent.lisp"
-                ;; v0.36 query-replace (depends on v0.32 + v0.34)
-                "limn-query-replace.lisp"
-                ;; bootstrap (last)
-                "limn.lisp"))
-  (load (b/ file)))
+(require :asdf)
+;; sb-bsd-sockets required up-front because limn-client's defpackage
+;; :uses #:sb-bsd-sockets and that use list resolves at compile time.
+(require :sb-bsd-sockets)
+(push *backend-dir* asdf:*central-registry*)
+(asdf:load-system :limn)
 
 ;;; ── spawn a limn subprocess ───────────────────────────────────────────
 

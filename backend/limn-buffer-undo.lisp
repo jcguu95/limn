@@ -173,7 +173,6 @@
    bridge commands and is wired by the runtime layer."
   (let* ((op-kind (getf op :op))
          (pos     (getf op :pos))
-         (len     (getf op :len))
          (before  (getf op :before))
          (after   (getf op :after))
          (inverse
