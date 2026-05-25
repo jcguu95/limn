@@ -756,7 +756,13 @@
                      (limn/pdf-mode::%limn-call "minibuffer/get")
                    (error () nil)))
            (mb-d (limn/pdf-mode::%response-data mb-r))
-           (mb-open (and mb-d (getf mb-d :|open|))))
+           ;; The bridge's JSON false decodes to the keyword :false, NOT
+           ;; NIL — so a plain (and mb-d (getf mb-d :|open|)) treats a
+           ;; closed minibuffer as "open" (any non-nil keyword is truthy
+           ;; in CL).  v027-search Ω4 was the symptom: C-g delegated to
+           ;; keyboard-quit instead of running pdf-search-reset, and
+           ;; overlays stayed on screen.
+           (mb-open (and mb-d (eq (getf mb-d :|open|) t))))
       (cond
         (mb-open
          (let* ((kq (find-symbol "KEYBOARD-QUIT" :limn/runtime))
