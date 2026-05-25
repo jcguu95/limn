@@ -65,6 +65,11 @@
    #:format-toc-tree #:parse-toc-line-page
    ;; §E bookmark
    #:pdf-set-bookmark-name #:pdf-jump-bookmark-name
+   #:pdf-delete-bookmark-name
+   ;; §E.2 bookmark sidecar (v0.37 Phase F batch 18 — persistence
+   ;; lives in user-Lisp; C++ wire is in-memory only)
+   #:pdf-bookmarks-sidecar-path
+   #:pdf-bookmarks-save #:pdf-bookmarks-load
    ;; §F modeline
    #:pdf-format-modeline #:pdf-mode-update-modeline
    ;; §I hooks
@@ -939,14 +944,100 @@
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §E bookmarks
 ;;; ═════════════════════════════════════════════════════════════════════
+;;;
+;;; The C++ wire (bookmark/set, /get, /list, /delete) is in-memory only,
+;;; scoped to one buffer-id's lifetime.  Cross-open persistence
+;;; ("close + reopen restores my marks") lives here in user-Lisp via
+;;; sidecar files at ~/.limn/bookmarks/{path-hash}.lisp — same pattern
+;;; as annotations.  See v027-workflow Ω6/Ω9 and macOS
+;;; test-bookmark-cleared-on-buffer-close (asserts the C++ side is
+;;; in-memory only).
+
+(defun limn/pdf-mode:pdf-bookmarks-sidecar-path (path)
+  "Path-keyed sidecar.  We use the path hash (not content) for
+   bookmarks because page numbers are stable across file edits in
+   ways that pixel-level annotations aren't."
+  (let ((slug (limn/pdf-mode::%sha256-of-string (namestring path))))
+    (pathname (format nil "~a/.limn/bookmarks/~a.lisp"
+                       (limn/pdf-mode::%home) slug))))
+
+(defun limn/pdf-mode:pdf-bookmarks-save (path bookmarks)
+  "Write BOOKMARKS (list of plists with :name :page :x :y :note) to
+   the sidecar for PATH.  Atomic write.  Returns T on success."
+  (let ((spath (limn/pdf-mode:pdf-bookmarks-sidecar-path path)))
+    (handler-case
+        (progn
+          (ensure-directories-exist spath)
+          (let ((tmp (concatenate 'string (namestring spath) ".tmp")))
+            (with-open-file (out tmp :direction :output
+                                      :if-exists :supersede
+                                      :if-does-not-exist :create)
+              (write (list :version 1 :bookmarks bookmarks)
+                     :stream out :readably t))
+            (rename-file tmp spath))
+          t)
+      (error () nil))))
+
+(defun limn/pdf-mode:pdf-bookmarks-load (path)
+  "Read bookmark list from sidecar for PATH.  Returns NIL when no
+   sidecar exists or it can't be parsed."
+  (let ((spath (limn/pdf-mode:pdf-bookmarks-sidecar-path path)))
+    (handler-case
+        (when (probe-file spath)
+          (with-open-file (in spath :direction :input)
+            (let ((data (read in nil nil)))
+              (and (listp data) (getf data :bookmarks)))))
+      (error () nil))))
+
+(defun limn/pdf-mode::%bookmark-upsert (list rec)
+  "Replace bookmark by name in LIST or append; return new list."
+  (let ((name (getf rec :name))
+        (updated nil))
+    (let ((new (mapcar (lambda (b)
+                         (if (and (not updated) (equal (getf b :name) name))
+                             (progn (setf updated t) rec)
+                             b))
+                       list)))
+      (if updated new (append new (list rec))))))
+
+(defun limn/pdf-mode::%bookmark-path-for-buffer (buffer-id)
+  "Look up cached path for BUFFER-ID (populated by
+   pdf-mode-on-buffer-opened).  Returns string or NIL."
+  (and buffer-id
+       (gethash buffer-id limn/pdf-mode::*buffer-id-to-path*)))
 
 (defun limn/pdf-mode:pdf-set-bookmark-name (buffer-id char-name page)
-  (limn/pdf-mode::%limn-call "bookmark/set"
-                              :|buffer-id| buffer-id
-                              :|name| char-name
-                              :|page| page
-                              :|x| 0.0 :|y| 0.0
-                              :|note| ""))
+  "Set bookmark CHAR-NAME on BUFFER-ID at PAGE.  Calls wire +
+   mirrors to the path-keyed sidecar so close+reopen restores it."
+  (let ((r (limn/pdf-mode::%limn-call "bookmark/set"
+                                       :|buffer-id| buffer-id
+                                       :|name| char-name
+                                       :|page| page
+                                       :|x| 0.0 :|y| 0.0
+                                       :|note| "")))
+    (when (limn/pdf-mode::%ok? r)
+      (let ((path (limn/pdf-mode::%bookmark-path-for-buffer buffer-id)))
+        (when path
+          (let ((existing (limn/pdf-mode:pdf-bookmarks-load path))
+                (rec (list :name char-name :page page
+                           :x 0.0 :y 0.0 :note "")))
+            (limn/pdf-mode:pdf-bookmarks-save
+             path (limn/pdf-mode::%bookmark-upsert existing rec))))))
+    r))
+
+(defun limn/pdf-mode:pdf-delete-bookmark-name (buffer-id char-name)
+  "Delete bookmark CHAR-NAME from BUFFER-ID + the path-keyed sidecar."
+  (let ((r (limn/pdf-mode::%limn-call "bookmark/delete"
+                                       :|buffer-id| buffer-id
+                                       :|name| char-name)))
+    (let ((path (limn/pdf-mode::%bookmark-path-for-buffer buffer-id)))
+      (when path
+        (let ((existing (limn/pdf-mode:pdf-bookmarks-load path)))
+          (when existing
+            (limn/pdf-mode:pdf-bookmarks-save
+             path (remove-if (lambda (b) (equal (getf b :name) char-name))
+                              existing))))))
+    r))
 
 (defun limn/pdf-mode:pdf-jump-bookmark-name (buffer-id char-name)
   (let* ((r (limn/pdf-mode::%limn-call "bookmark/get"
@@ -956,6 +1047,24 @@
          (page (and d (getf d :|page|))))
     (when (integerp page)
       (limn/pdf-mode::%page-set page))))
+
+(defun limn/pdf-mode::%restore-bookmarks-for-buffer (buffer-id path)
+  "Called from pdf-mode-on-buffer-opened: re-install path-keyed
+   sidecar bookmarks onto the new buffer-id via the C++ wire.  This
+   is what makes close+reopen restore them — the C++ side is by
+   design in-memory only (macOS test-bookmark-cleared-on-buffer-close)."
+  (when (and buffer-id path)
+    (dolist (b (limn/pdf-mode:pdf-bookmarks-load path))
+      (handler-case
+          (limn/pdf-mode::%limn-call
+           "bookmark/set"
+           :|buffer-id| buffer-id
+           :|name| (or (getf b :name) "")
+           :|page| (or (getf b :page) 0)
+           :|x| (or (getf b :x) 0.0)
+           :|y| (or (getf b :y) 0.0)
+           :|note| (or (getf b :note) ""))
+        (error () nil)))))
 
 (limn/pdf-mode::%defcmd pdf-set-bookmark nil
   (lambda (&optional name)
@@ -1045,6 +1154,12 @@
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
          :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload anns))))
+    ;; Restore bookmarks from path-keyed sidecar (v0.37 Phase F batch 18).
+    ;; C++ wire is in-memory only by design; this is where the close+
+    ;; reopen "my marks survive" guarantee actually lives.
+    (handler-case
+        (limn/pdf-mode::%restore-bookmarks-for-buffer buffer-id path)
+      (error () nil))
     ;; Restore last-position
     (handler-case
         (limn/pdf-mode:pdf-mode-restore-last-position

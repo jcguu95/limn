@@ -164,7 +164,6 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "bookmark/set")         { cmd_bookmark_set        (id, msg); return; }
     if (cmd == "bookmark/get")         { cmd_bookmark_get        (id, msg); return; }
     if (cmd == "bookmark/delete")      { cmd_bookmark_delete     (id, msg); return; }
-    if (cmd == "bookmark/_test-reset") { cmd_bookmark_test_reset (id, msg); return; }
 
     // frame/* (SPEC §3.2 §7.2, v0.18.0)
     if (cmd == "frame/list")           { cmd_frame_list   (id, msg); return; }
@@ -399,34 +398,6 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     supports.append("buffer/metadata");
     data.insert("supports", supports);
     bridge->send_ok(id, data);
-
-    // v0.37 Phase F: bookmark close+reopen persistence.  When a new
-    // buffer-id is allocated for a path with a non-empty path-keyed
-    // mirror, hydrate bookmarks[buffer-id] with a fresh copy — but
-    // ONLY when no other open buffer already holds the same path
-    // (preserves batch-os-bookmark Ω3c "two concurrent buffers of
-    // the same file are independent").
-    {
-        const QString p = QString::fromStdWString(doc->get_path());
-        if (!p.isEmpty() && bookmarks_by_path.contains(p)
-            && !bookmarks.contains(buffer_id)) {
-            bool path_held_by_other_open_buf = false;
-            for (auto it = bookmarks.constBegin();
-                 it != bookmarks.constEnd(); ++it) {
-                const QString other_buf = it.key();
-                if (other_buf == buffer_id) continue;
-                Document* other_doc = registry->lookup(other_buf);
-                if (other_doc &&
-                    QString::fromStdWString(other_doc->get_path()) == p) {
-                    path_held_by_other_open_buf = true;
-                    break;
-                }
-            }
-            if (!path_held_by_other_open_buf) {
-                bookmarks[buffer_id] = bookmarks_by_path.value(p);
-            }
-        }
-    }
 
     emit_buffer_opened(buffer_id, doc, "mupdf");
 }
@@ -2319,18 +2290,14 @@ void LimnCommand::cmd_bookmark_set(const QString& id, const QJsonObject& msg) {
     rec.y    = msg.value("y").toDouble(0.0);
     rec.note = msg.value("note").toString();
 
-    auto upsert = [&](QList<BookmarkRecord>& list) {
-        bool updated = false;
-        for (auto& b : list) {
-            if (b.name == name) { b = rec; updated = true; break; }
-        }
-        if (!updated) list.append(rec);
-    };
-    upsert(bookmarks[buf]);
-    // v0.37 Phase F: mirror to path-keyed map for close+reopen
-    // persistence (v027-workflow Ω9a).
-    const QString path = QString::fromStdWString(doc->get_path());
-    if (!path.isEmpty()) upsert(bookmarks_by_path[path]);
+    QList<BookmarkRecord>& list = bookmarks[buf];
+    // Upsert: replace existing by name, else append (preserves
+    // insertion order for genuinely new entries).
+    bool updated = false;
+    for (auto& b : list) {
+        if (b.name == name) { b = rec; updated = true; break; }
+    }
+    if (!updated) list.append(rec);
     bridge->send_ok(id);
 }
 
@@ -2347,34 +2314,14 @@ void LimnCommand::cmd_bookmark_get(const QString& id, const QJsonObject& msg) {
 
 void LimnCommand::cmd_bookmark_delete(const QString& id, const QJsonObject& msg) {
     const QString buf  = msg.value("buffer-id").toString();
-    Document* doc = resolve_mupdf_buffer(bridge, registry, text_buffers, id, buf);
-    if (!doc) return;
+    if (!resolve_mupdf_buffer(bridge, registry, text_buffers, id, buf)) return;
     const QString name = msg.value("name").toString();
     if (name.isEmpty()) { bridge->send_fail(id, "missing or empty 'name'"); return; }
-    auto remove_by_name = [&](QList<BookmarkRecord>& list) {
-        for (int i = 0; i < list.size(); ++i) {
-            if (list[i].name == name) { list.removeAt(i); return true; }
-        }
-        return false;
-    };
-    const bool removed = remove_by_name(bookmarks[buf]);
-    // Mirror the delete to the path-keyed map.
-    const QString path = QString::fromStdWString(doc->get_path());
-    if (!path.isEmpty() && bookmarks_by_path.contains(path)) {
-        remove_by_name(bookmarks_by_path[path]);
+    QList<BookmarkRecord>& list = bookmarks[buf];
+    for (int i = 0; i < list.size(); ++i) {
+        if (list[i].name == name) { list.removeAt(i); bridge->send_ok(id); return; }
     }
-    if (removed) bridge->send_ok(id);
-    else bridge->send_fail(id, QString("no bookmark named: %1").arg(name));
-}
-
-// v0.37 Phase F: test-only — wipe both bookmark maps.  Used by the
-// macOS integration suite's bookmark teardown so consecutive tests
-// in the same bridge session don't see each other's state (the
-// path-keyed mirror persists across buffer/close by design).
-void LimnCommand::cmd_bookmark_test_reset(const QString& id, const QJsonObject&) {
-    bookmarks.clear();
-    bookmarks_by_path.clear();
-    bridge->send_ok(id);
+    bridge->send_fail(id, QString("no bookmark named: %1").arg(name));
 }
 
 void LimnCommand::cmd_buffer_text(const QString& id, const QJsonObject& msg) {

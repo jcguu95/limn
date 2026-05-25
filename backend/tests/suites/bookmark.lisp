@@ -37,14 +37,6 @@
 (defun bm-list-native (buf)
   (send! "bookmark/list-native" :|buffer-id| buf))
 
-;;; v0.37 Phase F: clear both bookmark maps before EACH test so the
-;;; path-keyed mirror (which persists across buffer/close, by design
-;;; — see v027-workflow Ω9a) doesn't leak state from one test into
-;;; the next.  The fixture is reused across tests in this suite, so
-;;; without an explicit reset the second test sees the first test's
-;;; bookmarks under the new buffer-id (hydration kicks in).
-(pre-test-hook (send! "bookmark/_test-reset"))
-
 ;;; ── A. set + get round-trip ──────────────────────────────────────────
 
 (deftest test-bookmark-set-and-get-roundtrip

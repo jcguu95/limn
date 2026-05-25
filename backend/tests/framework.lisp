@@ -42,8 +42,7 @@
    ;; helpers
    #:with-buffer #:with-fresh-window
    #:json-get #:json-get* #:json-array
-   #:setup-hook #:teardown-hook
-   #:pre-test-hook #:post-test-hook))
+   #:setup-hook #:teardown-hook))
 
 (in-package #:limn/test)
 
@@ -538,25 +537,12 @@
 (defvar *tests*           '())
 (defvar *setup-hooks*     '())
 (defvar *teardown-hooks*  '())
-;; v0.37 Phase F: per-test variants — fired before/after EACH test
-;; (not once per suite).  Needed by suites that share bridge-session
-;; state with reset-required semantics (e.g. bookmark suite, where
-;; the bookmarks_by_path mirror persists across buffer/close by
-;; design and must be cleared between consecutive tests).
-(defvar *pre-test-hooks*  '())
-(defvar *post-test-hooks* '())
 
 (defmacro setup-hook (&body body)
   `(push (lambda () ,@body) *setup-hooks*))
 
 (defmacro teardown-hook (&body body)
   `(push (lambda () ,@body) *teardown-hooks*))
-
-(defmacro pre-test-hook (&body body)
-  `(push (lambda () ,@body) *pre-test-hooks*))
-
-(defmacro post-test-hook (&body body)
-  `(push (lambda () ,@body) *post-test-hooks*))
 
 (defmacro deftest (name &body body)
   `(progn
@@ -576,13 +562,7 @@
      (pushnew ',name *tests*)))
 
 (defun run-test (name)
-  (dolist (hook (reverse *pre-test-hooks*))
-    (handler-case (funcall hook)
-      (error (e) (format t "[pre-test hook error] ~a~%" e))))
-  (unwind-protect (funcall name)
-    (dolist (hook (reverse *post-test-hooks*))
-      (handler-case (funcall hook)
-        (error (e) (format t "[post-test hook error] ~a~%" e))))))
+  (funcall name))
 
 (defun run-suite (&key (tests (reverse *tests*)) verbose)
   "Run all registered tests in order. Connects/disconnects automatically."
