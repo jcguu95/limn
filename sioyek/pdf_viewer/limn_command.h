@@ -109,13 +109,6 @@ public:
     };
 private:
     QHash<QString, QList<BookmarkRecord>> bookmarks;
-    // v0.37 Phase F: path-keyed mirror so bookmarks survive a buffer/close
-    // + reopen cycle on the same file (v027-workflow Ω9a).  Primary
-    // storage is still per buffer-id (preserves per-buffer isolation
-    // batch-os-bookmark Ω3c pins).  cmd_bookmark_* upserts to both maps;
-    // cmd_bookmark_list / _get hydrate buffer-id from path-keyed snapshot
-    // when the per-buffer slot is empty.
-    QHash<QString, QList<BookmarkRecord>> bookmarks_by_path;
     // SPEC v0.5 §5.3 後段 — text engine 編輯 primitives
     void cmd_buffer_cursor_get   (const QString& id, const QJsonObject& msg);
     void cmd_buffer_cursor_set   (const QString& id, const QJsonObject& msg);
