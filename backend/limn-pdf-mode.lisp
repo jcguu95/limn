@@ -1150,6 +1150,13 @@
       (%def km "r"        (intern "PDF-ROTATE-CW"   :cl-user))
       ;; search
       (%def km "/"        (intern "PDF-ISEARCH-FORWARD" :cl-user))
+      ;; v0.37 Phase F: C-g during/after a search clears search-state +
+      ;; overlays.  Without this binding, C-g hits the global keyboard-
+      ;; quit which only closes the minibuffer — leaving stale search
+      ;; highlights painted on the page (v027-search Ω4 saw 122 overlays
+      ;; remaining after C-g).  pdf-isearch-quit is idempotent so binding
+      ;; it here is safe even when no search is active.
+      (%def km "C-g"      (intern "PDF-ISEARCH-QUIT" :cl-user))
       ;; annotation
       (%def km "h"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
@@ -1179,6 +1186,7 @@
                                 ("d" pdf-toggle-dark)
                                 ("r" pdf-rotate-cw)
                                 ("/" pdf-isearch-forward)
+                                ("C-g" pdf-isearch-quit)
                                 ("h" pdf-highlight-selection)
                                 ("H" pdf-annotate-selection)
                                 ("t" pdf-toc)))
