@@ -148,12 +148,24 @@
                                 (not (search "error-protection" line))
                                 (not (search "with-error" line))
                                 (not (search "limn-error" line))))
-                         (loop for start = 0 then (1+ pos)
-                               for pos = (position #\Newline log-content :start start)
-                               while pos
-                               collect (subseq log-content start pos)
-                               finally (when (< start (length log-content))
-                                         (collect (subseq log-content start)))))))
+                         ;; v0.37 Phase F: the original wrote
+                         ;; `(loop ... collect X ... finally (when ... (collect Y)))`
+                         ;; but COLLECT is a loop CLAUSE, not a function —
+                         ;; calling it outside a loop body errors with
+                         ;; "function COLLECT is undefined".  Rewrite as an
+                         ;; explicit accumulator so the trailing-line case
+                         ;; still composes.
+                         (let ((acc nil)
+                               (start 0)
+                               pos)
+                           (loop
+                             (setf pos (position #\Newline log-content :start start))
+                             (unless pos (return))
+                             (push (subseq log-content start pos) acc)
+                             (setf start (1+ pos)))
+                           (when (< start (length log-content))
+                             (push (subseq log-content start) acc))
+                           (nreverse acc)))))
                  (check (format nil "Ω1 — log has no raw error lines (~a found)" error-lines)
                         (= 0 error-lines)
                         (when (> error-lines 0)

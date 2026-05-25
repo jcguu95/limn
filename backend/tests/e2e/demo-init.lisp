@@ -65,11 +65,39 @@
 ;;;
 ;;; vim convention: j/k = down/up by page, g g = first, G = last, / = search.
 ;;; All bindings use symbol form so where-is-command can find them.
+;;;
+;;; v0.27 introduced pdf-mode with its own keymap that binds j/k to
+;;; pdf-scroll-down/up (smooth scrolling within a page).  That keymap
+;;; sits above the global one, so demo's vim-style page nav needs to
+;;; install into pdf-mode-map AS WELL to be visible when a PDF buffer
+;;; is focused.  Keep the global binds too — they cover non-pdf-mode
+;;; engines and discovery via where-is-command.
 
 (limn:bind "j"   'next-page)
 (limn:bind "k"   'prev-page)
 (limn:bind "g g" 'first-page)
 (limn:bind "G"   'last-page)
 (limn:bind "/"   'search-here)
+
+;; Mode-keymap override for pdf-mode.  Skip cleanly when pdf-mode isn't
+;; loaded (e.g. headless smoke runs that haven't loaded the module).
+(let* ((mode-pkg (find-package '#:limn/mode))
+       (find-mode (and mode-pkg (find-symbol "FIND-MODE" mode-pkg)))
+       (mode-keymap (and mode-pkg (find-symbol "MODE-KEYMAP" mode-pkg)))
+       (define-key (let ((keys-pkg (find-package '#:limn/keys)))
+                     (and keys-pkg (find-symbol "DEFINE-KEY" keys-pkg))))
+       (cmd-pkg (find-package '#:limn/cmd))
+       (call-int (and cmd-pkg (find-symbol "CALL-INTERACTIVELY" cmd-pkg))))
+  (when (and find-mode mode-keymap define-key call-int)
+    (let* ((pm (funcall find-mode 'pdf-mode))
+           (km (and pm (funcall mode-keymap pm))))
+      (when km
+        (dolist (entry '(("j" next-page) ("k" prev-page)
+                         ("G" last-page) ("g g" first-page)
+                         ("/" search-here)))
+          (let ((spec (first entry)) (sym (second entry)))
+            (funcall define-key km spec
+                     (lambda (ev) (declare (ignore ev))
+                       (funcall call-int sym)))))))))
 
 (format t ";; demo init.lisp loaded: j/k page nav, g-g/G boundaries, / search~%")

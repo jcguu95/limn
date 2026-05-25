@@ -756,10 +756,29 @@
     (and d (getf d :|path|))))
 
 (defun limn/pdf-mode::%selection ()
-  "Get current selection rects + page via view/selection-get."
+  "Get the current selection as a (:|page| P :|rects| ((x1 y1 x2 y2)))
+   plist.  v0.37 Phase F: the bridge's view/selection-get returns the
+   selection as :|active| / :|begin|{:|page|,:|x|,:|y|} / :|end|{...} /
+   :|mode| / :|text| — there is no :|rects| field on the wire (and
+   never has been since the wire schema settled in v0.15).  This
+   helper synthesizes a single-rect bounding box from begin/end so
+   downstream callers (%add-annotation) keep the old :|page|/:|rects|
+   contract.  Returns NIL when no selection is active or coords are
+   missing — %add-annotation treats that as a no-op."
   (let* ((r (limn/pdf-mode::%limn-call "view/selection-get" :|win-id| "w1"))
          (d (limn/pdf-mode::%response-data r)))
-    d))
+    (when (and d (getf d :|active|))
+      (let* ((b (getf d :|begin|))
+             (e (getf d :|end|))
+             (page (or (and b (getf b :|page|))
+                       (and e (getf e :|page|))
+                       0))
+             (bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
+             (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
+        (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
+          (list :|page| page
+                :|rects| (list (list (min bx ex) (min by ey)
+                                     (max bx ex) (max by ey)))))))))
 
 (defun limn/pdf-mode::%add-annotation (note)
   "Build + persist + paint an annotation from the current selection."
