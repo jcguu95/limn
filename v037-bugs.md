@@ -129,25 +129,25 @@ Baseline after merging Phase F: 20 e2e fails.  Triage on this branch knocks the 
 - **Symptom:** v027-annotate Ω3 (re-open after highlight has 0 overlays), v027-workflow Ω10 (same), v027-resume Ω1b/Ω2a (last-position not restored), v027-crash-recovery Ω4 (no annotation survives SIGKILL), v027-content-move (broken-pipe mid flow).
 - **Root cause:** C++ `emit_buffer_opened` event included `frame-id` / `buffer-id` / `engine` / `page-count` but NOT `path`.  The Lisp handler `pdf-mode-on-buffer-opened` reads `(getf ev :|path|)` to find the sidecar and last-position file — got NIL → handler early-returns → no sidecar load.  Bookmark restore, annotation reload, last-position restore all silently no-op'd whenever a buffer re-opened on a fresh process.
 - **Fix:** thread `path` into `emit_buffer_opened` signature and add it to the event payload.  Updated both call sites (mupdf via `cmd_bridge_engine_load`, mupdf via `cmd_buffer_open`) and the inline text-engine emit at line 298.  Text buffers pass empty string.
-- **Commit:** TBD
+- **Commit:** 399815a
 
 ### #G3 — `cmd_test_inject_key` bypasses `minibuffer_handle_key` → injected RET never becomes `minibuffer-submit`
 - **Symptom:** completing-read Ω2a/Ω3a `evs 0` — minibuffer-submit / minibuffer-cancel events never fire when the driver injects RET / ESC via `test/inject-key`.
 - **Root cause:** real Qt key events route through `minibuffer_handle_key` first (`limn_input.cpp` line 173); if it consumes the key (RET → submit, ESC → cancel, printable → input), no raw `key` event is emitted.  `cmd_test_inject_key` skipped that branch entirely and just pushed a raw `key` event.  So injected RET never reached the minibuffer's submit pathway.
 - **Fix:** mirror the real Qt key path — call `minibuffer_handle_key(key, mods)` first; only fall through to `push_event("key", ...)` when not consumed.
-- **Commit:** TBD
+- **Commit:** 399815a
 
 ### #G4 — `limn:start` loaded init.lisp with `:resilient nil` → broken init.lisp kills bring-up
 - **Symptom:** v027-init-real Ω2 ("broken init.lisp tolerance") — driver writes `(error "intentional broken init")` to init.lisp; Limn dies on session start with unhandled condition, all subsequent assertions trip broken-pipe.
 - **Root cause:** Bring-up site called `(funcall load-init)` with no args.  `load-init-file` defaults `:resilient` to `nil` — errors propagate.  Test expectation (and Emacs convention): broken init.el → degraded session + warning, not abort.
 - **Fix:** pass `:resilient t` at bring-up.  Errors caught + logged to `*error-output*`; user sees the message; downstream features still come up.  `:resilient nil` remains available for batch / scripted invocations that want fail-fast.
-- **Commit:** TBD
+- **Commit:** 399815a
 
 ### #G5 — `C-g` not bound in `pdf-mode-map` → search overlays don't clear on cancel
 - **Symptom:** v027-search Ω4 — driver does `/` → type query → RET → `n` (navigate hit) → `ctrl+g` (expect overlay clear).  Got 122 overlays still present.
 - **Root cause:** `pdf-isearch-quit` is defined and calls `pdf-search-reset` (which clears state + emits empty overlays), but the key wasn't bound in `pdf-mode-map`.
 - **Fix:** add `(%def km "C-g" 'pdf-isearch-quit)` to both the initial install and the merge-with-existing path.
-- **Commit:** TBD
+- **Commit:** 399815a
 
 ### Cascading fix observations
 
