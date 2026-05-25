@@ -346,6 +346,17 @@
                         (find-symbol "INSTALL-DEFAULT-BINDINGS"
                                      :limn/runtime))))
       (when install (funcall install *global-keymap*)))
+    ;; v0.37 Phase B: install the framework's broader defaults (M-x
+    ;; command palette, M-r reload-init, which-key on).  User init.lisp
+    ;; loads AFTER this and may override any binding.
+    (let ((install (and (find-package :limn/default-config)
+                        (find-symbol "INSTALL-DEFAULTS"
+                                     :limn/default-config))))
+      (when install
+        (handler-case (funcall install *global-keymap*)
+          (error (e)
+            (format *error-output*
+                    ";; limn/default-config install errored: ~a~%" e)))))
     (%install-key-handler)
     (%install-buffer-handlers)
     ;; Register the default engine→mode mapping and bootstrap mode-buffers

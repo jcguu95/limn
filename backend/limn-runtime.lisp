@@ -299,14 +299,23 @@
   "Return the first candidate path that exists, or NIL."
   (find-if #'%file-exists-p (init-candidate-paths)))
 
-(defun load-init-file ()
+(defun load-init-file (&key resilient)
   "Locate and load the user's init file per SPEC §9.3. Returns the path
    loaded (string) or NIL if none was found.
 
-   Errors raised inside the init file propagate — failing to load init
-   should be loud, not silent. If you want a tolerant load, wrap the
-   call site in handler-case."
+   :resilient nil  (default) — errors inside the init file propagate.
+                   Used at bring-up where a broken init.lisp should
+                   surface loudly so the user notices.
+   :resilient t    — errors caught + logged to *error-output*; returns
+                   the path anyway.  Used by reload-init-file for
+                   hot-reload where the session should survive a typo."
   (let ((path (resolve-init-path)))
     (when path
-      (load path)
-      path)))
+      (if resilient
+          (handler-case
+              (progn (load path) path)
+            (error (e)
+              (format *error-output*
+                      ";; init: ~a ERRORED (resilient): ~a~%" path e)
+              path))
+          (progn (load path) path)))))
