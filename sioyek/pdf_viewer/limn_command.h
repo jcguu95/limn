@@ -87,6 +87,9 @@ private:
     void cmd_bookmark_set    (const QString& id, const QJsonObject& msg);
     void cmd_bookmark_get    (const QString& id, const QJsonObject& msg);
     void cmd_bookmark_delete (const QString& id, const QJsonObject& msg);
+    // v0.37 Phase F: test-only — clear both bookmark maps.  Used by
+    // macOS integration bookmark suite teardown.
+    void cmd_bookmark_test_reset(const QString& id, const QJsonObject& msg);
 
     // ─── frame/* (SPEC §3.2 §7.2, v0.18.0) ─────────────────────────
     void cmd_frame_list    (const QString& id, const QJsonObject& msg);
@@ -109,6 +112,17 @@ public:
     };
 private:
     QHash<QString, QList<BookmarkRecord>> bookmarks;
+    // v0.37 Phase F: path-keyed mirror.  Lives alongside the per-buffer
+    // bookmarks map: every bookmark/set + bookmark/delete writes through
+    // to both.  bridge/engine-load hydrates bookmarks[new-buf-id] from
+    // this mirror when the path was previously seen.  Survives
+    // buffer/close (so v027-workflow Ω9a's close+reopen restores
+    // bookmarks).  Cleared explicitly by bookmark/_test-reset — needed
+    // by the macOS bookmark suite, which reuses the same fixture
+    // across sequential tests in a single bridge session and asserts
+    // each fresh buffer starts empty (test-bookmark-list-empty-on-
+    // fresh-buffer + 7 others).
+    QHash<QString, QList<BookmarkRecord>> bookmarks_by_path;
     // SPEC v0.5 §5.3 後段 — text engine 編輯 primitives
     void cmd_buffer_cursor_get   (const QString& id, const QJsonObject& msg);
     void cmd_buffer_cursor_set   (const QString& id, const QJsonObject& msg);
