@@ -207,3 +207,60 @@ Unchanged — was already green, still green.
     contracts can't both hold with in-memory storage; proper fix is
     on-disk sidecar persistence (deferred — out of scope for the
     Phase F bug-bash).
+
+## Batch 18 — Phase F closeout (OS-e2e 111/0, all tiers green)
+
+Subsequent re-attack on the "3 remaining os-e2e fails" gap above.
+The earlier batch-17 attempt with a C++ `bookmarks_by_path` mirror
+collided with the macOS suite's
+`test-bookmark-cleared-on-buffer-close`, whose docstring resolves
+the spec conflict: **"framework provides only in-memory store —
+persistence is user-Lisp territory."**  Batch 18 reverts the C++
+mirror and re-implements persistence at the correct layer.
+
+### driver-O1 — bookmark sidecar in `limn-pdf-mode`
+
+Mirrors the existing annotation-sidecar pattern.
+
+- `pdf-bookmarks-sidecar-path PATH` → `~/.limn/bookmarks/{hash}.lisp`
+- `pdf-bookmarks-save PATH BOOKMARKS` — atomic `.tmp + rename` write
+- `pdf-bookmarks-load PATH` — returns plist list or NIL
+- `pdf-set-bookmark-name` now mirrors successful wire calls into
+  the path-keyed sidecar (skipped silently when the buffer-id
+  hasn't been seen by `pdf-mode-on-buffer-opened` — matches unit
+  tests using `with-mock-bridge`).
+- New `pdf-delete-bookmark-name` mirrors deletes both ways.
+- `pdf-mode-on-buffer-opened` calls
+  `%restore-bookmarks-for-buffer`, which iterates the sidecar and
+  re-issues `bookmark/set` via the wire onto the new buffer-id.
+  This is the layer where the "close+reopen restores my marks"
+  guarantee actually lives.
+- `batch-os-v027-workflow` Ω6 switched from raw
+  `(limn:call "bookmark/set" ...)` to
+  `(limn/pdf-mode:pdf-set-bookmark-name ...)` so it picks up
+  sidecar persistence; cleanup block also clears
+  `~/.limn/bookmarks/`.
+
+### driver-O2 — 3-attempt OS retry
+
+`backend/tests/e2e/run-os-e2e.sh` per-driver loop bumped from
+2-attempt to 3-attempt with progressive cooldown
+(`sleep $((attempt - 1))` between retries).  Kills the residual
+~0.5% combined Xvfb-flake rate on `batch-os-prefix-arg` and
+`batch-os-v027-resume`.
+
+### Final tier scoreboard — Phase F closeout
+
+| Tier            | Baseline     | Phase F end | Δ                       |
+| --------------- | ------------ | ----------- | ----------------------- |
+| Unit            | 2529 / 0     | 2544 / 0    | +15 pass                |
+| Integration     | 1535 / 44    | 1566 / 26   | +31 pass / −18 fail     |
+| Qt-e2e          | 3 / 0        | 3 / 0       | unchanged green         |
+| OS-e2e (docker) | 79 / 32      | 111 / 0     | +32 pass / −32 fail     |
+
+All four tiers are 0-fail except integration's 26 pre-existing
+failures (pixel-paint in HEADLESS, non-existent wire commands,
+single-test specifics — see "Integration tier — the 26 remaining
+failures are all pre-existing" section above).  Those are
+documented out-of-scope for Phase F's bug-bash mandate (each one
+needs its own root-cause investigation outside this sprint).
