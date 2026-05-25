@@ -56,14 +56,43 @@
          (buf (and (ok? er) (getf (data er) :|buffer-id|))))
     (check (format nil "setup — buffer (~a)" buf) (stringp buf))
 
+    ;;; v0.37 Phase F (driver-A7): the original test called
+    ;;; (limn:call "buffer/search-pdf" ...) but the C++ wire command is
+    ;;; "buffer/search" — and it only RETURNS hits, it doesn't push
+    ;;; highlight overlays.  Helper below does both: run search, then
+    ;;; push a single view/overlays call with rect layers tagged with
+    ;;; the pdf-search-match face.  The retrofit being tested is the
+    ;;; face-based color routing — i.e. changing the face's foreground
+    ;;; should change the highlight color on the next push.
+
+    (defun run-search-and-push (query face)
+      "Run buffer/search; push hit rects as view/overlays layers
+       tagged with FACE so they pick up the synced color."
+      (let* ((r (limn:call "buffer/search" :|buffer-id| buf :|query| query))
+             (hits (and (ok? r) (or (getf (data r) :|hits|) '())))
+             (layers
+               (loop for hit in hits
+                     for page = (getf hit :|page|)
+                     for rects = (or (getf hit :|rects|) '())
+                     append
+                     (loop for rect in rects
+                           collect
+                           (list :|type| "rect"
+                                 :|page| page
+                                 :|rect| rect
+                                 :|face| face
+                                 :|opacity| 0.5)))))
+        (cons (ok? r)
+              (limn:call "view/overlays" :|win-id| "w1"
+                          :|layers| layers))))
+
     ;; Ω1 baseline: pdf-search-match face → 黃 (#FFD700) 預設
     (format t "~%── Ω1: pdf-search 用 pdf-search-match face 預設黃 ──~%")
     (check "Ω1a — sync default yellow"
            (ok? (sync-face! "pdf-search-match" "#ffd700")))
-    ;; 執行 pdf-search（觸發 wire search/highlight 命令）
-    (check "Ω1b — pdf-search executes"
-           (ok? (limn:call "buffer/search-pdf"
-                            :|buffer-id| buf :|query| "the")))
+    (let ((rsp (run-search-and-push "the" "pdf-search-match")))
+      (check "Ω1b — pdf-search executes"
+             (and (car rsp) (ok? (cdr rsp)))))
     (sleep 0.3)
     (let* ((pr (page-rect "w1" 0))
            (bbox (and pr (region-bbox (getf pr :|x|) (getf pr :|y|)
@@ -76,9 +105,9 @@
     (format t "~%── Ω2: theme 改 face → 高亮顏色跟著變 ──~%")
     (check "Ω2a — sync orange (#FFA500)"
            (ok? (sync-face! "pdf-search-match" "#ffa500")))
-    (check "Ω2b — pdf-search re-run"
-           (ok? (limn:call "buffer/search-pdf"
-                            :|buffer-id| buf :|query| "the")))
+    (let ((rsp (run-search-and-push "the" "pdf-search-match")))
+      (check "Ω2b — pdf-search re-run"
+             (and (car rsp) (ok? (cdr rsp)))))
     (sleep 0.3)
     (let* ((pr (page-rect "w1" 0))
            (bbox (and pr (region-bbox (getf pr :|x|) (getf pr :|y|)

@@ -70,14 +70,73 @@
     (check "setup — sync lazy-highlight light orange"
            (ok? (sync-face! "lazy-highlight" "#ffaa55")))
 
-    ;; 觸發 isearch（命令名 limn/isearch:isearch-forward）
-    (format t "~%── Ω1: isearch foo + primary match ──~%")
-    (let ((r (limn:call "limn/cmd"
-                         :|name| "isearch-forward"
-                         :|query| "foo"
-                         :|buffer-id| buf)))
-      (check "Ω1a — isearch-forward executes"
-             (ok? r)))
+    ;;; v0.37 Phase F: the original test invoked (limn:call "limn/cmd"
+    ;;; :|name| "isearch-forward" ...) but the C++ binary has no
+    ;;; "limn/cmd" wire — Lisp commands aren't remote-invocable from
+    ;;; the bridge.  The retrofit being tested is purely Lisp-side
+    ;;; (isearch uses :isearch / :isearch-current face keywords).
+    ;;; Run isearch directly from the driver, wiring *buffer-text-fn*
+    ;;; to read via the wire and *highlight-fn* to translate face
+    ;;; keywords into the registered face names ("isearch-match" /
+    ;;; "lazy-highlight") + push a single combined view/overlays call.
+
+    (let* ((isearch-pkg (find-package '#:limn/isearch))
+           (text-fn-var (find-symbol "*BUFFER-TEXT-FN*"     isearch-pkg))
+           (curs-fn-var (find-symbol "*BUFFER-CURSOR-FN*"   isearch-pkg))
+           (sets-fn-var (find-symbol "*BUFFER-SET-CURSOR-FN*" isearch-pkg))
+           (hl-fn-var   (find-symbol "*HIGHLIGHT-FN*"       isearch-pkg))
+           (isearch-start (find-symbol "ISEARCH-START"      isearch-pkg))
+           (isearch-update (find-symbol "ISEARCH-UPDATE"    isearch-pkg))
+           ;; Accumulator: face-key → spans.  Combined into one
+           ;; view/overlays push so the second face doesn't clobber
+           ;; the first (view/overlays replaces the layer set).
+           (acc (make-hash-table :test 'equal)))
+      (set text-fn-var
+           (lambda (bid)
+             (let ((r (limn:call "buffer/text" :|buffer-id| bid)))
+               (or (and (ok? r) (getf (data r) :|text|)) ""))))
+      (set curs-fn-var
+           (lambda (bid)
+             (let ((r (limn:call "buffer/cursor-get" :|buffer-id| bid)))
+               (or (and (ok? r) (getf (data r) :|offset|)) 0))))
+      (set sets-fn-var
+           (lambda (bid off)
+             (limn:call "buffer/cursor-set" :|buffer-id| bid :|offset| off)))
+      (set hl-fn-var
+           (lambda (bid spans face-key)
+             (setf (gethash face-key acc) (cons bid spans))
+             ;; After both kinds have arrived (one shot dispatches
+             ;; :isearch first then :isearch-current), push combined.
+             (let ((layers
+                     (loop for face-key being the hash-key of acc
+                           for (b . sp) = (gethash face-key acc)
+                           append
+                           (loop for span in sp
+                                 for s = (car span)
+                                 for e = (cadr span)
+                                 collect
+                                 (list :|type| "text-range"
+                                       :|buf-id| b
+                                       :|start| s
+                                       :|end| e
+                                       :|face|
+                                       (case face-key
+                                         (:isearch         "lazy-highlight")
+                                         (:isearch-current "isearch-match")
+                                         (t (string-downcase
+                                             (symbol-name face-key))))
+                                       :|opacity| 0.6)))))
+               (limn:call "view/overlays" :|win-id| "w1"
+                          :|layers| layers))))
+
+      (format t "~%── Ω1: isearch foo + primary match ──~%")
+      (let ((ok-flag
+              (handler-case
+                  (let ((st (funcall isearch-start buf :forward t)))
+                    (funcall isearch-update st "foo")
+                    t)
+                (error (e) (format t "  isearch err: ~a~%" e) nil))))
+        (check "Ω1a — isearch-forward executes" ok-flag)))
     (sleep 0.3)
 
     (let* ((pr (page-rect "w1" 0))
