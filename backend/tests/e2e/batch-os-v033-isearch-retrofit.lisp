@@ -119,25 +119,32 @@
              (setf (gethash face-key acc) (cons bid spans))
              ;; After both kinds have arrived (one shot dispatches
              ;; :isearch first then :isearch-current), push combined.
-             (let ((layers
-                     (loop for face-key being the hash-key of acc
-                           for (b . sp) = (gethash face-key acc)
-                           append
-                           (loop for span in sp
-                                 for s = (car span)
-                                 for e = (cadr span)
-                                 collect
-                                 (list :|type| "text-range"
-                                       :|buf-id| b
-                                       :|start| s
-                                       :|end| e
-                                       :|face|
-                                       (case face-key
-                                         (:isearch         "lazy-highlight")
-                                         (:isearch-current "isearch-match")
-                                         (t (string-downcase
-                                             (symbol-name face-key))))
-                                       :|opacity| 0.6)))))
+             ;; Walk hash via maphash so we don't depend on LOOP
+             ;; destructuring of for-as variables (which differs across
+             ;; SBCL versions).
+             (let ((layers nil))
+               (maphash
+                (lambda (fk pair)
+                  (let ((b (car pair))
+                        (sp (cdr pair))
+                        (face-str
+                          (case fk
+                            (:isearch         "lazy-highlight")
+                            (:isearch-current "isearch-match")
+                            (t (string-downcase (symbol-name fk))))))
+                    (dolist (span sp)
+                      (push (list :|type|    "text-range"
+                                  :|buf-id|  b
+                                  :|start|   (car span)
+                                  :|end|     (cadr span)
+                                  :|face|    face-str
+                                  :|opacity| 0.6)
+                            layers))))
+                acc)
+               (format t "  → pushing ~a layers (faces: ~{~a ~})~%"
+                       (length layers)
+                       (loop for v being the hash-value of acc
+                             collect (length (cdr v))))
                (limn:call "view/overlays" :|win-id| "w1"
                           :|layers| layers))))
 
