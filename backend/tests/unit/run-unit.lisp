@@ -113,6 +113,8 @@
                 "which-key-v028.lisp"
                 ;; v0.29 wiring tests
                 "runtime-wireup-v028.lisp"
+                ;; v0.37 Phase E keymap discipline regression
+                "keymap-discipline-v037.lisp"
                 ;; v0.30 tests
                 "markers-v030.lisp"
                 "buffer-local-v030.lisp"
