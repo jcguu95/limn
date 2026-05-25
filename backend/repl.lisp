@@ -23,13 +23,12 @@
 
 (defun b/ (p) (namestring (merge-pathnames p *backend-dir*)))
 
-;;; ── v0.34: vendor cl-ppcre ────────────────────────────────────────────
+;;; ── v0.34: cl-ppcre (nix-pinned via flake) ────────────────────────────
 ;;; Loaded before backend modules so limn-regex.lisp can resolve cl-ppcre
-;;; at compile time. Soft-load: missing submodule is RED for §A but does
-;;; not crash repl bring-up.
+;;; at compile time. v0.37: was a vendored git submodule, now provided by
+;;; sbcl.withPackages [cl-ppcre] in flake.nix.
 
-(handler-case (load (b/ "../vendor/cl-ppcre-load.lisp"))
-  (error (e) (format t "  !! skipped vendor cl-ppcre: ~A~%" e)))
+(require :cl-ppcre)
 
 ;;; ── load all backend modules in dependency order ──────────────────────
 

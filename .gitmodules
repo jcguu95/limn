@@ -1,3 +1,0 @@
-[submodule "vendor/cl-ppcre"]
-	path = vendor/cl-ppcre
-	url = https://github.com/edicl/cl-ppcre

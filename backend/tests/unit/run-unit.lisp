@@ -23,13 +23,10 @@
 ;; Framework
 (load (rel "unit-framework.lisp"))
 
-;; v0.34 — vendor cl-ppcre (loaded before backend modules so limn-regex can
-;; resolve cl-ppcre at compile-time). Soft-load: missing submodule is RED
-;; for §A but doesn't crash the runner.
-(handler-case
-    (load (namestring (merge-pathnames "../../../vendor/cl-ppcre-load.lisp"
-                                       *unit-dir*)))
-  (error (e) (format t "  !! skipped vendor cl-ppcre: ~A~%" e)))
+;; v0.34 — cl-ppcre (nix-pinned via flake.nix sbclWithLibs). Loaded before
+;; backend modules so limn-regex can resolve cl-ppcre at compile-time.
+;; v0.37: was a vendored git submodule, now provided by sbcl.withPackages.
+(require :cl-ppcre)
 
 ;; v0.23 shared helpers (with-timeout-bound, fake-clock, mock-buffer)
 (load (rel "v023-helpers.lisp"))
