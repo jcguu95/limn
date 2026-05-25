@@ -107,11 +107,23 @@
     ;; prefix-arg digit (just like Emacs C-u 5 g, but without C-u).
     ;; First non-digit ends accumulation, value goes into
     ;; limn/cmd:*prefix-arg* dynamic binding for that dispatch.
+    ;;
+    ;; v0.37 Phase F: BUT — if the active mode-buffer has an explicit
+    ;; binding for the digit (e.g. pdf-mode binds "0" to pdf-zoom-reset),
+    ;; honour the binding instead of swallowing the key as a prefix arg.
+    ;; Otherwise pdf users can never reset zoom with "0" (v027-nav Ω6c).
     (when (and (null mods)
                (null limn/keys:*key-prefix*)
                (= 1 (length spec))
                (let ((c (char spec 0)))
-                 (and (char>= c #\0) (char<= c #\9))))
+                 (and (char>= c #\0) (char<= c #\9)))
+               ;; No mode-buffer binding for this digit?  Then it's a
+               ;; prefix-arg accumulation.
+               (let* ((win-id (or (getf ev :|win-id|) "w1"))
+                      (rt     (find-package :limn/runtime))
+                      (mb-fn  (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW" rt)))
+                      (mb     (and mb-fn (funcall mb-fn win-id))))
+                 (null (%mode-stack-lookup mb (list spec) lookup-seq))))
       ;; accumulate digit, do NOT dispatch the digit itself
       (setf *prefix-arg-acc* (concatenate 'string *prefix-arg-acc* spec))
       (return-from %dispatch-key nil))

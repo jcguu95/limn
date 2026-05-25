@@ -1885,12 +1885,13 @@
 (deftest v027-j-re-annotate-same-selection-replaces
   "h 在同 page 同 rect 重按一次：annotation 列表仍是 1 個，不是 2 個重複的。
    v0.37 Phase F: selection-get returns :|active|/:|begin|/:|end| on the
-   wire; %selection synthesizes :|page|/:|rects| from that."
+   wire; %selection synthesizes :|page|/:|rects| from that.  Also:
+   %current-pdf-path now reads from *buffer-id-to-path* (populated by
+   pdf-mode-on-buffer-opened) instead of a non-existent buffer/state
+   wire — pre-populate the cache so the mock test exercises the real
+   sidecar key (rather than the /tmp/unknown.pdf fallback)."
   (with-mock-bridge (:responses
                      (list (%fake-view-get :buffer-id "b1" :page 3)
-                           (cons "buffer/state"
-                                 (%make-ok (list :|path| "/tmp/p.pdf"
-                                                 :|major| "pdf-mode")))
                            (cons "view/selection-get"
                                  (%make-ok
                                   (list :|active| t
@@ -1903,26 +1904,30 @@
     (let* ((pkg (find-package '#:limn/pdf-mode))
            (write-var (and pkg (find-symbol "*ANNOTATIONS-WRITE-FN*" pkg)))
            (read-var  (and pkg (find-symbol "*ANNOTATIONS-READ-FN*" pkg)))
+           (cache-var (and pkg (find-symbol "*BUFFER-ID-TO-PATH*" pkg)))
            (ser (and pkg (find-symbol "PDF-ANNOTATIONS-SERIALIZE" pkg))))
-      (when (and write-var read-var (boundp write-var) (boundp read-var) ser)
-        (let ((store (make-hash-table :test #'equal)))
-          (progv (list write-var read-var)
-                 (list (lambda (p d) (setf (gethash p store) d))
-                       (lambda (p) (gethash p store)))
-            ;; 第一次 h
-            (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
-              (declare (ignore r)))
-            ;; 第二次 h（同 selection）
-            (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
-              (declare (ignore r)))
-            (let* ((load-fn (find-symbol "PDF-ANNOTATIONS-LOAD" pkg))
-                   (back (and load-fn (fboundp load-fn)
-                              (funcall (symbol-function load-fn)
-                                       "/tmp/p.pdf"))))
-              (when (listp back)
-                ;; 行為釘住：replace（=1）；若實作選 stack（>1）此 test 紅
-                (assert-equal 1 (length back)
-                              "同 rect 重按 h → 不重複（1 個）")))))))))
+      (when (and write-var read-var cache-var ser)
+        (setf (gethash "b1" (symbol-value cache-var)) "/tmp/p.pdf")
+        (unwind-protect
+             (let ((store (make-hash-table :test #'equal)))
+               (progv (list write-var read-var)
+                      (list (lambda (p d) (setf (gethash p store) d))
+                            (lambda (p) (gethash p store)))
+                 ;; 第一次 h
+                 (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
+                   (declare (ignore r)))
+                 ;; 第二次 h（同 selection）
+                 (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
+                   (declare (ignore r)))
+                 (let* ((load-fn (find-symbol "PDF-ANNOTATIONS-LOAD" pkg))
+                        (back (and load-fn (fboundp load-fn)
+                                   (funcall (symbol-function load-fn)
+                                            "/tmp/p.pdf"))))
+                   (when (listp back)
+                     ;; 行為釘住：replace（=1）；若實作選 stack（>1）此 test 紅
+                     (assert-equal 1 (length back)
+                                   "同 rect 重按 h → 不重複（1 個）")))))
+          (remhash "b1" (symbol-value cache-var)))))))
 
 (deftest v027-j-delete-last-annotation-leaves-empty-list
   "刪掉唯一一個 annotation → sidecar 變空 list（不是 unlink、不是 crash）。"

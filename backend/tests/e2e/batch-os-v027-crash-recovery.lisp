@@ -163,14 +163,25 @@
               :|end|   (list :|page| 1 :|x| 0.4 :|y| 0.6))
   (sleep 0.1) (key "h") (sleep 0.5)
 
+  ;; v0.37 Phase F: pdf-annotations-save prefers the content-hash
+  ;; sidecar (survives rename / move).  Read it preferentially; fall
+  ;; back to the legacy path-keyed sidecar so the test stays correct
+  ;; for older binaries too.
   (let* ((anno-pkg (find-package '#:limn/pdf-mode))
          (path-fn (and anno-pkg
                         (find-symbol "PDF-ANNOTATIONS-SIDECAR-PATH" anno-pkg)))
-         (p (and path-fn (funcall (symbol-function path-fn) *fixture*)))
-         (form (and p (probe-file p)
-                     (handler-case
-                         (with-open-file (in p :direction :input) (read in nil nil))
-                       (error () nil)))))
+         (cont-fn (and anno-pkg
+                        (find-symbol "PDF-ANNOTATIONS-CONTENT-HASH-SIDECAR-PATH"
+                                      anno-pkg)))
+         (p-cont  (and cont-fn (funcall (symbol-function cont-fn) *fixture*)))
+         (p-path  (and path-fn (funcall (symbol-function path-fn) *fixture*)))
+         (chosen  (or (and p-cont (probe-file p-cont) p-cont)
+                       (and p-path (probe-file p-path) p-path)))
+         (form    (and chosen
+                       (handler-case
+                           (with-open-file (in chosen :direction :input)
+                             (read in nil nil))
+                         (error () nil)))))
     (check (format nil "Ω3 — after migrate, sidecar :version = current (~a)"
                    (getf form :version))
            (and form (integerp (getf form :version))
