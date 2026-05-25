@@ -2142,7 +2142,9 @@ void LimnCommand::emit_buffer_opened(const QString& buffer_id, Document* doc,
     // Either may be empty — Lisp side already guards `(when path ...)`.
     QString path;
     if (doc) {
-        path = doc->get_path();
+        // Document::get_path() returns std::wstring — convert to QString.
+        const std::wstring wp = doc->get_path();
+        path = QString::fromStdWString(wp);
     } else if (buffer_paths.contains(buffer_id)) {
         path = buffer_paths.value(buffer_id);
     }
