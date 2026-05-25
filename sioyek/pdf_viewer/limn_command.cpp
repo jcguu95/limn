@@ -916,10 +916,24 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     if (key == "RET") {
         ev.insert("text", text_buffers["*minibuffer*"].to_qstring());
         bridge->push_event("minibuffer-submit", ev);
+        // v0.37 Phase F: Emacs convention — RET in minibuffer submits AND
+        // closes the widget.  Without this the C++ side stayed open after
+        // submit and direct callers (test drivers, third-party code that
+        // bypasses make-minibuffer-reader's unwind) saw stale open=true.
+        // make-minibuffer-reader still calls minibuffer/close from its
+        // unwind — both paths are idempotent, so the double-close is harmless.
+        minibuffer_open = false;
+        if (auto* c = chrome_of(main_widget))
+            c->set_minibuffer(false, "", "");
         return true;
     }
     if (key == "ESC") {
         bridge->push_event("minibuffer-cancel", ev);
+        // Same close-on-cancel rationale as RET above.  v027-completing-read
+        // Ω4 ("open is false after cancel") was the symptom.
+        minibuffer_open = false;
+        if (auto* c = chrome_of(main_widget))
+            c->set_minibuffer(false, "", "");
         return true;
     }
     // BS — delete character before cursor (current implementation: always
