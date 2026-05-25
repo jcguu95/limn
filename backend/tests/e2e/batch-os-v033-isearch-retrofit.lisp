@@ -53,6 +53,18 @@
   (limn:start sock)
   (sleep 0.3)
 
+  ;; v0.37 Phase F: same resize trick as v033b-wrapped-line-region.
+  ;; Xvfb without a WM doesn't propagate window resize to Qt's inner
+  ;; widgets, so test/inject-resize forces the QPlainTextEdit viewport
+  ;; to a known size; without it the text widget can have 0 size and
+  ;; pixel queries return NIL.
+  (sb-ext:run-program "xdotool"
+                       '("search" "--name" "Limn" "windowsize" "300" "400")
+                       :search t :wait t :output nil :error nil)
+  (ignore-errors
+    (limn:call "test/inject-resize" :|win-id| "w1" :|width| 300 :|height| 400))
+  (sleep 0.3)
+
   (let* ((er (limn:call "bridge/engine-load"
                          :|engine| "text" :|path| "" :|win-id| "w1"))
          (buf (and (ok? er) (getf (data er) :|buffer-id|))))
