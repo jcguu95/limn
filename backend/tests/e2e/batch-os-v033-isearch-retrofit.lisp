@@ -77,10 +77,17 @@
     (sleep 0.1)
 
     ;; 為 isearch-match (primary) 設黃、lazy-highlight 設淡橘
-    (check "setup — sync isearch-match yellow"
-           (ok? (sync-face! "isearch-match" "#ffd700")))
-    (check "setup — sync lazy-highlight light orange"
-           (ok? (sync-face! "lazy-highlight" "#ffaa55")))
+    ;; v0.37 Phase F: C++ display/sync-faces CLEARS the registry on
+    ;; each call (it's "replace all", not "add").  Two sequential
+    ;; calls would leave only the second face usable — so we sync
+    ;; both faces in a single call.
+    (check "setup — sync isearch-match yellow + lazy-highlight orange"
+           (ok? (limn:call "display/sync-faces"
+                            :|faces|
+                            (list (list :|name| "isearch-match"
+                                        :|background| "#ffd700")
+                                  (list :|name| "lazy-highlight"
+                                        :|background| "#ffaa55")))))
 
     ;;; v0.37 Phase F: the original test invoked (limn:call "limn/cmd"
     ;;; :|name| "isearch-forward" ...) but the C++ binary has no
@@ -159,6 +166,7 @@
     (sleep 0.3)
 
     (let* ((pr (page-rect "w1" 0))
+           (_dbg (format t "  → page-rect = ~s~%" pr))
            (primary-bbox (and pr (region-bbox
                                   (getf pr :|x|) (getf pr :|y|)
                                   (getf pr :|w|) (getf pr :|h|)
@@ -167,6 +175,7 @@
                                   (getf pr :|x|) (getf pr :|y|)
                                   (getf pr :|w|) (getf pr :|h|)
                                   "#ffaa55"))))
+      (declare (ignore _dbg))
       (check (format nil "Ω1b — primary 黃 highlight visible (~s)" primary-bbox)
              (not (null primary-bbox)))
       (check (format nil "Ω2 — lazy orange highlight visible (~s)" lazy-bbox)
