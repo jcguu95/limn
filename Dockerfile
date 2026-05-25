@@ -44,6 +44,12 @@ RUN nix develop /limn#docker --command true
 COPY sioyek/  /limn/sioyek/
 COPY backend/ /limn/backend/
 
+# v0.37 A1c: COPY .git/ so qmake can resolve `git rev-parse HEAD` and
+# bake the commit hash into the binary.  ~29 MB cost; the alternative
+# (passing git info as docker --build-arg) loses determinism since
+# the build context becomes argv-dependent.
+COPY .git/    /limn/.git/
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Build Limn — with ccache via buildkit cache mount.
 #

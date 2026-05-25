@@ -1,5 +1,6 @@
 #include "limn_command.h"
 
+#include "limn_build_info.h"
 #include "limn_bridge.h"
 #include "limn_buffer_registry.h"
 #include "limn_chrome_bar.h"
@@ -97,6 +98,9 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
         bridge->send_fail(id, "missing or empty 'cmd' field");
         return;
     }
+
+    // version/* — binary build provenance (v0.37 A1c)
+    if (cmd == "version/info")            { cmd_version_info           (id, msg); return; }
 
     // bridge/*
     if (cmd == "bridge/capabilities")     { cmd_bridge_capabilities    (id, msg); return; }
@@ -218,6 +222,22 @@ void LimnCommand::cmd_bridge_capabilities(const QString& id, const QJsonObject&)
     data.insert("engines",  engines);
     data.insert("frontend", "qt");
     data.insert("version",  "0.4");
+    bridge->send_ok(id, data);
+}
+
+// ─── version/info (v0.37 A1c) ─────────────────────────────────────────
+// Returns the same build provenance the binary prints to stderr at
+// startup, but as a structured plist so Lisp / scripts can introspect.
+// Strings come from -D macros set by pdf_viewer_build_config.pro; see
+// limn_build_info.h for the contract.
+
+void LimnCommand::cmd_version_info(const QString& id, const QJsonObject&) {
+    QJsonObject data;
+    data.insert("git-hash",   LIMN_BUILD_GIT_HASH);
+    data.insert("git-dirty",  LIMN_BUILD_GIT_DIRTY);
+    data.insert("build-time", LIMN_BUILD_TIME);
+    data.insert("build-host", LIMN_BUILD_HOST);
+    data.insert("build-qt",   LIMN_BUILD_QT);
     bridge->send_ok(id, data);
 }
 

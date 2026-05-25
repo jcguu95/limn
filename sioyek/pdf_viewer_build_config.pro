@@ -20,6 +20,39 @@ else{
 CONFIG += c++17
 DEFINES += QT_3DINPUT_LIB QT_OPENGL_LIB QT_OPENGLEXTENSIONS_LIB QT_WIDGETS_LIB
 
+# ─── v0.37 A1c: bake build provenance into the binary ──────────────────
+# Every Limn binary must self-report its git hash, compile time, and
+# build environment (see limn_build_info.h).  $$system() runs at qmake
+# time; falls back to "unknown" if git/.git are missing so the build
+# never fails on a missing-provenance reason.
+#
+# .pro lives in sioyek/, repo root is one level up; in docker the
+# repo is COPYd to /limn so .git is at /limn/.git.
+
+LIMN_GIT_HASH = $$system(cd $$_PRO_FILE_PWD_/.. 2>/dev/null && git rev-parse --short=12 HEAD 2>/dev/null)
+isEmpty(LIMN_GIT_HASH): LIMN_GIT_HASH = unknown
+
+LIMN_GIT_DIRTY = $$system(cd $$_PRO_FILE_PWD_/.. 2>/dev/null && (git diff-index --quiet HEAD -- 2>/dev/null && echo clean || echo dirty) 2>/dev/null)
+isEmpty(LIMN_GIT_DIRTY): LIMN_GIT_DIRTY = unknown
+
+LIMN_BUILD_TIME = $$system(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+isEmpty(LIMN_BUILD_TIME): LIMN_BUILD_TIME = unknown
+
+# `uname -srm` is space-separated; qmake variable assignment treats
+# spaces as list separators which then break DEFINES expansion
+# (each space becomes a new -D argument).  Pipe through sed (qmake
+# collapses `' '` literals in $$system(), so `tr ' ' '_'` doesn't
+# survive substitution — sed avoids the literal-space issue).
+LIMN_BUILD_HOST = $$system(uname -srm 2>/dev/null | sed -e s/[[:space:]]/_/g)
+isEmpty(LIMN_BUILD_HOST): LIMN_BUILD_HOST = unknown
+
+# Triple-escape: value passes through qmake → makefile → shell → compiler.
+DEFINES += LIMN_BUILD_GIT_HASH=\\\"$$LIMN_GIT_HASH\\\"
+DEFINES += LIMN_BUILD_GIT_DIRTY=\\\"$$LIMN_GIT_DIRTY\\\"
+DEFINES += LIMN_BUILD_TIME=\\\"$$LIMN_BUILD_TIME\\\"
+DEFINES += LIMN_BUILD_HOST=\\\"$$LIMN_BUILD_HOST\\\"
+DEFINES += LIMN_BUILD_QT=\\\"$$[QT_VERSION]\\\"
+
 RESOURCES += resources.qrc
 
 HEADERS += \
@@ -42,6 +75,7 @@ HEADERS += \
     pdf_viewer/utf8/checked.h \
     pdf_viewer/utf8/core.h \
     pdf_viewer/utf8/unchecked.h \
+    pdf_viewer/limn_build_info.h \
     pdf_viewer/limn_options.h \
     pdf_viewer/limn_buffer_registry.h \
     pdf_viewer/limn_bridge.h \

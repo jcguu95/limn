@@ -42,6 +42,9 @@ public:
     void dispatch(const QJsonObject& msg);
 
 private:
+    // ─── version/* (v0.37 A1c — binary build provenance) ────────────
+    void cmd_version_info           (const QString& id, const QJsonObject& msg);
+
     // ─── bridge/* ─────────────────────────────────────────────────────
     void cmd_bridge_capabilities    (const QString& id, const QJsonObject& msg);
     void cmd_bridge_engine_load     (const QString& id, const QJsonObject& msg);
