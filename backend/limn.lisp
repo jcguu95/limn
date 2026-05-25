@@ -373,12 +373,14 @@
         (setf (symbol-value slot) (funcall mk s))))
     ;; Load user init.lisp (SPEC §9.3) AFTER the framework's defaults
     ;; are in place — so user bindings / commands override, rather than
-    ;; being clobbered by them. Errors propagate: a broken init.lisp
-    ;; should not silently leave the user with a half-configured session.
+    ;; being clobbered by them.  Pass :resilient t so a broken init
+    ;; doesn't crash the session — matches Emacs (broken init.el → start
+    ;; with warning, not abort).  The error is logged to *error-output*
+    ;; so the user sees it; subsequent features still come up.
     (let ((load-init (and (find-package :limn/runtime)
                           (find-symbol "LOAD-INIT-FILE" :limn/runtime))))
       (when load-init
-        (let ((loaded (funcall load-init)))
+        (let ((loaded (funcall load-init :resilient t)))
           (when loaded
             (format t "~&;; loaded init: ~a~%" loaded)))))
     ;; v0.33b: wire-backed cursor I/O. Modules like limn/mark, limn/region,

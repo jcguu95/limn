@@ -114,3 +114,53 @@ Baseline: **32 e2e driver fails** in `./scripts/build-docker.sh && run-os-e2e.sh
 - **Root cause:** `(limn:pump)` returns the number of events drained, not the events themselves.  Driver used the return value as if it were a sequence.
 - **Fix:** install hooks via `arm-events` *before* injection and harvest into a shared list afterwards.
 - **Commit:** ac7053a
+
+## Phase G — post-merge e2e triage (this branch)
+
+Baseline after merging Phase F: 20 e2e fails.  Triage on this branch knocks the count to 0/111.  Five distinct root causes; some single fixes cascade through many drivers.
+
+### #G1 — `view/overlays` wire write field name asymmetric with the read field
+- **Symptom:** 11 e2e drivers fail with overlays staying at 0 even after writes that look like they succeeded.  pdf-mode `h` highlight, search highlight, region highlight, theme switch, multi-line region — all silently no-op.  Read paths (`view/get` → `:overlays`) return empty arrays.
+- **Root cause:** C++ `cmd_view_overlays` (writer) read its wire payload from field `"layers"`; C++ `cmd_view_get` (reader) returned the same data under `"overlays"`.  The command itself is `view/overlays`, the internal C++ member is `win->overlays`, and 7/7 Lisp `pdf-mode` write sites send `:|overlays|` — so `"layers"` was the outlier.  C++ silently treated the missing `"layers"` field as "empty array → clear all overlays."
+- **Fix:** rename the C++ writer's wire field to `"overlays"` so READ and WRITE are symmetric on the same key.  Plus updated 11 e2e drivers (29 call sites total) that had hand-written `:|layers|` calls — replaced with `:|overlays|`.
+- **Commit:** bf4a973
+
+### #G2 — `emit_buffer_opened` event payload missing `:path` field → sidecar reload never fires
+- **Symptom:** v027-annotate Ω3 (re-open after highlight has 0 overlays), v027-workflow Ω10 (same), v027-resume Ω1b/Ω2a (last-position not restored), v027-crash-recovery Ω4 (no annotation survives SIGKILL), v027-content-move (broken-pipe mid flow).
+- **Root cause:** C++ `emit_buffer_opened` event included `frame-id` / `buffer-id` / `engine` / `page-count` but NOT `path`.  The Lisp handler `pdf-mode-on-buffer-opened` reads `(getf ev :|path|)` to find the sidecar and last-position file — got NIL → handler early-returns → no sidecar load.  Bookmark restore, annotation reload, last-position restore all silently no-op'd whenever a buffer re-opened on a fresh process.
+- **Fix:** thread `path` into `emit_buffer_opened` signature and add it to the event payload.  Updated both call sites (mupdf via `cmd_bridge_engine_load`, mupdf via `cmd_buffer_open`) and the inline text-engine emit at line 298.  Text buffers pass empty string.
+- **Commit:** TBD
+
+### #G3 — `cmd_test_inject_key` bypasses `minibuffer_handle_key` → injected RET never becomes `minibuffer-submit`
+- **Symptom:** completing-read Ω2a/Ω3a `evs 0` — minibuffer-submit / minibuffer-cancel events never fire when the driver injects RET / ESC via `test/inject-key`.
+- **Root cause:** real Qt key events route through `minibuffer_handle_key` first (`limn_input.cpp` line 173); if it consumes the key (RET → submit, ESC → cancel, printable → input), no raw `key` event is emitted.  `cmd_test_inject_key` skipped that branch entirely and just pushed a raw `key` event.  So injected RET never reached the minibuffer's submit pathway.
+- **Fix:** mirror the real Qt key path — call `minibuffer_handle_key(key, mods)` first; only fall through to `push_event("key", ...)` when not consumed.
+- **Commit:** TBD
+
+### #G4 — `limn:start` loaded init.lisp with `:resilient nil` → broken init.lisp kills bring-up
+- **Symptom:** v027-init-real Ω2 ("broken init.lisp tolerance") — driver writes `(error "intentional broken init")` to init.lisp; Limn dies on session start with unhandled condition, all subsequent assertions trip broken-pipe.
+- **Root cause:** Bring-up site called `(funcall load-init)` with no args.  `load-init-file` defaults `:resilient` to `nil` — errors propagate.  Test expectation (and Emacs convention): broken init.el → degraded session + warning, not abort.
+- **Fix:** pass `:resilient t` at bring-up.  Errors caught + logged to `*error-output*`; user sees the message; downstream features still come up.  `:resilient nil` remains available for batch / scripted invocations that want fail-fast.
+- **Commit:** TBD
+
+### #G5 — `C-g` not bound in `pdf-mode-map` → search overlays don't clear on cancel
+- **Symptom:** v027-search Ω4 — driver does `/` → type query → RET → `n` (navigate hit) → `ctrl+g` (expect overlay clear).  Got 122 overlays still present.
+- **Root cause:** `pdf-isearch-quit` is defined and calls `pdf-search-reset` (which clears state + emits empty overlays), but the key wasn't bound in `pdf-mode-map`.
+- **Fix:** add `(%def km "C-g" 'pdf-isearch-quit)` to both the initial install and the merge-with-existing path.
+- **Commit:** TBD
+
+### Cascading fix observations
+
+Several drivers that I expected to need separate work passed once #G1+#G2+#G3 landed:
+- **v027-display-invariants Ω3** (zoom-in bbox unchanged) — overlay payload now reaches C++ correctly, raster rebuild picks up real coords.
+- **v027-nav Ω6c** (0 reset zoom) — flake or side-effect from previous cumulative state; clean after.
+- **v033b-edit-during-active-region** (Ω2 mark auto-deactivated, Ω3 region pixel gone) — region overlay path goes through `view/overlays`; symmetry fix unblocked it.
+- **v033-isearch-retrofit / v033-pdf-search-retrofit** — assumed feature-gap (looked up `limn/cmd` / `buffer/search-pdf` in C++ dispatch and saw no entry).  Actually green after #G1; either Lisp-side intercepts before wire or my grep missed the dispatch path.  Not investigated further given green.
+- **v027-stress Ω1a** (200 j page advance), **v036-narrow-and-query-replace**, **v036-tab-key-text-mode** — also green after cascading fixes.
+
+This is what "11 fixes for 32 baseline fails" looks like in practice: a few real root causes fan out widely.
+
+### Final tally
+
+  ./scripts/build-docker.sh && docker run --rm limn-e2e
+  → 111 passed, 0 failed

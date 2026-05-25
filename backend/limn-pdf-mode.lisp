@@ -1213,6 +1213,7 @@
       ;; search
       (%def km "/"        (intern "PDF-ISEARCH-FORWARD"  :cl-user))
       (%def km "?"        (intern "PDF-ISEARCH-BACKWARD" :cl-user)) ; v0.37 Phase D
+      (%def km "C-g"      (intern "PDF-ISEARCH-QUIT"     :cl-user)) ; clear hits
       ;; annotation (v0.27)
       (%def km "h"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
@@ -1247,6 +1248,7 @@
                                 ("d" pdf-toggle-dark)
                                 ("r" pdf-rotate-cw)
                                 ("/" pdf-isearch-forward)
+                                ("C-g" pdf-isearch-quit)
                                 ("h" pdf-highlight-selection)
                                 ("H" pdf-annotate-selection)
                                 ("t" pdf-toc)

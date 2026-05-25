@@ -304,11 +304,14 @@
    loaded (string) or NIL if none was found.
 
    :resilient nil  (default) — errors inside the init file propagate.
-                   Used at bring-up where a broken init.lisp should
-                   surface loudly so the user notices.
+                   Useful for batch / scripted invocations where a
+                   broken init should fail fast and exit non-zero.
    :resilient t    — errors caught + logged to *error-output*; returns
-                   the path anyway.  Used by reload-init-file for
-                   hot-reload where the session should survive a typo."
+                   the path anyway.  Used by both interactive bring-up
+                   (limn:start) and reload-init-file so a typo in the
+                   user's init.lisp doesn't kill the session (Emacs
+                   convention: broken init.el → degraded session +
+                   warning, not abort)."
   (let ((path (resolve-init-path)))
     (when path
       (if resilient
