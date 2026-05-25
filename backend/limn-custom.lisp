@@ -106,6 +106,7 @@
   (with-open-file (out path :direction :output :if-exists :supersede
                             :if-does-not-exist :create)
     (maphash (lambda (sym _entry)
+               (declare (ignore _entry))
                (let ((val (ignore-errors (symbol-value sym))))
                  ;; Skip values that can't be printed readably (e.g. lambdas)
                  (handler-case

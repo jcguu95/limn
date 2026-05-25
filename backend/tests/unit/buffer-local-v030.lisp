@@ -312,9 +312,7 @@
   (with-local-ctx ("b7a")
     (limn/local:defvar-local *v-b7a* 0 "test var")
     (let ((events '()))
-      (let ((pkg (find-package '#:limn/local))
-            (b b))
-        (declare (ignore b))
+      (let ((pkg (find-package '#:limn/local)))
         (when pkg
           (let ((fn-sym (find-symbol "*BUFFER-LOCAL-CHANGED-FN*" pkg)))
             (when fn-sym
@@ -339,9 +337,7 @@
   (with-local-ctx ("b7b")
     (limn/local:defvar-local *v-b7b* 5 "test var")
     (let ((events '()))
-      (let ((pkg (find-package '#:limn/local))
-            (b b))
-        (declare (ignore b))
+      (let ((pkg (find-package '#:limn/local)))
         (when pkg
           (let ((fn-sym (find-symbol "*BUFFER-LOCAL-CHANGED-FN*" pkg)))
             (when fn-sym

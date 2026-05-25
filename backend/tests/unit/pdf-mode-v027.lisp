@@ -583,21 +583,27 @@
         (assert-equal 1 (funcall idx s) "retreat from 0 → last")))))
 
 (deftest v027-b-search-reset-clears-state
-  "pdf-search-reset 應該清掉 query/hits/index。"
+  "pdf-search-reset 應該清掉 query/hits/index。
+   v0.37 A2: rebinds *limn-call-fn* to no-op — pdf-search-reset issues
+   a view/overlays wire call that would otherwise hit `limn: not started`
+   in the unit-test environment (no live bridge)."
   (let* ((pkg (find-package '#:limn/pdf-mode))
          (make (and pkg (find-symbol "MAKE-PDF-SEARCH-STATE" pkg)))
          (reset (and pkg (find-symbol "PDF-SEARCH-RESET" pkg)))
-         (state-var (and pkg (find-symbol "*PDF-SEARCH-STATE*" pkg))))
-    (when (and make reset state-var (boundp state-var))
-      (setf (symbol-value state-var)
-            (funcall make :buffer-id "b" :query "q"
-                          :hits '((:|page| 0 :|rects| ((0 0 0 0))))
-                          :current-index 0))
-      (funcall (symbol-function reset))
-      (let ((s (symbol-value state-var)))
-        (assert-true (or (null s)
-                         (null (funcall (find-symbol "PDF-SEARCH-STATE-HITS" pkg) s)))
-                     "reset 後 state nil 或 hits 空")))))
+         (state-var (and pkg (find-symbol "*PDF-SEARCH-STATE*" pkg)))
+         (call-fn-var (and pkg (find-symbol "*LIMN-CALL-FN*" pkg))))
+    (when (and make reset state-var (boundp state-var) call-fn-var)
+      (progv (list call-fn-var)
+             (list (lambda (&rest _) (declare (ignore _)) nil))
+        (setf (symbol-value state-var)
+              (funcall make :buffer-id "b" :query "q"
+                            :hits '((:|page| 0 :|rects| ((0 0 0 0))))
+                            :current-index 0))
+        (funcall (symbol-function reset))
+        (let ((s (symbol-value state-var)))
+          (assert-true (or (null s)
+                           (null (funcall (find-symbol "PDF-SEARCH-STATE-HITS" pkg) s)))
+                       "reset 後 state nil 或 hits 空"))))))
 
 (deftest v027-b-isearch-forward-opens-minibuffer
   "/ 應該打開 minibuffer 讀 query。"

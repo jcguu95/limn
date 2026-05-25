@@ -35,7 +35,7 @@
             (list collection)
             (hash-table
              (let ((keys '()))
-               (maphash (lambda (k _v) (push k keys)) collection)
+               (maphash (lambda (k _v) (declare (ignore _v)) (push k keys)) collection)
                keys))
             (function
              (funcall collection input pred nil)))))

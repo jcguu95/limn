@@ -1,4 +1,5 @@
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -8,6 +9,7 @@
 
 #include "main_widget.h"
 #include "pdf_view_opengl_widget.h"
+#include "limn_build_info.h"
 #include "limn_options.h"
 #include "limn_bridge.h"
 #include "limn_buffer_registry.h"
@@ -28,10 +30,25 @@ static void unlock_mutex(void* user, int lock) {
 }
 
 int main(int argc, char* argv[]) {
+    // v0.37 A1c: --version dumps build provenance and exits.  Handled
+    // first because it must work even without a display / socket / etc.
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--version") == 0) {
+            std::fputs(limn_build_banner(), stdout);
+            return 0;
+        }
+    }
+
     // Ignore SIGPIPE — Qt's QLocalSocket on macOS doesn't always set
     // SO_NOSIGPIPE, so writing to a peer-closed socket would otherwise
     // terminate the process.
     std::signal(SIGPIPE, SIG_IGN);
+
+    // v0.37 A1c: print build banner to stderr at startup so every Limn
+    // session — interactive, test, headless, container — surfaces its
+    // own provenance.  Goes to stderr to keep stdout clean for any
+    // tool piping Limn's wire output.
+    std::fputs(limn_build_banner(), stderr);
 
     // Pre-scan argv for --headless so we can install the offscreen Qt
     // platform plugin BEFORE QApplication is constructed. The offscreen

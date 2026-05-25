@@ -1,13 +1,15 @@
 # Limn e2e container — nix-based.
 #
+# Single source of truth: flake.nix + flake.lock. Every package (build-time
+# C++ deps AND test-time OS tools like xvfb/xdotool/sbcl/fcitx5/fonts) comes
+# from `nix develop /limn#docker`. There is NO nix-env, NO apt-get, NO
+# channel: if host devShell.default has a package, docker#docker has it too
+# at the EXACT same nixpkgs rev.
+#
 # We tried apt-managed Debian first (e518f02). Hit two walls:
 #   - Qt 6.4.2 on Debian bookworm is older than what sioyek expects
 #     (QTextToSpeech::sayingWord / engineCapabilities are 6.5+)
 #   - libmupdf 1.20.3 on Debian doesn't have fz_page_label etc.
-#
-# nix gives us the same versions as the macOS dev shell (Qt 6.11,
-# mupdf 1.27+) — same flake on either platform. So the container is
-# nix-based.
 #
 # Build:    docker build -t limn-e2e .
 # Run e2e:  docker run --rm limn-e2e
@@ -26,45 +28,37 @@ WORKDIR /limn
 # layer — code changes won't bust the nix-store closure.
 COPY flake.nix flake.lock /limn/
 
-# Materialise the dev shell so the closure is fetched once at build time.
-RUN nix develop --command true
-
-# Add the OS-level tools the e2e flow needs but the dev shell doesn't
-# (Xvfb / xdotool / x11vnc / sbcl / fonts + a minimal window manager so
-# Qt's xcb backend gets ICCCM-conformant focus/mouse delivery). Done as
-# a fresh nix-env install rather than amending flake.nix because they
-# aren't macOS dev needs.
+# Materialise the full docker dev shell (build-time C++ deps + test-time
+# OS tools). This realizes everything in flake#docker — xvfb, xdotool,
+# x11vnc, openbox, fcitx5, fonts, mesa, ccache, inotify-tools, sbcl
+# (with cl-ppcre), etc. Done in its own layer so unrelated code changes
+# don't bust the (large) closure download.
 #
-# NB: this layer MUST sit *above* the source COPYs — otherwise every
-# tiny .cpp / .lisp change re-invalidates the ~700MB nixpkgs reinstall
-# and adds ~30s of pointless rework per incremental build.
-RUN nix-env -iA \
-      nixpkgs.xorg.xvfb \
-      nixpkgs.xdotool \
-      nixpkgs.x11vnc \
-      nixpkgs.xorg.xdpyinfo \
-      nixpkgs.openbox \
-      nixpkgs.sbcl \
-      nixpkgs.dejavu_fonts \
-      nixpkgs.noto-fonts \
-      nixpkgs.noto-fonts-cjk-sans \
-      nixpkgs.bash \
-      nixpkgs.coreutils \
-      nixpkgs.fontconfig \
-      nixpkgs.mesa \
-      nixpkgs.mesa-demos \
-      nixpkgs.ccache \
-      nixpkgs.fcitx5 \
-      nixpkgs.kdePackages.fcitx5-chinese-addons \
-      nixpkgs.wmctrl \
-      nixpkgs.xorg.xprop \
-      nixpkgs.inotify-tools
+# IMPORTANT: This MUST sit *above* the source COPYs — otherwise every
+# tiny .cpp / .lisp change re-invalidates the ~700MB nixpkgs realize
+# and adds 30s+ per incremental build.
+RUN nix develop /limn#docker --command true
 
 # Now copy the actual source. Only this and the build step below get
 # re-run on incremental changes.
 COPY sioyek/  /limn/sioyek/
 COPY backend/ /limn/backend/
-COPY vendor/  /limn/vendor/
+
+# v0.37 A1c: build provenance (git hash / dirty / build time) is passed
+# in via --build-arg → ENV so qmake's $$(VAR) substitution sees it.
+# Defaults to "unknown" so plain `docker build .` still works (binary
+# just prints unknown for the missing field).  Canonical way to build
+# with full provenance: use scripts/build-docker.sh wrapper.
+#
+# Not via COPY .git because git worktrees' .git is a `gitdir:` pointer
+# to an absolute host path that doesn't exist inside the container —
+# libgit2 then refuses to open /limn as a flake input.
+ARG LIMN_BUILD_GIT_HASH=unknown
+ARG LIMN_BUILD_GIT_DIRTY=unknown
+ARG LIMN_BUILD_TIME=unknown
+ENV LIMN_BUILD_GIT_HASH=$LIMN_BUILD_GIT_HASH
+ENV LIMN_BUILD_GIT_DIRTY=$LIMN_BUILD_GIT_DIRTY
+ENV LIMN_BUILD_TIME=$LIMN_BUILD_TIME
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Build Limn — with ccache via buildkit cache mount.
@@ -96,7 +90,7 @@ COPY vendor/  /limn/vendor/
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RUN --mount=type=cache,id=limn-ccache,target=/root/.ccache,sharing=locked \
     cd sioyek && \
-    nix develop /limn --command bash -c '\
+    nix develop /limn#docker --command bash -c '\
       export CCACHE_DIR=/root/.ccache && \
       export CCACHE_MAXSIZE=5G && \
       ccache --zero-stats > /dev/null && \
@@ -114,5 +108,9 @@ ENV LIMN_BACKEND_DIR=/limn/backend/
 COPY backend/tests/e2e/container-entry.sh /usr/local/bin/container-entry.sh
 RUN chmod +x /usr/local/bin/container-entry.sh
 
-ENTRYPOINT ["/usr/local/bin/container-entry.sh"]
+# ENTRYPOINT runs inside the docker dev shell so all tools (sbcl, xdotool,
+# fcitx5, ...) resolve from the flake-pinned nix store — never from the
+# nixos/nix base image's channel. This is what makes host ≡ docker.
+ENTRYPOINT ["nix", "develop", "/limn#docker", "--command", \
+            "/usr/local/bin/container-entry.sh"]
 CMD ["backend/tests/e2e/run-os-e2e.sh"]

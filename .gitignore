@@ -14,7 +14,7 @@ sioyek/windows_runtime/
 sioyek/.gitattributes
 sioyek/.gitignore
 sioyek/.gitmodules
-sioyek/tutorial.pdf
+# tutorial.pdf is TRACKED (embedded into binary via resources.qrc).
 
 # Qt-generated and build artifacts
 sioyek/*.o
@@ -28,15 +28,19 @@ sioyek/.qmake.stash
 
 # Sioyek top-level non-source files
 sioyek/bak/
-sioyek/fzf/
+# fzf/ is vendored upstream-sioyek C source (~1.4K LOC fuzzy matcher).
+# Tracked in git so every fresh clone / worktree / docker build context
+# is self-sufficient. (Pre-v0.37 it was gitignored, which broke docker
+# builds from any worktree that didn't manually copy fzf in.)
 sioyek/.github/
 sioyek/scripts/
 sioyek/data/
 sioyek/icons/
 sioyek/tutorial/
 sioyek/resources/
-sioyek/begin.png
-sioyek/end.png
+# begin.png + end.png + tutorial.pdf + pdf_viewer/shaders/ are now TRACKED.
+# They're embedded into the binary via resources.qrc — the build literally
+# can't link without them. v0.37 unbroke fresh-clone/worktree builds.
 sioyek/CMakeLists.txt
 sioyek/Makefile
 sioyek/LICENSE
@@ -47,9 +51,11 @@ sioyek/*.py
 sioyek/*.bat
 sioyek/result
 
-# Binary assets inside pdf_viewer/ (referenced via resources.qrc instead)
+# Binary assets inside pdf_viewer/. shaders/ is TRACKED (qrc-embedded into
+# binary, build dies without it). fonts/ + .ico stay untracked — fonts come
+# from fontconfig at runtime, .ico is mac-icon-only and not in the Linux
+# build path. v0.37 unbroke fresh-clone/worktree builds.
 sioyek/pdf_viewer/fonts/
-sioyek/pdf_viewer/shaders/
 sioyek/pdf_viewer/icon1.ico
 sioyek/pdf_viewer/icon2.ico
 

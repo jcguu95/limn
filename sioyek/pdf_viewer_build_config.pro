@@ -20,6 +20,46 @@ else{
 CONFIG += c++17
 DEFINES += QT_3DINPUT_LIB QT_OPENGL_LIB QT_OPENGLEXTENSIONS_LIB QT_WIDGETS_LIB
 
+# ─── v0.37 A1c: bake build provenance into the binary ──────────────────
+# Every Limn binary must self-report its git hash, compile time, and
+# build environment (see limn_build_info.h).
+#
+# Two paths for provenance values:
+#   1. Env var LIMN_BUILD_GIT_HASH etc. — set by docker --build-arg
+#      via Dockerfile ENV.  Preferred because docker has no usable
+#      .git (worktrees' .git is a gitdir: pointer to a host path).
+#   2. $$system(git rev-parse) at qmake time — used on the host where
+#      .git is available.  No-op inside docker (no git → empty result).
+# Anything still empty after both falls back to "unknown" so the build
+# never fails on a missing-provenance reason.
+
+LIMN_GIT_HASH = $$(LIMN_BUILD_GIT_HASH)
+isEmpty(LIMN_GIT_HASH): LIMN_GIT_HASH = $$system(cd $$_PRO_FILE_PWD_/.. 2>/dev/null && git rev-parse --short=12 HEAD 2>/dev/null)
+isEmpty(LIMN_GIT_HASH): LIMN_GIT_HASH = unknown
+
+LIMN_GIT_DIRTY = $$(LIMN_BUILD_GIT_DIRTY)
+isEmpty(LIMN_GIT_DIRTY): LIMN_GIT_DIRTY = $$system(cd $$_PRO_FILE_PWD_/.. 2>/dev/null && (git diff-index --quiet HEAD -- 2>/dev/null && echo clean || echo dirty) 2>/dev/null)
+isEmpty(LIMN_GIT_DIRTY): LIMN_GIT_DIRTY = unknown
+
+LIMN_BUILD_TIME = $$(LIMN_BUILD_TIME)
+isEmpty(LIMN_BUILD_TIME): LIMN_BUILD_TIME = $$system(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+isEmpty(LIMN_BUILD_TIME): LIMN_BUILD_TIME = unknown
+
+# `uname -srm` is space-separated; qmake variable assignment treats
+# spaces as list separators which then break DEFINES expansion
+# (each space becomes a new -D argument).  Pipe through sed (qmake
+# collapses `' '` literals in $$system(), so `tr ' ' '_'` doesn't
+# survive substitution — sed avoids the literal-space issue).
+LIMN_BUILD_HOST = $$system(uname -srm 2>/dev/null | sed -e s/[[:space:]]/_/g)
+isEmpty(LIMN_BUILD_HOST): LIMN_BUILD_HOST = unknown
+
+# Triple-escape: value passes through qmake → makefile → shell → compiler.
+DEFINES += LIMN_BUILD_GIT_HASH=\\\"$$LIMN_GIT_HASH\\\"
+DEFINES += LIMN_BUILD_GIT_DIRTY=\\\"$$LIMN_GIT_DIRTY\\\"
+DEFINES += LIMN_BUILD_TIME=\\\"$$LIMN_BUILD_TIME\\\"
+DEFINES += LIMN_BUILD_HOST=\\\"$$LIMN_BUILD_HOST\\\"
+DEFINES += LIMN_BUILD_QT=\\\"$$[QT_VERSION]\\\"
+
 RESOURCES += resources.qrc
 
 HEADERS += \
@@ -42,6 +82,7 @@ HEADERS += \
     pdf_viewer/utf8/checked.h \
     pdf_viewer/utf8/core.h \
     pdf_viewer/utf8/unchecked.h \
+    pdf_viewer/limn_build_info.h \
     pdf_viewer/limn_options.h \
     pdf_viewer/limn_buffer_registry.h \
     pdf_viewer/limn_bridge.h \
@@ -79,9 +120,18 @@ SOURCES += \
     pdf_viewer/limn_chrome_bar.cpp \
     fzf/fzf.c
 
+# v0.37 A1d: macOS uses the same nix-built mupdf as Linux/docker so
+# host ≡ container library versions.  Pre-v0.37 the mac block linked
+# the vendored sioyek/mupdf/build/release which (a) requires
+# initializing the mupdf submodule (~10 min cold build) and (b) lets
+# host and container drift.  nix gives both sides the same 1.27+
+# binary out-of-the-box.
 mac {
     QMAKE_CXXFLAGS += -std=c++17
-    LIBS += -ldl -L$$PWD/mupdf/build/release -lmupdf -lmupdf-third -lmupdf-threads -lz
+    # nix-built mupdf: single libmupdf + system third-party deps.
+    LIBS += -lmupdf
+    LIBS += -lz -lm -ldl
+    LIBS += -lharfbuzz -lfreetype -ljpeg -lopenjp2 -ljbig2dec -lgumbo
     CONFIG+=sdk_no_version_check
     QMAKE_MACOSX_DEPLOYMENT_TARGET = 15
     ICON = pdf_viewer/icon2.ico
@@ -91,15 +141,11 @@ mac {
 }
 
 # Linux build path — used by the e2e container (Dockerfile, nix-based).
-# Uses nixpkgs mupdf (1.27+, same version as macOS dev shell). nix
-# shell sets NIX_CFLAGS_COMPILE / NIX_LDFLAGS so we don't need hardcoded
-# INCLUDEPATH or library search paths — just declare what to link.
+# nix shell sets NIX_CFLAGS_COMPILE / NIX_LDFLAGS so we don't need
+# hardcoded INCLUDEPATH or library search paths — just declare what to
+# link.  Same library set as mac { } above (single source of truth).
 unix:!mac:!android {
     QMAKE_CXXFLAGS += -std=c++17
-    # nix-built mupdf is a single libmupdf; third-party deps (harfbuzz /
-    # freetype / jpeg / openjp2 / jbig2dec / gumbo) are linked separately
-    # at the final binary, not bundled into libmupdf-third like sioyek's
-    # vendored build does.
     LIBS += -lmupdf
     LIBS += -lz -lm -ldl
     LIBS += -lharfbuzz -lfreetype -ljpeg -lopenjp2 -ljbig2dec -lgumbo

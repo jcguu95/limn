@@ -45,6 +45,23 @@
 (defvar *global-mark-ring* '())
 (defvar *global-mark-ring-max* 16)
 
+;; v0.33 §C transient-mark-mode state.  Defined here at file top
+;; (rather than next to the region API below) so set-mark / reset-marks
+;; — defined earlier in the file — can reference them without
+;; triggering compile-time forward-ref warnings.
+(defvar *transient-mark-mode* t
+  "When true (Emacs 25+ default), set-mark activates the region and
+   subsequent edit commands deactivate it.")
+
+(defvar *mark-active* (make-hash-table :test 'equal)
+  "Per-buffer flag: buf-id → t/nil. t = region is currently active and
+   should be visually highlighted.")
+
+(defvar *region-deactivate-hook* nil
+  "Funcall'd with (buf-id) immediately after a mark is deactivated, so
+   the region-overlay layer can clear its overlay. limn/region installs
+   itself here at load time.")
+
 (defvar *buffer-cursor-fn*     (lambda (bid) (declare (ignore bid)) 0))
 (defvar *buffer-set-cursor-fn* (lambda (bid off) (declare (ignore bid off))))
 
@@ -214,18 +231,8 @@
 ;;; this module only owns the data state.
 ;;; ════════════════════════════════════════════════════════════════════════
 
-(defvar *transient-mark-mode* t
-  "When true (Emacs 25+ default), set-mark activates the region and
-   subsequent edit commands deactivate it.")
-
-(defvar *mark-active* (make-hash-table :test 'equal)
-  "Per-buffer flag: buf-id → t/nil. t = region is currently active and
-   should be visually highlighted.")
-
-(defvar *region-deactivate-hook* nil
-  "Funcall'd with (buf-id) immediately after a mark is deactivated, so
-   the region-overlay layer can clear its overlay. limn/region installs
-   itself here at load time.")
+;; *transient-mark-mode*, *mark-active*, *region-deactivate-hook*
+;; are defvar'd at file top (see comment there).
 
 (defun mark-active-p (buf-id)
   "Return t when the region in BUF-ID is currently active."

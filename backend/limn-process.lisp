@@ -313,7 +313,6 @@
                           (coding-system nil coding-supplied)
                           (decode-coding-system nil decode-supplied)
                           (encode-coding-system nil encode-supplied))
-  (declare (ignore name))
   (declare (ignore coding-supplied decode-supplied encode-supplied))
   (unless (and command (listp command))
     (error 'process-error

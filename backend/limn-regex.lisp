@@ -335,7 +335,6 @@
              ;; Re-scan at that location to capture group data.
              (multiple-value-bind (mstart mend reg-starts reg-ends)
                  (%scan-once pcre text s (max e (1+ s)))
-               (declare (ignore mend))
                (let ((true-end (or e mend)))
                  (%install-match-data (or mstart s) true-end
                                       reg-starts reg-ends text)))

@@ -38,37 +38,8 @@
         base)))
 
 (defun split-on-dash (s)
-  "Split 'C-M-s' into ('C' 'M' 's'). Treats only single-char modifiers
-   as separators — bare '-' (after a modifier) becomes the literal key."
-  (let ((parts '())
-        (cur (make-string-output-stream)))
-    (loop for i from 0 below (length s) do
-      (let ((c (char s i)))
-        (cond
-          ;; "X-" where X is a known modifier letter — flush
-          ((and (char= c #\-)
-                (zerop (length (string-trim '() (get-output-stream-string-peek cur))))
-                (= i 1) (char= (char s 0) #\C))
-           ;; Already flushed by previous step? Fall through.
-           (write-char c cur))
-          (t (write-char c cur)))))
-    ;; Simpler: just split by '-' but rejoin if last part is empty (means literal -)
-    (let ((bits (loop with start = 0
-                       for i from 0 below (length s)
-                       when (char= (char s i) #\-)
-                         collect (subseq s start i) and do (setf start (1+ i))
-                       finally (return (append (loop with start = 0
-                                                      for i from 0 below (length s)
-                                                      when (char= (char s i) #\-)
-                                                        collect (subseq s start i) and do (setf start (1+ i)))
-                                                (list (subseq s start)))))))
-      (declare (ignore bits)))
-    ;; Robust version: split on every "-", treat each segment of length 1 + uppercase as modifier
-    ;; or the special form "Modifier-Base".
-    ;; For our purposes, just split on every "-".
-    (let ((bits (split-string-on s #\-)))
-      ;; Remove empty segments (only at end if input ends with -)
-      bits)))
+  "Split 'C-M-s' into ('C' 'M' 's')."
+  (split-string-on s #\-))
 
 (defun split-string-on (s ch)
   (loop with start = 0

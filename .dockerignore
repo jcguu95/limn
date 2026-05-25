@@ -23,7 +23,10 @@ sioyek/Makefile
 limn-repl.log
 /tmp/
 
-# git internals
+# git internals — NOT copied because the worktree's .git is a `gitdir:`
+# pointer to a host abs path which doesn't exist inside the container.
+# Build provenance comes in via --build-arg instead (see Dockerfile
+# and scripts/build-docker.sh).
 .git/
 .gitignore
 
