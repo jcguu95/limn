@@ -162,29 +162,29 @@
                     (funcall isearch-update st "foo")
                     t)
                 (error (e) (format t "  isearch err: ~a~%" e) nil))))
-        (check "Ω1a — isearch-forward executes" ok-flag)))
-    (sleep 0.3)
+        (check "Ω1a — isearch-forward executes" ok-flag))
+      (sleep 0.3)
 
-    ;;; v0.37 Phase F: the original test asserted pixel-level visibility
-    ;;; for both faces.  Xvfb's QPlainTextEdit layout step doesn't
-    ;;; materialise document positions without a real focus-in event
-    ;;; (page-rect comes back 298x365, layers pushed, face_registry
-    ;;; populated — but the painter sees zero rects).  Verify the
-    ;;; retrofit's actual contract instead: the wire received text-range
-    ;;; layers under both :isearch and :isearch-current, with the latter
-    ;;; smaller (one current hit vs all lazy hits).
-    (let* ((lazy-count    (length (cdr (gethash :isearch acc))))
-           (primary-count (length (cdr (gethash :isearch-current acc)))))
-      (check (format nil "Ω1b — primary highlight wire push (count ~a)"
-                     primary-count)
-             (plusp primary-count))
-      (check (format nil "Ω2 — lazy highlight wire push (count ~a)"
-                     lazy-count)
-             (plusp lazy-count))
-      (check (format nil
-                     "Ω3 — primary (~a) ≠ lazy (~a) — distinct face pipelines"
-                     primary-count lazy-count)
-             (not (= primary-count lazy-count)))))
+      ;;; v0.37 Phase F: the original test asserted pixel-level visibility
+      ;;; for both faces.  Xvfb's QPlainTextEdit layout step doesn't
+      ;;; materialise document positions without a real focus-in event
+      ;;; (page-rect comes back 298x365, layers pushed, face_registry
+      ;;; populated — but the painter sees zero rects).  Verify the
+      ;;; retrofit's actual contract instead: the wire received text-range
+      ;;; layers under both :isearch and :isearch-current, with the latter
+      ;;; smaller (one current hit vs all lazy hits).
+      (let* ((lazy-count    (length (cdr (gethash :isearch acc))))
+             (primary-count (length (cdr (gethash :isearch-current acc)))))
+        (check (format nil "Ω1b — primary highlight wire push (count ~a)"
+                       primary-count)
+               (plusp primary-count))
+        (check (format nil "Ω2 — lazy highlight wire push (count ~a)"
+                       lazy-count)
+               (plusp lazy-count))
+        (check (format nil
+                       "Ω3 — primary (~a) ≠ lazy (~a) — distinct face pipelines"
+                       primary-count lazy-count)
+               (not (= primary-count lazy-count))))))
 
   (format t "~%── v033-isearch-retrofit results ──~%")
   (if (null *failures*)
