@@ -31,11 +31,28 @@
 ;; (whose defpackage :uses #:sb-bsd-sockets — the use list resolves at
 ;; compile time, before its own top-level (require ...) has a chance
 ;; to run under FASL semantics).
-(require :asdf)
-(require :sb-bsd-sockets)
-(let ((backend-dir (namestring (merge-pathnames "../../" *unit-dir*))))
-  (push backend-dir asdf:*central-registry*))
-(asdf:load-system :limn)
+;; Muffle nix sbcl-wrapper's CL_SOURCE_REGISTRY contrib-dup warnings.
+;; See backend/repl.lisp for full explanation.  Split into two forms
+;; so the reader doesn't choke on asdf:* symbols before asdf loads.
+(defvar *muffle-asd-dup*
+  (lambda (w)
+    (let ((msg (princ-to-string w)))
+      (when (and (search "found several entries" msg)
+                 (search "lib/sbcl" msg))
+        (muffle-warning w)))))
+
+(handler-bind ((warning *muffle-asd-dup*))
+  (require :asdf)
+  (require :sb-bsd-sockets))
+
+(handler-bind ((warning *muffle-asd-dup*))
+  (let ((backend-dir (namestring (merge-pathnames "../../" *unit-dir*))))
+    (push backend-dir asdf:*central-registry*))
+  ;; Force the source-registry scan now so the warnings emit INSIDE
+  ;; the muffler — otherwise it's lazy and the first wireup test's
+  ;; asdf:find-system call triggers the scan post-muffler.
+  (asdf:initialize-source-registry)
+  (asdf:load-system :limn))
 
 ;; v0.23 shared helpers (with-timeout-bound, fake-clock, mock-buffer).
 ;; Loaded AFTER the backend (which provides limn/cmd etc.) so the

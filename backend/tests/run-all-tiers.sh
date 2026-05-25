@@ -17,6 +17,13 @@ set -u
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# v0.37 A3: auto-wrap in `nix develop` if not already inside.  Ensures
+# every sbcl invocation resolves to the sandboxed wrapper (auto-injects
+# --no-userinit) and uses flake-pinned versions.
+if [ -f "$PROJECT_ROOT/flake.nix" ] && [ -z "${LIMN_NIX_SHELL:-}" ]; then
+  exec nix develop "$PROJECT_ROOT" --command bash "$0" "$@"
+fi
+
 SKIP_OS=0
 for arg in "$@"; do
   case "$arg" in

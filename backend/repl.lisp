@@ -33,12 +33,32 @@
 ;;; FASLs cache under ASDF's user output cache (~/.cache/common-lisp/),
 ;;; so subsequent loads after the first compile are essentially free.
 
-(require :asdf)
-;; sb-bsd-sockets required up-front because limn-client's defpackage
-;; :uses #:sb-bsd-sockets and that use list resolves at compile time.
-(require :sb-bsd-sockets)
-(push *backend-dir* asdf:*central-registry*)
-(asdf:load-system :limn)
+;; nix's sbcl-with-packages wrapper sets CL_SOURCE_REGISTRY to include
+;; the SBCL contrib dir via a `//` recursive glob; that dir registers
+;; each contrib's .asd at TWO paths (top-level + subdir/), and ASDF
+;; warns about duplicates ("found several entries for sb-aclrepl ...
+;; picking X over Y") — 18 warnings/process.  Harmless, not our code's
+;; fault, but pure noise.  Muffle exactly that warning text; everything
+;; else propagates.  Split into two handler-binds so the reader doesn't
+;; choke on asdf:* symbols before asdf has loaded.
+(defvar *muffle-asd-dup*
+  (lambda (w)
+    (let ((msg (princ-to-string w)))
+      (when (and (search "found several entries" msg)
+                 (search "lib/sbcl" msg))
+        (muffle-warning w)))))
+
+(handler-bind ((warning *muffle-asd-dup*))
+  (require :asdf)
+  (require :sb-bsd-sockets))
+
+(handler-bind ((warning *muffle-asd-dup*))
+  (push *backend-dir* asdf:*central-registry*)
+  ;; Force the source-registry scan now so warnings emit INSIDE this
+  ;; muffler — without it the scan is lazy and the first ASDF call
+  ;; from user-code (or tests) triggers it post-muffler.
+  (asdf:initialize-source-registry)
+  (asdf:load-system :limn))
 
 ;;; ── spawn a limn subprocess ───────────────────────────────────────────
 

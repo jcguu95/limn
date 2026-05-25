@@ -29,11 +29,34 @@
           ps.cl-ppcre        # v0.34 regex engine
         ]);
 
+        # v0.37 A3: sbcl wrapper that strong-forces --no-userinit.
+        # Goal: ~/.sbclrc CANNOT leak into the dev shell.  Every `sbcl`
+        # invocation inside `nix develop` resolves to this script, which
+        # prepends --no-userinit before user args.  This silences the
+        # 18 ASDF dup-source WARNINGs (host quicklisp register clashes
+        # with nix-managed contribs) and prevents any future host
+        # configuration from polluting Limn's lisp environment.
+        #
+        # /etc/sbclrc (--no-sysinit) is NOT skipped — the nix sbcl
+        # wrapper installs the ASDF source registry there, and we need
+        # sb-bsd-sockets / cl-ppcre etc. to remain auto-loadable.
+        #
+        # Escape hatch: if you genuinely need vanilla sbcl (debugging
+        # the wrapper itself, comparing behaviour), invoke
+        # ${pkgs.sbcl}/bin/sbcl directly via the nix store path.
+        sandboxedSbcl = pkgs.writeShellScriptBin "sbcl" ''
+          exec ${sbclWithLibs}/bin/sbcl --no-userinit "$@"
+        '';
+
         # ── shared between host devShell and docker test devShell ─────────
         # Single source of truth: any version drift between host and docker
         # is by definition impossible if both shells consume this list.
         commonPackages = [
-          # Lisp control layer
+          # Lisp control layer.  sandboxedSbcl MUST come before sbclWithLibs
+          # in PATH order so `sbcl` resolves to the wrapper; sbclWithLibs is
+          # still listed so its asd-registry contribs (the system init
+          # path) are available to the wrapper.
+          sandboxedSbcl
           sbclWithLibs
           pkgs.rlwrap              # readline wrapper for run-repl.sh
 
@@ -116,7 +139,11 @@
 
           echo "qmake:      $(which qmake)"
           echo "Qt version: $(qmake -query QT_VERSION)"
-          echo "sbcl:       $(sbcl --version)"
+          # `sbcl --version` is incompatible with --no-userinit (which our
+          # sandbox wrapper injects); read the version from the nix store
+          # path instead.  Equivalent semantics, doesn't hit the SBCL
+          # arg-parser quirk.
+          echo "sbcl:       SBCL ${pkgs.sbcl.version} (sandboxed: $(which sbcl))"
         '';
       in {
         devShells = {
