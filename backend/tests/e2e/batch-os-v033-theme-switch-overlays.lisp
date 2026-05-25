@@ -36,7 +36,7 @@
 (defun rect-with-face (win page face)
   (limn:call "view/overlays"
              :|win-id| win
-             :|layers| (list (list :|type| "rect" :|page| page
+             :|overlays| (list (list :|type| "rect" :|page| page
                                     :|face| face
                                     :|x0| 0.1 :|y0| 0.1
                                     :|x1| 0.9 :|y1| 0.9

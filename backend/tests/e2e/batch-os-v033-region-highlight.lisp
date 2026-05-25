@@ -111,7 +111,7 @@
       (check "Ω1a — region overlay layers built"
              (and layers (>= (length layers) 1)))
       (check "Ω1b — view/overlays accepted"
-             (ok? (limn:call "view/overlays" :|win-id| "w1" :|layers| layers))))
+             (ok? (limn:call "view/overlays" :|win-id| "w1" :|overlays| layers))))
     (sleep 0.3)
 
     (let* ((pr (page-rect))

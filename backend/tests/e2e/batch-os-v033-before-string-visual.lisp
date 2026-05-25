@@ -74,7 +74,7 @@
         (check "wire layers built with before-string"
                (and layers (>= (length layers) 1)))
         (check "view/overlays accepted"
-               (ok? (limn:call "view/overlays" :|win-id| "w1" :|layers| layers)))))
+               (ok? (limn:call "view/overlays" :|win-id| "w1" :|overlays| layers)))))
     (sleep 0.3)
 
     ;; Ω1 buffer/text 仍乾淨

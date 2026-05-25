@@ -89,12 +89,12 @@
 
 (defun set-overlay (win color &key (rect '(0.2 0.2 0.8 0.8)) (page 0))
   (limn:call "view/overlays" :|win-id| win
-              :|layers| (list (list :|type| "rect" :|page| page
+              :|overlays| (list (list :|type| "rect" :|page| page
                                     :|rect| rect
                                     :|color| color :|opacity| 1.0))))
 
 (defun clear-ov (win)
-  (limn:call "view/overlays" :|win-id| win :|layers| nil))
+  (limn:call "view/overlays" :|win-id| win :|overlays| nil))
 
 (defun pixels-near (a b &optional (tol 5))
   (and a b
