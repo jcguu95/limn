@@ -376,14 +376,26 @@
         (setf (symbol-value slot) (funcall mk s))))
     ;; Load user init.lisp (SPEC §9.3) AFTER the framework's defaults
     ;; are in place — so user bindings / commands override, rather than
-    ;; being clobbered by them. Errors propagate: a broken init.lisp
-    ;; should not silently leave the user with a half-configured session.
+    ;; being clobbered by them.
+    ;;
+    ;; v0.37 Phase F: errors from the init file are caught and logged
+    ;; to *error-output*, matching Emacs convention (a broken init.el
+    ;; never kills the editor; you get a *Messages* line and a
+    ;; half-configured but usable session).  Without this, a single
+    ;; (error "...") in init.lisp aborts limn:start mid-bootstrap —
+    ;; the pump thread never starts, the keymap installer doesn't
+    ;; run, and `j` stops navigating.  v027-init-real Ω2 ("broken
+    ;; init.lisp tolerance") asserts exactly this Emacs behaviour.
     (let ((load-init (and (find-package :limn/runtime)
                           (find-symbol "LOAD-INIT-FILE" :limn/runtime))))
       (when load-init
-        (let ((loaded (funcall load-init)))
-          (when loaded
-            (format t "~&;; loaded init: ~a~%" loaded)))))
+        (handler-case
+            (let ((loaded (funcall load-init)))
+              (when loaded
+                (format t "~&;; loaded init: ~a~%" loaded)))
+          (error (e)
+            (format *error-output*
+                    "~&;; limn: init file load failed: ~a~%" e)))))
     ;; v0.33b: wire-backed cursor I/O. Modules like limn/mark, limn/region,
     ;; limn/kill, limn/isearch declare *buffer-cursor-fn* / *buffer-set-
     ;; cursor-fn* vtables defaulting to no-ops; their real wire path is

@@ -741,7 +741,33 @@
 
 (limn/pdf-mode::%defcmd pdf-isearch-quit nil
   (lambda ()
-    (limn/pdf-mode:pdf-search-reset)))
+    ;; v0.37 Phase F: when the minibuffer is open (we're mid-read, or
+    ;; some other command left it open), delegate to the global
+    ;; keyboard-quit so the standard cancel path runs — minibuffer
+    ;; reader sees minibuffer-cancelled, the bind wrapper swallows
+    ;; that, and minibuffer/close fires.  Otherwise this binding would
+    ;; shadow C-g's normal "close minibuffer" semantics for users in
+    ;; pdf-mode (batch-os-demo: "minibuffer closed after C-g"
+    ;; regressed when pdf-mode-map first got its own C-g binding).
+    ;; When the minibuffer is closed, pdf-isearch-quit's job is the
+    ;; search-state reset (clears the on-screen highlights left from
+    ;; the last search) — covered by v027-search Ω4.
+    (let* ((mb-r (handler-case
+                     (limn/pdf-mode::%limn-call "minibuffer/get")
+                   (error () nil)))
+           (mb-d (limn/pdf-mode::%response-data mb-r))
+           (mb-open (and mb-d (getf mb-d :|open|))))
+      (cond
+        (mb-open
+         (let* ((kq (find-symbol "KEYBOARD-QUIT" :limn/runtime))
+                (call-int (find-symbol "CALL-INTERACTIVELY" :limn/cmd)))
+           (if (and kq call-int (fboundp call-int))
+               (handler-case (funcall call-int kq) (error () nil))
+               ;; Fallback: just close the minibuffer.
+               (handler-case (limn/pdf-mode::%limn-call "minibuffer/close")
+                 (error () nil)))))
+        (t
+         (limn/pdf-mode:pdf-search-reset))))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §C annotation commands
