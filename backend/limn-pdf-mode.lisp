@@ -34,6 +34,7 @@
    #:install
    ;; §A vars
    #:*pdf-scroll-step*
+   #:*pdf-half-page-step*           ; v0.37 Phase D
    #:*pdf-zoom-in-factor*
    #:*pdf-zoom-out-factor*
    #:*pdf-annotation-color*
@@ -743,6 +744,68 @@
   (lambda ()
     (limn/pdf-mode:pdf-search-reset)))
 
+;;; v0.37 Phase D: search backward.  Same prompt as forward but the
+;;; result-cursor starts at the last hit (vim ? semantic).  Reuses the
+;;; existing search engine — we just reverse the initial index after
+;;; the scan returns.
+(limn/pdf-mode::%defcmd pdf-isearch-backward nil
+  (lambda ()
+    (let* ((reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+           (read-fn (and reader (boundp reader) (symbol-value reader)))
+           (query (and read-fn (funcall read-fn "Search backward: "))))
+      (when (and (stringp query) (= 0 (length query)))
+        (setf query limn/pdf-mode:*pdf-last-search-query*))
+      (when (and (stringp query) (> (length query) 0))
+        (let* ((buf (limn/pdf-mode::%focused-buffer-id))
+               (state (limn/pdf-mode:pdf-search-execute buf query))
+               (hits (and state (limn/pdf-mode:pdf-search-state-hits state))))
+          (when (and state (consp hits))
+            ;; Position result-cursor at the LAST hit instead of the first
+            ;; so the user lands on the latest match (vim ? semantic).
+            (setf (limn/pdf-mode:pdf-search-state-current-index state)
+                  (1- (length hits)))
+            (limn/pdf-mode::%limn-call
+             "view/overlays" :|win-id| "w1"
+             :|overlays| (limn/pdf-mode:pdf-search-overlay-payload state))
+            (let* ((p (getf (nth (1- (length hits)) hits) :|page|)))
+              (when (integerp p)
+                (limn/pdf-mode::%page-set p)))))))))
+
+;;; v0.37 Phase D: half-page scroll (vim C-d / C-u).  Uses offset-y
+;;; deltas the same way pdf-scroll-down does, but with a larger step.
+;;; Half-page = 0.5 in page-norm coords (whole page = 1.0).
+
+(defvar limn/pdf-mode:*pdf-half-page-step* 0.5
+  "Page-norm units to scroll for pdf-half-page-down / pdf-half-page-up.
+   Vim default is half the visible window height; 0.5 of page-norm is
+   the analog when fit-to-page is the default zoom.")
+
+(limn/pdf-mode::%defcmd pdf-half-page-down nil
+  (lambda ()
+    (let* ((v (limn/pdf-mode::%focused-view))
+           (off (or (getf v :|offset-y|) 0.0)))
+      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
+                                  :|offset-y|
+                                  (+ off limn/pdf-mode:*pdf-half-page-step*)))))
+
+(limn/pdf-mode::%defcmd pdf-half-page-up nil
+  (lambda ()
+    (let* ((v (limn/pdf-mode::%focused-view))
+           (off (or (getf v :|offset-y|) 0.0)))
+      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
+                                  :|offset-y|
+                                  (max 0.0
+                                       (- off
+                                          limn/pdf-mode:*pdf-half-page-step*))))))
+
+;;; v0.37 Phase D: close the focused PDF buffer (vim q).  Routes to
+;;; buffer/close on the focused buffer-id.
+(limn/pdf-mode::%defcmd pdf-close nil
+  (lambda ()
+    (let ((bid (limn/pdf-mode::%focused-buffer-id)))
+      (when bid
+        (limn/pdf-mode::%limn-call "buffer/close" :|buffer-id| bid)))))
+
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §C annotation commands
 ;;; ═════════════════════════════════════════════════════════════════════
@@ -1123,13 +1186,24 @@
       (%def km "W"        (intern "PDF-FIT-WIDTH"   :cl-user))
       (%def km "d"        (intern "PDF-TOGGLE-DARK" :cl-user))
       (%def km "r"        (intern "PDF-ROTATE-CW"   :cl-user))
+      ;; v0.37 Phase D: half-page (vim C-d / C-u)
+      (%def km "C-d"      (intern "PDF-HALF-PAGE-DOWN" :cl-user))
+      (%def km "C-u"      (intern "PDF-HALF-PAGE-UP"   :cl-user))
+      ;; v0.37 Phase D: vim l = next page (h is kept as highlight-selection)
+      (%def km "l"        (intern "PDF-NEXT-PAGE" :cl-user))
       ;; search
-      (%def km "/"        (intern "PDF-ISEARCH-FORWARD" :cl-user))
-      ;; annotation
+      (%def km "/"        (intern "PDF-ISEARCH-FORWARD"  :cl-user))
+      (%def km "?"        (intern "PDF-ISEARCH-BACKWARD" :cl-user)) ; v0.37 Phase D
+      ;; annotation (v0.27)
       (%def km "h"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
       ;; TOC
       (%def km "t"        (intern "PDF-TOC" :cl-user))
+      ;; v0.37 Phase D: file + session ops
+      (%def km "o"        (intern "FIND-FILE"       :cl-user)) ; vim :e analog
+      (%def km "q"        (intern "PDF-CLOSE"       :cl-user)) ; vim q
+      ;; v0.37 Phase D: M-x equivalent — vim :
+      (%def km ":"        (intern "EXECUTE-COMMAND" :cl-user))
 
       ;; Register the mode (or update its keymap if already registered,
       ;; but respect user-overridden bindings).
@@ -1156,7 +1230,15 @@
                                 ("/" pdf-isearch-forward)
                                 ("h" pdf-highlight-selection)
                                 ("H" pdf-annotate-selection)
-                                ("t" pdf-toc)))
+                                ("t" pdf-toc)
+                                ;; v0.37 Phase D additions
+                                ("C-d" pdf-half-page-down)
+                                ("C-u" pdf-half-page-up)
+                                ("l"   pdf-next-page)
+                                ("?"   pdf-isearch-backward)
+                                ("o"   find-file)
+                                ("q"   pdf-close)
+                                (":"   execute-command)))
                 (let* ((spec (first entry))
                        (cmd (second entry))
                        (parts

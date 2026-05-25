@@ -117,6 +117,8 @@
                 "keymap-discipline-v037.lisp"
                 ;; v0.37 Phase B default-config + reload-init regression
                 "default-config-v037.lisp"
+                ;; v0.37 Phase D pdf-mode vim keymap regression
+                "pdf-mode-vim-v037.lisp"
                 ;; v0.30 tests
                 "markers-v030.lisp"
                 "buffer-local-v030.lisp"
