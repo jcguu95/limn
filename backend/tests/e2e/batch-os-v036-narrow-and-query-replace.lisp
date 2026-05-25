@@ -149,8 +149,13 @@
                                mk))))
              (declare (ignorable m-after))
              (progn
-               ;; Narrow to a chunk that contains 2 of the 3 foo
-               (funcall narrow 11 31)
+               ;; v0.37 Phase F: narrow must reach 32 (end-exclusive) to
+               ;; include the third "foo" (at 29-31) along with the
+               ;; second (at 18-20).  Original (narrow 11 31) excluded
+               ;; the third because cl-ppcre:scan rejects matches that
+               ;; cross the upper bound — so only 1 foo got replaced,
+               ;; never the expected 2.
+               (funcall narrow 11 32)
                (unwind-protect
                     (progn
                       (limn:call "buffer/cursor-set" :|buffer-id| buf

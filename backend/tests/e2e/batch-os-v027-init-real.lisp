@@ -170,7 +170,11 @@
       ;; before override-aware: page is 0, off is 0.
       (let ((p-before (page-of)))
         (key "j") (sleep 0.3)
-        (let* ((mr (data (limn:call "message/get")))
+        ;; v0.37 Phase F: there is no message/get wire command — read
+        ;; the *messages* buffer text directly to see what message/echo
+        ;; wrote there.
+        (let* ((mr (data (limn:call "buffer/text"
+                                     :|buffer-id| "*messages*")))
                (msg (and mr (or (getf mr :|text|) ""))))
           ;; user-fn should have echoed "user-j-fired"; AND because user
           ;; override replaces pdf-scroll-down, page should NOT advance
