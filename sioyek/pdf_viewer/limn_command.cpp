@@ -706,6 +706,23 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
         }
     }
 
+    // v0.36-dogfood: rebuild overlay raster after any view-state change.
+    // The overlay paint code maps page-norm / absolute coords to window
+    // pixels via the DocumentView, so when scroll / zoom / rotation
+    // shift, the selection rect + overlay layers need re-painting at
+    // the new pixel positions. Without this, raster stays stale and
+    // selection appears to detach from the PDF when the user scrolls.
+    if (is_active && (msg.contains("page") || msg.contains("zoom") ||
+                       msg.contains("offset-x") || msg.contains("offset-y") ||
+                       msg.contains("engine-params"))) {
+        int rw = 1200, rh = 900;
+        if (auto* gl = main_widget->opengl_widget()) {
+            if (gl->width()  > 0) rw = gl->width();
+            if (gl->height() > 0) rh = gl->height();
+        }
+        rebuild_overlay_raster(rw, rh);
+    }
+
     if (is_active) main_widget->opengl_widget()->update();
     bridge->send_ok(id);
 }
@@ -2637,7 +2654,13 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         overlay_raster.format() != QImage::Format_ARGB32) {
         overlay_raster = QImage(width, height, QImage::Format_ARGB32);
     }
-    overlay_raster.fill(QColor(255, 255, 255));      // opaque white substrate
+    // v0.36-dogfood: was opaque white — when any overlay is set, SourceOver
+    // blit in render_overlays paints the white substrate over the PDF and
+    // visually erases it. Transparent substrate lets only the actual overlay
+    // pixels (selection rect, highlights, etc.) reach the screen; PDF render
+    // beneath stays visible. The v0.14 comment in render_overlays already
+    // flagged this as a known limitation; this is the fix.
+    overlay_raster.fill(QColor(0, 0, 0, 0));      // transparent substrate
 
     QJsonArray layers = focused_window_overlays();
 
@@ -2905,27 +2928,42 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         }
     }
 
-    // v0.15.1: paint visual selection of the focused window. Single-page
-    // rect for now (begin.page must == end.page must == current_page).
-    // Color: yellow @ 50% — distinct from any overlay default, easy to
-    // detect in pixel-level tests.
-    if (focused_win && focused_win->selection_active) {
+    // v0.36-dogfood: paint visual selection via the real DocumentView
+    // transform (page-norm → absolute doc → window pixels). The old code
+    // used (x * eff_w, y * eff_h) — i.e. "page == entire widget" — which
+    // is only correct at fit-to-page with zero scroll. With any other
+    // zoom / scroll, the yellow rect drifted off the actual selected
+    // text AND stayed glued to widget coords when the user scrolled.
+    if (focused_win && focused_win->selection_active && dv && doc) {
         const QJsonObject sb = focused_win->selection_begin;
         const QJsonObject se = focused_win->selection_end;
         const int sp_begin = sb.value("page").toInt(-1);
         const int sp_end   = se.value("page").toInt(-1);
-        if (sp_begin == sp_end && sp_begin == current_page) {
-            const double bx = sb.value("x").toDouble();
-            const double by = sb.value("y").toDouble();
-            const double ex = se.value("x").toDouble();
-            const double ey = se.value("y").toDouble();
-            QRectF r(QPointF(std::min(bx, ex) * eff_w,
-                              std::min(by, ey) * eff_h),
-                     QPointF(std::max(bx, ex) * eff_w,
-                              std::max(by, ey) * eff_h));
-            QColor selcol(255, 255, 0);          // yellow
-            selcol.setAlphaF(0.5);
-            painter.fillRect(r, selcol);
+        if (sp_begin == sp_end && sp_begin >= 0) {
+            AbsoluteDocumentPos abs_b, abs_e;
+            if (page_norm_to_absolute(doc, sp_begin,
+                                       sb.value("x").toDouble(),
+                                       sb.value("y").toDouble(), &abs_b) &&
+                page_norm_to_absolute(doc, sp_end,
+                                       se.value("x").toDouble(),
+                                       se.value("y").toDouble(), &abs_e)) {
+                const WindowPos wb = dv->absolute_to_window_pos_in_pixels(abs_b);
+                const WindowPos we = dv->absolute_to_window_pos_in_pixels(abs_e);
+                // dv's transform already accounts for rotation/scroll/zoom.
+                // The earlier painter.rotate(current_rotation) is for the
+                // page-norm overlay loop; don't double-rotate here.
+                painter.save();
+                painter.resetTransform();
+                const int x1 = std::min(wb.x, we.x);
+                const int y1 = std::min(wb.y, we.y);
+                const int x2 = std::max(wb.x, we.x);
+                const int y2 = std::max(wb.y, we.y);
+                QRectF r(QPointF(x1, y1), QPointF(x2, y2));
+                QColor selcol(255, 255, 0);          // yellow
+                selcol.setAlphaF(0.5);
+                painter.fillRect(r, selcol);
+                painter.restore();
+            }
         }
     }
 }
