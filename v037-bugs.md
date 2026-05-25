@@ -135,3 +135,75 @@ Each one's own commit; see git log for the full receipt.  Highlights:
 ### Class-C nix-container shims
   - C2 v027-stress limn-rss prefers /proc, falls back to ps (nix containers ship without ps).
   - C3 v029-init-real used `(loop ... collect X ... finally (when ... (collect Y)))` — COLLECT is a loop CLAUSE, not a function.  Rewrote with explicit accumulator.
+
+## Phase F — all-tier verification
+
+Final tier numbers, run from a fresh nix devshell:
+
+| Tier        | Baseline (72b5824)  | After Phase F      |
+|-------------|---------------------|--------------------|
+| unit        | 2531 / 2531 ✓       | 2544 / 2544 ✓      |
+| integration | 1535 pass / 44 fail | 1566 pass / 26 fail |
+| qt-e2e      | 3 / 0 ✓             | 3 / 0 ✓            |
+| os-e2e      | 79 pass / 32 fail   | 108 pass / 3 fail  |
+
+### Integration tier — the 26 remaining failures are all pre-existing
+
+They were in the baseline run too.  Categories:
+
+- **Pixel-paint tests in HEADLESS mode (~14 fails)** —
+  TEST-PAINT-TEXT-INTROSPECT-* / TEST-PAINT-TEXT-BBOX-* / V033-B1-OVERLAY-PAINTS-* /
+  V033-C1-REGION-* / V033B-Q7/Q8/Q9 — assert specific pixel colours on
+  the rendered surface.  In macOS HEADLESS=1 the QOpenGLWidget /
+  QPlainTextEdit don't materialise a real backing store, the painter
+  sees zero rects, pixel queries return NIL.  Same headless-render
+  story as the v033 retrofit drivers I rewrote — fixing these
+  properly needs either real-display test infrastructure or a
+  software raster fallback the painter respects in headless mode.
+
+- **Non-existent wire commands (~5)** —
+  V036-QT-TEXT-MODE-TAB-KEY calls `key/send`, V034 callers used to
+  call `limn/cmd`, TEST-PAINT-TEXT-GOLDEN-HASH-A-DEJAVU48 calls
+  `limn/test::rel`.  All reference symbols that don't exist in the
+  current binary/framework.  Tests were written speculatively or
+  against an older API.
+
+- **Single-test specifics (~7)** —
+  TEST-OVERLAYS-GET-PER-WINDOW-ISOLATION (w2 count 0),
+  V033B-Q1-SHORT-RANGE-SINGLE-RECT (single-line range returns 2 not 1),
+  V027-QT-MODELINE-SET-THEN-GET-ROUNDTRIP, V035-T1-AUTO-REVERT,
+  TEST-GB-CHROME-MINIBUFFER-INSERT-DELETE,
+  TEST-MOUSE-CLICK-PAGE-FROM-WIDGET-COORDS — assert individual
+  behaviours that look like they need their own root-cause passes
+  to fix.
+
+Net effect of Phase F on the integration tier: +31 pass / -18 fail.
+Specifically, every V033-A1 `(declare (ignore buf))` compile error
+fixed by the `with-buffer` macro change, every V034 / V036-QR
+`undefined function` error fixed by the ASDF :limn bootstrap in
+run-all.lisp.
+
+### qt-e2e tier (3/0)
+
+Unchanged — was already green, still green.
+
+### os-e2e tier remaining 3 failures
+
+  - **batch-os-prefix-arg, batch-os-v027-resume** — both PASS in
+    isolation; only fail in the full-suite run.  Xvfb state
+    pollution across the ~111 drivers (a well-known flake source
+    that the runner's `cleanup_between_drivers` partially mitigates,
+    but doesn't fully eliminate).  Real fix is per-driver Xvfb
+    instance.
+
+  - **batch-os-v027-workflow Ω9a** ("bookmark 還在 (page=NIL)") —
+    documented feature gap.  The test asserts a bookmark survives
+    `buffer/close` + reopen on the same file.  A previous batch added
+    an in-memory `bookmarks_by_path` mirror in C++ to satisfy this,
+    but the macOS integration tier reuses the same fixture across
+    sequential tests in a single bridge session, and the mirror
+    leaked state from one test into the next (8 macOS bookmark tests
+    failed with "fresh buffer has non-empty list").  The two
+    contracts can't both hold with in-memory storage; proper fix is
+    on-disk sidecar persistence (deferred — out of scope for the
+    Phase F bug-bash).
