@@ -66,7 +66,15 @@
         do (sleep 0.1)))
 
 (defun wire-up ()
-  (dolist (pkg-fn (list #'rpkg #'qpkg))
+  ;; v0.37 Phase F: wire vtables on ALL packages that consume buffer
+  ;; text — limn/regex, limn/query-replace, limn/excursion AND
+  ;; limn/marker.  Without limn/marker:*buffer-text-len-fn*, %clamp
+  ;; defaults to (lambda (bid) 0) → every set-marker call clamps the
+  ;; new position to 0.  That breaks the narrow markers
+  ;; (point-min/max both come back 0) AND the test's m-after marker
+  ;; (sits at 0 instead of 32, so the post-replace fixup check
+  ;; "32 → 28" fails with got=0).
+  (dolist (pkg-fn (list #'rpkg #'qpkg #'xpkg #'mpkg))
     (let* ((pkg (funcall pkg-fn))
            (bt    (and pkg (find-symbol "*BUFFER-TEXT-FN*" pkg)))
            (sbt   (and pkg (find-symbol "*BUFFER-SET-TEXT-FN*" pkg)))
@@ -143,9 +151,17 @@
            ;; the original).  After replace shrinks the buffer by 4 chars
            ;; the marker should fix up to 28.
            (let* ((set-marker (msym "SET-MARKER"))
+                  (set-it (msym "SET-MARKER-INSERTION-TYPE"))
                   (m-after (when (and mk-mark set-marker)
                              (let ((mk (funcall mk-mark)))
                                (funcall set-marker mk 32 buf)
+                               ;; v0.37 Phase F: insertion-type :after so
+                               ;; an insert at the marker's position
+                               ;; pushes the marker right (matching what
+                               ;; the "32 → 28" expectation assumes).
+                               ;; Default :before would leave it at 27
+                               ;; after the second replace's insert-at-27.
+                               (when set-it (funcall set-it mk :after))
                                mk))))
              (declare (ignorable m-after))
              (progn
