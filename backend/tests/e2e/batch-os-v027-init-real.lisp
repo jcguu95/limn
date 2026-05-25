@@ -62,7 +62,26 @@
                 :wait nil :search nil
                 :output log :if-output-exists :supersede :error :output)))
     (loop repeat 100 until (probe-file sock) do (sleep 0.05))
-    (limn:start sock) (sleep 0.3) (wait-for-window) proc))
+    ;; v0.37 Phase F: Ω2 deliberately writes a broken init.lisp.  Per
+    ;; SPEC §9.3 limn:start propagates init-file errors (so users see
+    ;; the misconfiguration loudly, not silently) — but THIS driver
+    ;; specifically tests "broken init doesn't permanently break
+    ;; pdf-mode": after the error, the session should still be reachable
+    ;; on the same socket (limn-bridge listens regardless of Lisp init
+    ;; outcome).  Catch the propagated error here, then connect again
+    ;; without re-running load-init-file.
+    (handler-case (limn:start sock)
+      (error (e)
+        (format t "~&  (start-session: tolerated init error: ~a)~%" e)
+        ;; Re-create the session without re-running limn:start (which
+        ;; would re-trigger init).  We need *session* set so subsequent
+        ;; limn:call works.  Use limn/client + limn/dispatch directly,
+        ;; mirroring limn:start's plumbing minus init.
+        (let* ((c (funcall (find-symbol "CONNECT" :limn/client) sock))
+               (s (funcall (find-symbol "MAKE-SESSION-FOR" :limn/dispatch) c)))
+          (setf (symbol-value (find-symbol "*SESSION*" :limn)) s)
+          (funcall (find-symbol "START-PUMP-THREAD" :limn/dispatch) s))))
+    (sleep 0.3) (wait-for-window) proc))
 
 (defun stop-session (proc)
   (ignore-errors (limn:stop))
