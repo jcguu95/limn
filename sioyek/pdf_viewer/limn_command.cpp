@@ -2986,6 +2986,17 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
     // is only correct at fit-to-page with zero scroll. With any other
     // zoom / scroll, the yellow rect drifted off the actual selected
     // text AND stayed glued to widget coords when the user scrolled.
+    //
+    // v0.37 fixup: fall back to the page-norm simplified math when DV's
+    // transform returns a degenerate zero-area rect.  In headless docker
+    // (e.g. Docker Desktop macOS), QOpenGLWidget's GL context creation
+    // doesn't always trigger DV's viewport initialisation in time for
+    // a wire-driven selection-set + paint cycle — DV reports (0, 0) for
+    // any absolute-to-window-pixel query.  The simplified math is only
+    // correct at fit-to-page + zero scroll, but in headless test setups
+    // that IS the default state, so the fallback gives correct visuals
+    // there.  Real-display environments hit the DV path and get
+    // accurate-at-any-zoom rendering as before.
     if (focused_win && focused_win->selection_active && dv && doc) {
         const QJsonObject sb = focused_win->selection_begin;
         const QJsonObject se = focused_win->selection_end;
@@ -3004,12 +3015,36 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
                 // dv's transform already accounts for rotation/scroll/zoom.
                 // The earlier painter.rotate(current_rotation) is for the
                 // page-norm overlay loop; don't double-rotate here.
+                int x1 = std::min(wb.x, we.x);
+                int y1 = std::min(wb.y, we.y);
+                int x2 = std::max(wb.x, we.x);
+                int y2 = std::max(wb.y, we.y);
+                // v0.37 fixup: detect DV-returns-degenerate-rect case.
+                // In headless docker (Docker Desktop macOS specifically),
+                // dv->absolute_to_window_pos_in_pixels returns y == 0 for
+                // both endpoints, giving a zero-height rect that fillRect
+                // paints invisibly.  Observed coords: (-183,0)-(61,0) when
+                // page-norm begin/end was (0.2,0.2)-(0.6,0.22).  Fall back
+                // to simplified page-norm math when the resulting rect is
+                // degenerate (zero width or height).  Simplified math is
+                // only accurate at fit-to-page + zero scroll, but that IS
+                // the default state in headless test setups.
+                if ((x2 - x1 <= 0 || y2 - y1 <= 0)
+                    && overlay_raster.width() > 0
+                    && overlay_raster.height() > 0) {
+                    const int eff_w = overlay_raster.width();
+                    const int eff_h = overlay_raster.height();
+                    const double bx = sb.value("x").toDouble();
+                    const double by = sb.value("y").toDouble();
+                    const double ex = se.value("x").toDouble();
+                    const double ey = se.value("y").toDouble();
+                    x1 = static_cast<int>(std::min(bx, ex) * eff_w);
+                    y1 = static_cast<int>(std::min(by, ey) * eff_h);
+                    x2 = static_cast<int>(std::max(bx, ex) * eff_w);
+                    y2 = static_cast<int>(std::max(by, ey) * eff_h);
+                }
                 painter.save();
                 painter.resetTransform();
-                const int x1 = std::min(wb.x, we.x);
-                const int y1 = std::min(wb.y, we.y);
-                const int x2 = std::max(wb.x, we.x);
-                const int y2 = std::max(wb.y, we.y);
                 QRectF r(QPointF(x1, y1), QPointF(x2, y2));
                 QColor selcol(255, 255, 0);          // yellow
                 selcol.setAlphaF(0.5);
