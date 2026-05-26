@@ -290,6 +290,25 @@ W11/W12 真持久化測試也撞。
 
 ---
 
+## B17 — `auto-revert-mode` 啟用後，外部檔案 change 不會觸發 revert
+
+**症狀**：W30 跑 (a) find-file 內容 "old" (b) `(auto-revert-mode bid)`
+啟用 — 都成功 (c) shell echo "new" > file (d) pump events 20×0.25s
+= 5 秒 → 預期 buffer content 變 "new"，實際還是 "old"。
+
+**可能原因**：
+- inotify 沒實際 hook 在 file path（file-notify-add-fn 預設要 limn/
+  file-notify package 載入，但 silent fallback）
+- file-notify event arrived 但 callback 不 wire 到 revert
+- 或 event 要透過 wire pump，而我的 (limn:pump) 拿不到
+
+**Block 哪些 workflow**：W30 dogfood 失敗。v0.35 已 ship auto-revert，
+所以 unit/integration tier 該有測 — 估計是 dogfood-only gap。
+
+**處理時機**：sprint 結尾；查 v0.35 file-notify integration。
+
+---
+
 ## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
 
 **症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
