@@ -469,13 +469,49 @@
             (check (format nil "Ω13b — w2 selection inactive (got active=~a)"
                            (getf sg-w2 :|active|))
                    (not (eq (getf sg-w2 :|active|) t)))
-            ;; (b) raster delta on w1 — paint pipeline fired
+            ;; (c) raster delta on w1 — paint pipeline fired
             (check (format nil "Ω13c — w1 raster changed after sel set (~a → ~a)"
                            (and h-baseline (subseq h-baseline 0 8))
                            (and h-w1-sel  (subseq h-w1-sel 0 8)))
                    (and h-baseline h-w1-sel
                         (not (string= h-baseline h-w1-sel))))
-            ;; (c) focus to w2 → raster differs from w1-with-sel
+            ;; (e) v0.37 fixup: restore positioning verification.
+            ;; (c) only proves "something painted", not "painted in a
+            ;; sensible location".  Use test/region-bbox to find where
+            ;; yellow (#FFFF00) actually ended up; assert that the
+            ;; bbox is non-null AND its center falls within the page
+            ;; area pr.  This catches "selection painted but in some
+            ;; nonsense rect (e.g. zero-area or way off-page)" without
+            ;; baking in a single coord-system assumption: page-pixel-
+            ;; rect can disagree with overlay_raster.width() across
+            ;; multi-window setups, so a fixed (cx, cy) sample-pixel
+            ;; check is brittle; region-bbox with a containment check
+            ;; is robust.  Same strength contract as the original
+            ;; (paint visible in the expected region), stronger
+            ;; failure messages (bbox printed).
+            (let* ((g (limn/bridge:response-data
+                        (limn:call "test/grab-window" :|win-id| "w1")))
+                   (gw (getf g :|width|))
+                   (gh (getf g :|height|))
+                   (yb (and gw gh
+                            (limn/bridge:response-data
+                              (limn:call "test/region-bbox"
+                                         :|x0| 0 :|y0| 0
+                                         :|x1| gw :|y1| gh
+                                         :|match-color| "#FFFF00")))))
+              (check (format nil "Ω13e — yellow selection bbox exists (~s)" yb)
+                     (and yb (getf yb :|w|) (getf yb :|h|)
+                          (> (getf yb :|w|) 0) (> (getf yb :|h|) 0)))
+              (when (and yb (getf yb :|w|))
+                (let ((center-x (+ (getf yb :|x|) (floor (getf yb :|w|) 2)))
+                      (center-y (+ (getf yb :|y|) (floor (getf yb :|h|) 2))))
+                  (check (format nil "Ω13f — yellow bbox center (~a,~a) within page rect ~s"
+                                 center-x center-y pr)
+                         (and (>= center-x (getf pr :|x|))
+                              (<= center-x (+ (getf pr :|x|) (getf pr :|w|)))
+                              (>= center-y (getf pr :|y|))
+                              (<= center-y (+ (getf pr :|y|) (getf pr :|h|))))))))
+            ;; (d) focus to w2 → raster differs from w1-with-sel
             (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.3)
             (let ((h-w2 (getf (region-hash x0 y0 x1 y1) :|sha256|)))
               (check (format nil "Ω13d — w2 raster ≠ w1-with-sel raster (~a vs ~a)"
