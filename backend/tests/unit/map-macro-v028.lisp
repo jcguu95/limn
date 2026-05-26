@@ -423,3 +423,47 @@
       (assert-true (%keys-lookup     km "j")        "\"j\" bound")
       (assert-true (%keys-lookup-seq km "C-x C-s")  "\"C-x C-s\" bound")
       (assert-true (%keys-lookup-seq km "M-f")      "\"M-f\" bound"))))
+
+;;; ═════════════════════════════════════════════════════════════════════
+;;; v0.38 B7: map! action 該被 wrap 成 function (lambda(ev) ...)，這樣
+;;; %dispatch-key 的 (functionp result) check 才會通過 → 真的 fire。
+;;; 之前 map! 把 raw symbol 塞進 keymap，dispatch 直接 skip。
+;;; ═════════════════════════════════════════════════════════════════════
+
+(deftest v038-b7-map-action-symbol-wrapped-into-function
+  "map! 'fn 該存成可 funcall 的 lambda(ev)，不是裸 symbol。"
+  (defun b7-test-cmd-1 () :fired)
+  (let ((km (%make-keymap)))
+    (when km
+      (limn/map-macro:map! :map km "v" 'b7-test-cmd-1)
+      (let ((entry (%keys-lookup km "v")))
+        (assert-true (functionp entry)
+                     "keymap entry should be a function, not a symbol")
+        (when (functionp entry)
+          ;; Call it with a fake event
+          (assert-equal :fired (funcall entry (list :|key| "v"))
+                        "wrapper 該 call symbol 並回 :fired"))))))
+
+(deftest v038-b7-map-action-already-function-kept-as-is
+  "map! #'fn 是 function 該直接存 (idempotent)。"
+  (let ((km (%make-keymap)))
+    (when km
+      (let ((f (lambda (ev) (declare (ignore ev)) :direct)))
+        (limn/map-macro:map! :map km "x" f)
+        (let ((entry (%keys-lookup km "x")))
+          (assert-true (functionp entry))
+          (assert-equal :direct (funcall entry (list :|key| "x"))
+                        "function action stored as-is"))))))
+
+(deftest v038-b7-map-action-defcommand-symbol-uses-call-interactively
+  "map! 'cmd-name 該透過 limn/cmd:call-interactively 跑，符合 defcommand 路徑。"
+  (let ((called nil))
+    (limn/cmd:defcommand b7-via-defcommand ()
+      (lambda () (setf called t)))
+    (let ((km (%make-keymap)))
+      (when km
+        (limn/map-macro:map! :map km "z" 'b7-via-defcommand)
+        (let ((entry (%keys-lookup km "z")))
+          (assert-true (functionp entry))
+          (funcall entry (list :|key| "z"))
+          (assert-true called "defcommand body 該 fired via call-interactively"))))))
