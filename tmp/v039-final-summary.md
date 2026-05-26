@@ -1,14 +1,16 @@
-# v0.39 — final tally after B10 + W20 + W13/W17 + W16
+# v0.39 — final tally after B10 + W20 + W13/W17 + W16 + B6 + B17 + W04 + W05
 
 ## Workflow tally
 
-| Status     | Pre-v0.39 (v0.38 wrap) | v0.39 (mid) | **v0.39 final (post-B6)** | Δ vs v0.38 |
-|------------|------------------------|-------------|---------------------------|------------|
-| PASS       | 22                     | 26          | **27**                    | **+5**     |
-| PARTIAL    | 8                      | 1           | 1                         | -7         |
-| no-result  | 0                      | 2           | 2                         | +2         |
-| FAIL/flake | 0                      | 1 flake     | **0**                     | —          |
-| Assertions | 86/95 (90.5%)          | 93/95       | **94/95** (98.9%)         | +8         |
+| Status     | Pre-v0.39 (v0.38 wrap) | mid-sprint   | post-B6     | **v0.39 final (post-B17/W04/W05)** | Δ vs v0.38 |
+|------------|------------------------|--------------|-------------|-----|------------|
+| PASS       | 22                     | 26           | 27          | **30**                              | **+8**     |
+| PARTIAL    | 8                      | 1            | 1           | **0**                               | -8         |
+| no-result  | 0                      | 2            | 2           | **0**                               | 0          |
+| FAIL/flake | 0                      | 1 flake      | 0           | **0**                               | 0          |
+| Assertions | 86 / 95 (90.5%)        | 93 / 95      | 94 / 95     | **99 / 99 (100%)**                  | +13        |
+
+🎉 **Every dogfood workflow passes every assertion.**
 
 \* Excluding W04/W05 (pre-existing structural — TOC deadlock + driver
 crash before result line) and W10 which is B6 stack-smashing flake
@@ -102,7 +104,62 @@ hard-null-clamp in `load_page_dimensions_function` (not the root
 cause per ASAN, but a real latent overrun if any PDF ever ships a
 label > 20 chars).
 
-### 4. W16 — CJK via kill-ring (this commit)
+### 6. B17 / W30 — file-notify readiness handshake (commit `19aebb1`)
+
+W30's auto-revert was 2/3 PARTIAL because `file-notify-add-watch`
+returned the moment the inotifywait subprocess was *spawned* — but
+the helper hadn't yet executed `inotify_add_watch(2)` on the kernel.
+The driver's pattern (enable auto-revert → external write → wait)
+consistently lost the first event in that ~50ms gap.
+
+Fix: drop `--quiet` so inotifywait emits its "Watches established."
+banner on stderr.  Add a `:stderr` callback that signals a semaphore
+when that line arrives.  Block in `%spawn-real-helper` until the
+semaphore fires (or 3s timeout — fail open, never deadlock).
+fswatch backend uses a marker-file round-trip instead (no banner).
+
+W30: 2/3 → 3/3 PASS, verified across 10 stress runs.
+
+### 7. W04 — pdf-toc was misreading the wire response shape (commit `df6ffc1`)
+
+The W04 "TOC deadlock" diagnosis turned out to be a misread.  There
+was never any deadlock; pdf-toc had a bug interpreting the response
+and never opened completing-read.
+
+C++ `cmd_buffer_toc` sends the items array DIRECTLY as `data` (via
+`send_ok_array`), not wrapped as `{items: [...]}`.  pdf-toc consumed
+it with `(getf d :items)`, treating the array as a plist with an
+:items field.  On the actual list-of-plists response, GETF iterates
+pairs looking for the key — for tutorial.pdf's 11-entry TOC that's
+an odd-parity scan and signals `SIMPLE-TYPE-ERROR: malformed
+property list`; for even-parity TOCs it returns NIL silently.
+Either way `items` was nil, `(when (listp items) ...)` skipped,
+completing-read never opened, the minibuffer never showed.
+
+Fix: drop the GETF wrapper; consume `data` as the items list.
+Same fix in the W04 driver's A.3 check (mirror bug).
+
+W04: 0 reported (driver crashed on A.3) → 3/3 PASS.
+
+### 8. W05 — convert diagnostic-only driver to assertion driver (this commit)
+
+W05's "no result line" was structural — the driver was pure
+diagnostic, capturing PNGs and printing diag lines but never
+asserting anything programmatically.  The batch summary script
+greps for "result: X / Y pass" to count workflows, so a passless
+driver appeared as 0 PASS even though the toggle was working.
+
+Promoted the existing diag function into a checks emitter:
+baseline-off + three (dark-mode-after-toggle) checks against the
+view/get engine-params.dark-mode nested field.  The PNG-bytes-
+differ check I'd have liked is dropped because Xvfb's framebuffer
+doesn't rebuild on QOpenGLWidget repaints in this container (B2
+structural — same reason W01 uses offset-y rather than pixel diff
+as its action-effect signal).
+
+W05: no-result → 5/5 PASS.
+
+### 4. W16 — CJK via kill-ring (commit `8709105`)
 Driver swapped to `(limn/kill:kill-new "新增中文段落")` + xdotool
 C-y.  Same wire path the new kill-ring infrastructure uses.  X11
 XSendKeyEvent doesn't carry Unicode in headless Xvfb — that's an
@@ -127,20 +184,32 @@ tmp/w16-driver.lisp                   driver swap to kill-ring
 ```
 
 ## Unit tier
-2581 (v0.38 start) → 2633 (v0.38 wrap) → **2660** (v0.39 final).
-+79 assertions in this sprint, 0 failures.
+2581 (v0.38 start) → 2633 (v0.38 wrap) → **2662** (v0.39 final).
++81 assertions in this sprint, 0 failures.
 
 ## Docker image
 `limn-e2e:latest` rebuilt twice (B10 LF mapping + W20 buffer/list).
 
 ## Remaining (post v0.39)
 
-- **W04, W05** — pre-v0.39 structural (TOC deadlock, crash before
-  result).  Both are bigger event-loop redesigns (related to B17).
-- **W30 / B17** — auto-revert event-loop pump (structural).
-- **B6** — stack-smashing crash flake (~10-33% of runs depending on
-  workload).  Needs C++ debugger session.
+**Nothing in the dogfood batch.**  Every workflow PASSes every
+assertion.  The "structural" items deferred at v0.38 wrap (W04,
+W05, W30 / B17, B6) all got root-caused and fixed this sprint —
+several of them turned out NOT to be the structural problems we
+thought (W04 was a wire-shape misread, not a deadlock; B6 was a
+straightforward stack-use-after-return once ASAN was in the
+toolbox).
 
-Backlog deferrals are essentially the same set we'd marked structural
-at v0.38 wrap — none of them were touched in v0.39 (intentionally,
-per "from simple to hard" pacing).
+Latent items not in the dogfood batch but worth eventually:
+
+- **B2** — Xvfb framebuffer doesn't refresh on QOpenGLWidget
+  repaints.  `test/grab-window` returns fixed-size 6464-byte PNGs
+  regardless of the actual paint.  W01, W05 work around it by
+  asserting on state round-trips rather than pixel diffs.  Would
+  unlock proper visual regression testing.
+- **B3 / B4** — macOS host issues (Info.plist focus, accessibility
+  permission).  Deferred per R1' (docker is canonical for e2e).
+- **B9** — Lisp `limn/file::*bufs*` vs C++ `text_buffers` namespace
+  split.  Partially closed by B10's bridge but the two registries
+  are still independent; a future "buffer-list of truth" would
+  unify them.
