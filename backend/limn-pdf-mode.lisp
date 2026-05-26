@@ -803,7 +803,7 @@
                   (1- (length hits)))
             (limn/pdf-mode::%limn-call
              "view/overlays" :|win-id| "w1"
-             :|overlays| (limn/pdf-mode:pdf-search-overlay-payload state))
+             :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
             (let* ((p (getf (nth (1- (length hits)) hits) :|page|)))
               (when (integerp p)
                 (limn/pdf-mode::%page-set p)))))))))

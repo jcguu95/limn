@@ -86,7 +86,7 @@
            (layers (funcall to-wl 0 200 buf)))
       (check "wire layers built" (and layers (>= (length layers) 1)))
       (check "view/overlays accepted"
-             (ok? (limn:call "view/overlays" :|win-id| "w1" :|overlays| layers))))
+             (ok? (limn:call "view/overlays" :|win-id| "w1" :|layers| layers))))
     (sleep 0.3)
 
     (let* ((pr (data (limn:call "test/page-pixel-rect" :|win-id| "w1" :|page| 0)))

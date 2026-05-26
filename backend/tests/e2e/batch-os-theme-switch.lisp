@@ -37,7 +37,7 @@
 (defun set-face-overlay! (win-id page face-name x0 y0 x1 y1)
   (limn:call "view/overlays"
              :|win-id| win-id
-             :|overlays| (list (list :|type| "rect"
+             :|layers| (list (list :|type| "rect"
                                    :|page| page
                                    :|face| face-name
                                    :|x0| x0 :|y0| y0
@@ -108,7 +108,7 @@
     (check "Ω3a — overlay with both :color and :face ok"
            (ok? (limn:call "view/overlays"
                             :|win-id| win
-                            :|overlays| (list (list :|type| "rect"
+                            :|layers| (list (list :|type| "rect"
                                                   :|page| page
                                                   :|color| "#0000ff"
                                                   :|face|  "os-test-override"
@@ -123,7 +123,7 @@
     (format t "~%── Ω4: unknown face gracefully skipped ──~%")
     (let ((r (limn:call "view/overlays"
                          :|win-id| win
-                         :|overlays| (list (list :|type| "rect"
+                         :|layers| (list (list :|type| "rect"
                                                :|page| page
                                                :|face|  "no-such-face-xyz"
                                                :|x0| 0.2 :|y0| 0.2

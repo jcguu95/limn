@@ -71,7 +71,7 @@
 (defun push-overlays-to-wire (buf)
   (let* ((to-wl (find-symbol "OVERLAYS-TO-WIRE-LAYERS" '#:limn/overlays))
          (layers (and to-wl (funcall to-wl 0 1000 buf))))
-    (limn:call "view/overlays" :|win-id| "w1" :|overlays| (or layers '()))))
+    (limn:call "view/overlays" :|win-id| "w1" :|layers| (or layers '()))))
 
 (let* ((sock (format nil "/tmp/limn-e2e-v033clear-~a" (sb-posix:getpid)))
        (limn-bin (or (sb-posix:getenv "LIMN_BIN") "/limn/sioyek/limn"))

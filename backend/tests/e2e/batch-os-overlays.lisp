@@ -97,7 +97,7 @@
   (values (+ (getf pr :|x|) (round (* nx (getf pr :|w|))))
           (+ (getf pr :|y|) (round (* ny (getf pr :|h|))))))
 
-(defun clear-ov () (limn:call "view/overlays" :|win-id| "w1" :|overlays| nil))
+(defun clear-ov () (limn:call "view/overlays" :|win-id| "w1" :|layers| nil))
 
 ;;; ── session start ─────────────────────────────────────────────────────
 
@@ -122,7 +122,7 @@
 
     (format t "~%── Ω1: view/get :overlays round-trip ──~%")
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "rect" :|page| 0
+                :|layers| (list '(:|type| "rect" :|page| 0
                                    :|rect| (0.1 0.1 0.5 0.5)
                                    :|color| "#FF0000" :|opacity| 0.7)))
     (sleep 0.2)
@@ -140,7 +140,7 @@
     (format t "~%── Ω2: red rect → sampled pixels are RGB(255,0,0) ──~%")
     (clear-ov) (sleep 0.2)
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "rect" :|page| 0
+                :|layers| (list '(:|type| "rect" :|page| 0
                                    :|rect| (0.2 0.2 0.8 0.8)
                                    :|color| "#FF0000" :|opacity| 1.0)))
     (sleep 0.3)
@@ -159,7 +159,7 @@
     (format t "~%── Ω3: blue rect → sampled pixels are RGB(0,0,255) ──~%")
     (clear-ov) (sleep 0.2)
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "rect" :|page| 0
+                :|layers| (list '(:|type| "rect" :|page| 0
                                    :|rect| (0.2 0.2 0.8 0.8)
                                    :|color| "#0000FF" :|opacity| 1.0)))
     (sleep 0.3)
@@ -179,7 +179,7 @@
         (multiple-value-bind (cx cy) (norm-to-px-xy 0.5 0.5 pr)
           (let ((baseline (sample-pixel cx cy)))
             (limn:call "view/overlays" :|win-id| "w1"
-                        :|overlays| (list '(:|type| "rect" :|page| 0
+                        :|layers| (list '(:|type| "rect" :|page| 0
                                            :|rect| (0.2 0.2 0.8 0.8)
                                            :|color| "#000000"
                                            :|opacity| 0.5)))
@@ -197,7 +197,7 @@
     (format t "~%── Ω5: region-bbox of red rect matches request ±2px ──~%")
     (clear-ov) (sleep 0.2)
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "rect" :|page| 0
+                :|layers| (list '(:|type| "rect" :|page| 0
                                    :|rect| (0.25 0.25 0.75 0.75)
                                    :|color| "#FF0000" :|opacity| 1.0)))
     (sleep 0.3)
@@ -227,7 +227,7 @@
         (multiple-value-bind (cx cy) (norm-to-px-xy 0.5 0.5 pr)
           (let ((baseline (sample-pixel cx cy)))
             (limn:call "view/overlays" :|win-id| "w1"
-                        :|overlays| (list '(:|type| "rect" :|page| 5
+                        :|layers| (list '(:|type| "rect" :|page| 5
                                            :|rect| (0.0 0.0 1.0 1.0)
                                            :|color| "#FF0000" :|opacity| 1.0)))
             (sleep 0.3)
@@ -241,7 +241,7 @@
     (format t "~%── Ω7: z-order intersection is the later (blue) color ──~%")
     (clear-ov) (sleep 0.2)
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "rect" :|page| 0
+                :|layers| (list '(:|type| "rect" :|page| 0
                                    :|rect| (0.2 0.2 0.6 0.6)
                                    :|color| "#FF0000" :|opacity| 1.0)
                                 '(:|type| "rect" :|page| 0
@@ -264,7 +264,7 @@
         (multiple-value-bind (cx cy) (norm-to-px-xy 0.5 0.5 pr)
           (let ((baseline (sample-pixel cx cy)))
             (limn:call "view/overlays" :|win-id| "w1"
-                        :|overlays| (list '(:|type| "rect" :|page| 0
+                        :|layers| (list '(:|type| "rect" :|page| 0
                                            :|rect| (0.2 0.2 0.8 0.8)
                                            :|color| "#00FF00" :|opacity| 1.0)))
             (sleep 0.3)
@@ -284,7 +284,7 @@
     (limn:call "view/set" :|win-id| "w1" :|page| 0)
     (sleep 0.2)
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "rect" :|page| 0
+                :|layers| (list '(:|type| "rect" :|page| 0
                                    :|rect| (0.3 0.3 0.7 0.7)
                                    :|color| "#FF0000" :|opacity| 1.0)))
     (sleep 0.3)
@@ -308,7 +308,7 @@
 
     (format t "~%── Ω10: engine-load resets overlays ──~%")
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "rect" :|page| 0
+                :|layers| (list '(:|type| "rect" :|page| 0
                                    :|rect| (0.2 0.2 0.8 0.8)
                                    :|color| "#FF0000" :|opacity| 1.0)))
     (sleep 0.2)
@@ -331,7 +331,7 @@
     (format t "~%── Ω11: text overlay font introspect ──~%")
     (clear-ov) (sleep 0.2)
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "text" :|page| 0
+                :|layers| (list '(:|type| "text" :|page| 0
                                    :|pos| (0.3 0.5) :|text| "Hello"
                                    :|font| "DejaVu Sans"
                                    :|color| "#000000" :|size| 48.0
@@ -356,7 +356,7 @@
     (format t "~%── Ω12: I bbox width < 0.5 × M bbox width ──~%")
     (clear-ov) (sleep 0.2)
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "text" :|page| 0
+                :|layers| (list '(:|type| "text" :|page| 0
                                    :|pos| (0.3 0.5) :|text| "I"
                                    :|font| "DejaVu Sans"
                                    :|color| "#000000" :|size| 96.0
@@ -365,7 +365,7 @@
     (let ((i-bbox (and (last-text-render) (getf (last-text-render) :|bbox|))))
       (clear-ov) (sleep 0.2)
       (limn:call "view/overlays" :|win-id| "w1"
-                  :|overlays| (list '(:|type| "text" :|page| 0
+                  :|layers| (list '(:|type| "text" :|page| 0
                                      :|pos| (0.3 0.5) :|text| "M"
                                      :|font| "DejaVu Sans"
                                      :|color| "#000000" :|size| 96.0
@@ -387,7 +387,7 @@
     (limn:call "bridge/win-split" :|win-id| "w1" :|dir| "h")
     (sleep 0.3)
     (limn:call "view/overlays" :|win-id| "w1"
-                :|overlays| (list '(:|type| "rect" :|page| 0
+                :|layers| (list '(:|type| "rect" :|page| 0
                                    :|rect| (0.0 0.0 0.5 0.5)
                                    :|color| "#FF0000" :|opacity| 0.5)))
     (sleep 0.2)

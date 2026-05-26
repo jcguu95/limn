@@ -1263,15 +1263,16 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
-    // 'overlays' may be missing/null (treated as empty list = clear overlays).
-    // Wire field matches what view/get returns under the same key, so write
-    // and read are symmetric on this command.
+    // 'layers' may be missing/null (treated as empty list = clear overlays).
+    // Wire field is :|layers| even though view/get returns :|overlays| —
+    // historical asymmetry, locked in by main's Phase F batch 4 (bef0926)
+    // and the wire-arg regression test `v027-b-view-overlays-uses-layers-arg`.
     QJsonArray layers;
-    if (msg.contains("overlays")) {
-        QJsonValue lv = msg.value("overlays");
+    if (msg.contains("layers")) {
+        QJsonValue lv = msg.value("layers");
         if (lv.isArray())        layers = lv.toArray();
         else if (lv.isNull())    /* empty */;
-        else { bridge->send_fail(id, "'overlays' must be an array"); return; }
+        else { bridge->send_fail(id, "'layers' must be an array"); return; }
     }
 
     // Validate every layer before accepting any (atomicity).
