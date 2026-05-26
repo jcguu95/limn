@@ -673,8 +673,13 @@
     ;; never actually toggled in any prior run.  Real path is
     ;; view/set with :|engine-params| nested object (see C++
     ;; cmd_view_set line ~709).
+    ;;
+    ;; v0.38 W05 fix (G'-2): reader was reading top-level :|dark-mode|,
+    ;; but C++ collect_view_state nests it under :|engine-params|. So
+    ;; cur always returned NIL → next always computed T → toggle was
+    ;; one-way (off→on works once, on→off never).  Read nested path.
     (let* ((v (limn/pdf-mode::%focused-view))
-           (cur (getf v :|dark-mode|))
+           (cur (getf (getf v :|engine-params|) :|dark-mode|))
            (next (if (or (null cur) (eq cur :false)) t :false)))
       (limn/pdf-mode::%limn-call "view/set"
                                   :|win-id| "w1"

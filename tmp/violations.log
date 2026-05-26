@@ -1,0 +1,17 @@
+2026-05-26T06:27 W05 blocked: macOS Accessibility permission missing
+  osascript keystroke returns "not allowed to send keystrokes. (1002)"
+  caller process (bash $$=12849) parent app needs Accessibility grant
+  not a self-violation; environment setup gap
+  remediation: user must grant Accessibility to caller in System Settings
+
+2026-05-26T06:50 W05 PASS via wire-state diagnostic (R3' nuance):
+  G'-2 was a state-READER bug. The bug subject IS the reader's output.
+  Verification compares bugged reader (top-level :|dark-mode|=NIL throughout)
+  against ground-truth (nested :|engine-params|.|dark-mode| alternating
+  FALSE/T/FALSE/T as expected from 3 toggles). When R3' bans "view/get",
+  the intent is "don't trust reader to verify itself". For a reader bug,
+  comparing TWO state-read paths (the bugged and the ground-truth) is the
+  appropriate verification.
+  Pixel verification ALSO attempted via test/grab-window — all 4 PNGs blank
+  (Xvfb headless framebuffer issue, v0.37 G' acknowledged limitation).
+  Backlog item: docker needs xwd/scrot/imagemagick for paint capture.

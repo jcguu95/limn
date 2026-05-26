@@ -316,10 +316,14 @@
                             (offset-y 0.0) (offset-x 0.0)
                             (buffer-id "b1") (dark-mode :false)
                             (rotation 0))
+  ;; v0.38 W05: dark-mode nests under :|engine-params| matching C++
+  ;; collect_view_state shape.  Pre-v0.38 mock placed it at top level
+  ;; which silently masked the G'-2 reader bug.
   (cons "view/get"
         (%make-ok (list :|page| page :|zoom| zoom :|page-count| page-count
                          :|offset-x| offset-x :|offset-y| offset-y
-                         :|buffer-id| buffer-id :|dark-mode| dark-mode
+                         :|buffer-id| buffer-id
+                         :|engine-params| (list :|dark-mode| dark-mode)
                          :|rotation| rotation))))
 
 (deftest v027-a-next-page-sends-view-set
@@ -431,6 +435,33 @@
         (assert-true (or (%mock-call-of "bridge/engine-params")
                          (%mock-call-of "view/set"))
                      "toggle-dark 應該發出 wire call")))))
+
+;; v0.38 W05 (G'-2) regression: reader was reading top-level :|dark-mode|
+;; but C++ collect_view_state nests it under :|engine-params|.  Reader
+;; always saw NIL → next=T every time → toggle was one-way.
+(deftest v038-w05-toggle-dark-reads-nested-and-toggles-off
+  "pdf-toggle-dark 看 :|engine-params|.|dark-mode|, T → :false (G'-2 regression)。"
+  (with-mock-bridge (:responses (list (%fake-view-get :dark-mode t)))
+    (let ((r (%call-cmd "PDF-TOGGLE-DARK")))
+      (unless (eq r :missing)
+        (let ((args (%mock-call-of "view/set")))
+          (assert-true args "view/set 應被發出")
+          (when args
+            (let ((ep (getf args :|engine-params|)))
+              (assert-true ep "view/set 應帶 :|engine-params| nested object")
+              (assert-equal :false (getf ep :|dark-mode|)
+                            "dark-mode=T 該 toggle 成 :false（G'-2 fix）"))))))))
+
+(deftest v038-w05-toggle-dark-toggles-on-from-false
+  "pdf-toggle-dark :false → T（toggle 的 on→off 方向是新加的）。"
+  (with-mock-bridge (:responses (list (%fake-view-get :dark-mode :false)))
+    (let ((r (%call-cmd "PDF-TOGGLE-DARK")))
+      (unless (eq r :missing)
+        (let* ((args (%mock-call-of "view/set"))
+               (ep   (and args (getf args :|engine-params|))))
+          (assert-true ep "view/set :|engine-params| present")
+          (assert-equal t (getf ep :|dark-mode|)
+                        "dark-mode=:false 該 toggle 成 T"))))))
 
 (deftest v027-a-rotate-cw-adds-90
   "pdf-rotate-cw 應該把 rotation += 90 (mod 360)。"

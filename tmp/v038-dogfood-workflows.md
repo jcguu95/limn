@@ -13,7 +13,7 @@
 |----|------|-----|
 | R1' | **預設 docker**（既有 OS-tier harness、reproducible、zero focus 干擾、無 permission gymnastics）。macOS host 僅用於：(a) W30 file-notify (kqueue vs inotify)、(b) IME / CJK 邊緣表面、(c) sprint 結尾抽 6-8 個 workflow 跑 macOS sanity sweep | 原 R1 撞到 Info.plist 缺、視窗註冊弱、Accessibility + Screen Recording 兩道權限、user 並行工作搶 focus。docker 才是 v0.37 OS-tier 已驗證的乾淨環境 |
 | R2' | 鍵盤 **必須** 走外部 OS event：docker 用 `xdotool key X`、macOS 用 `osascript keystroke`。**禁止** `limn:call`、`(funcall ...)`、wire JSON 取代按鍵 | 把 binary 當黑盒 |
-| R3' | 驗證 **必須** 走 screenshot + script：docker 用 `import` / `xwd`、macOS 用 `screencapture`。**禁止** `view/get`、`buffer-list`、`*messages*` 取代真實 UI 觀察 | wire state ≠ user-visible state |
+| R3' | 驗證 **必須** 走實際 paint pixel：可用 `screencapture`（macOS）、`import`/`xwd`（docker 若安裝）、或 `test/grab-window`（容器內既有 wire-transport 的 `QOpenGLWidget::grabFramebuffer()` PNG — 內容是真正畫面 paint，不是 state）。**禁止** `view/get`、`buffer-list`、`*messages*` 等 state-query 取代視覺驗證 | wire state ≠ user-visible state；但 wire transport 一張 PNG 是合法的（它 carrying paint result） |
 | R4 | 受測必須載 **真實 init.lisp** (`/tmp/.limn/init.lisp`)。沒有就寫一份代表性的並 copy 到 `./tmp/init.lisp.baseline` 留檔 | default-only 跑不到 hot-reload / map! / hooks |
 | R5 | 鍵與鍵之間 sleep 150-300ms | 模擬人類節奏，撞 focus race / debounce |
 | R6 | 每個 checkpoint 截圖到 `./tmp/receipts/{workflow-NN}/step-{KK}.png` | 事後可抽查；session 結束統一清 |
