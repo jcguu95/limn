@@ -2,13 +2,13 @@
 
 ## Workflow tally
 
-| Status     | Pre-v0.39 (v0.38 wrap) | v0.39 final | Δ        |
-|------------|------------------------|-------------|----------|
-| PASS       | 22                     | **26**      | **+4**   |
-| PARTIAL    | 8                      | 1           | -7       |
-| no-result  | 0                      | 2           | +2       |
-| FAIL/flake | 0                      | 0 (1 flake) | —        |
-| Assertions | 86/95 (90.5%)          | **93/95**\* | +7       |
+| Status     | Pre-v0.39 (v0.38 wrap) | v0.39 (mid) | **v0.39 final (post-B6)** | Δ vs v0.38 |
+|------------|------------------------|-------------|---------------------------|------------|
+| PASS       | 22                     | 26          | **27**                    | **+5**     |
+| PARTIAL    | 8                      | 1           | 1                         | -7         |
+| no-result  | 0                      | 2           | 2                         | +2         |
+| FAIL/flake | 0                      | 1 flake     | **0**                     | —          |
+| Assertions | 86/95 (90.5%)          | 93/95       | **94/95** (98.9%)         | +8         |
 
 \* Excluding W04/W05 (pre-existing structural — TOC deadlock + driver
 crash before result line) and W10 which is B6 stack-smashing flake
@@ -71,6 +71,36 @@ text + chrome buffers as `[{buffer-id, path, engine, kind}, …]`.
 - W17 driver: reorder to open A → kill → open B → yank (find-file
   switches the visible widget, can't batch up-front)
 - +14 unit assertions.
+
+### 5. B6 — stack-use-after-return in PDF open (next commit)
+
+The W10 stack-smashing flake (~30% rate, going back to v0.36 at least)
+turned out to be a textbook use-after-return.  `MainWidget::open_document`
+declared `bool invalid = false` on its stack and passed `&invalid`
+down through `DocumentView::open_document` → `Document::open` →
+`Document::load_document_caches` → `Document::load_page_dimensions`,
+which captures the pointer into a DETACHED background thread.  That
+thread writes `*invalid_flag_pointer = true` AFTER MainWidget's stack
+frame is gone, stomping whatever now occupies that slot — eventually
+a function's stack canary, abort, gdb-disappearing heisenbug.
+
+Pass `nullptr` instead.  Both detached threads (load_page_dimensions
++ index_document) already had `if (invalid_flag_pointer)` null-guards,
+so they cleanly no-op the writes.  Failure detection still works:
+DocumentView sets `current_document = nullptr` on open failure, so
+the `!doc` check at the call site is the sole and sufficient signal
+(the `invalid ||` half was dead — it was always false at the
+synchronous read since the threads hadn't run yet).
+
+Captured with ASAN (opt-in via LIMN_ASAN=1 in pdf_viewer_build_config.pro
++ pkgs.gdb added to flake.nix `dockerExtras`).  Verified: **50 / 50
+W10 runs clean post-fix**, was ~30% crash rate.  Probability of seeing
+zero crashes by chance if unfixed: ~2e-8.
+
+Also defensively bumped `label_buffer[20]` → `[256]` with `memset` +
+hard-null-clamp in `load_page_dimensions_function` (not the root
+cause per ASAN, but a real latent overrun if any PDF ever ships a
+label > 20 chars).
 
 ### 4. W16 — CJK via kill-ring (this commit)
 Driver swapped to `(limn/kill:kill-new "新增中文段落")` + xdotool

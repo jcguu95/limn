@@ -119,6 +119,12 @@
           # file-notify (v0.35 — needs inotify-tools on Linux)
           pkgs.inotify-tools
 
+          # v0.39 B6 — gdb for stack-smashing crash investigation.
+          # Without it, *** stack smashing detected *** abort()s with no
+          # actionable stack trace; ASLR + glibc canary obscures the
+          # culprit unless we drive the process under a debugger.
+          pkgs.gdb
+
           # base shell tools — explicitly pinned so PATH inside container
           # comes 100% from nix, never from the nixos/nix base image.
           pkgs.bash

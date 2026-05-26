@@ -1,5 +1,5 @@
-v0.38 rerun verification — 2026-05-26T22:34:00Z
-git: 4b74b098cc60
+v0.38 rerun verification — 2026-05-26T23:21:26Z
+git: 870910562367
 
 W01  ... ── W01 result: 4 / 4 pass ──
 W02  ... ── W02 result: 5 / 5 pass ──
@@ -10,7 +10,7 @@ W06  ... ── W06 result: 5 / 5 pass ──
 W07  ... ── W07 result: 4 / 4 pass ──
 W08  ... ── W08 result: 2 / 2 pass ──
 W09  ... ── W09 result: 4 / 4 pass ──
-W10  ... ── W10 result: 0 / 4 pass ──
+W10  ... ── W10 result: 4 / 4 pass ──
 W11  ... ── W11 result: 4 / 4 pass ──
 W12  ... ── W12 result: 5 / 5 pass ──
 W13  ... ── W13 result: 3 / 3 pass ──

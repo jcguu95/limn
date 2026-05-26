@@ -145,12 +145,38 @@ MainWidget::~MainWidget() {
 }
 
 bool MainWidget::open_document(const std::wstring& path) {
-    bool invalid = false;
-    document_view_->open_document(path, &invalid);
+    // v0.39 B6 — pass nullptr instead of `&local_bool`.  Pre-v0.39 we
+    // declared `bool invalid = false` here and passed `&invalid` down
+    // into Document::open's chain, which stores that pointer into
+    // `Document::invalid_flag_pointer` and then captures it into two
+    // DETACHED background threads (load_page_dimensions + index_document).
+    // Those threads write `*invalid_flag_pointer = true` AFTER this
+    // function has already returned and its stack slot has been reused
+    // by some other call frame — a textbook stack-use-after-return that
+    // ASAN flagged at document.cpp:1160 (`if (invalid_flag_pointer)
+    // *invalid_flag_pointer = true`).  In production the corruption
+    // landed wherever the stack happened to be, manifesting as ~30%
+    // "*** stack smashing detected ***" on PDF-load workflows (W10
+    // "set bookmark then jump" being the most reliable trigger).
+    //
+    // The `invalid` flag's documented purpose is to signal "view needs
+    // a refresh once async caches finish".  MainWidget never observed
+    // that signal — the only read was the `if (invalid || !doc)` check
+    // immediately below, which fires synchronously before the detached
+    // threads ever run, so `invalid` was guaranteed false at the read
+    // and the check collapsed to `!doc`.  Passing nullptr makes both
+    // detached threads no-op via the existing `if (invalid_flag_pointer)`
+    // null guards (document.cpp:1143, 1159, 1177).
+    //
+    // Failure detection still works: document_view_->open_document sets
+    // current_document = nullptr on open failure (document_view.cpp:792),
+    // so get_document() == nullptr remains the canonical "open failed"
+    // signal — which we already checked, and now is the sole check.
+    document_view_->open_document(path, nullptr);
     // sioyek's invalid_flag isn't reliable for "file does not exist". The
     // ground truth is whether DocumentView ended up with a non-null Document.
     Document* doc = document_view_->get_document();
-    if (invalid || !doc) {
+    if (!doc) {
         return false;
     }
     // In headless / pre-layout state, the OpenGL widget hasn't sized

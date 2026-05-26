@@ -1,5 +1,6 @@
 #include "document.h"
 #include <algorithm>
+#include <cstring>
 #include <thread>
 #include <cmath>
 #include "coordinates.h"
@@ -1103,8 +1104,19 @@ void Document::load_page_dimensions(bool force_load_now) {
         std::vector<float> page_heights_;
         std::vector<float> page_widths_;
         std::vector<std::wstring> page_labels_;
-        const int N = 20;
+        // v0.39 B6 — was N=20, which is too small for PDFs with verbose
+        // labels (e.g. "Appendix-B-3.4-Page-12" or some scientific
+        // collections that bake section prefixes into the label).  If
+        // fz_page_label respects `size` strictly we still want headroom
+        // so utf8_decode never reads garbage; if the impl ignores it
+        // (older mupdf versions did under some code paths) we want a
+        // buffer big enough to absorb realistic labels.  256 covers
+        // every PDF I've seen and still fits comfortably in the bg
+        // thread's stack.  Memset to 0 so utf8_decode sees a guaranteed
+        // null terminator even if mupdf forgot one.
+        const int N = 256;
         char label_buffer[N];
+        std::memset(label_buffer, 0, N);
 
         // clone the main context for use in the background thread
         fz_context* context_ = fz_clone_context(context);
@@ -1118,6 +1130,10 @@ void Document::load_page_dimensions(bool force_load_now) {
             for (int i = 0; i < n; i++) {
                 fz_page* page = fz_load_page(context_, doc_, i);
                 fz_page_label(context_, page, label_buffer, N);
+                // v0.39 B6 — clamp: write a hard null at N-1 in case
+                // mupdf wrote N bytes without one.  Cheap belt-and-
+                // braces; utf8_decode otherwise reads past the buffer.
+                label_buffer[N - 1] = '\0';
                 page_labels_.push_back(utf8_decode(label_buffer));
                 PagelessDocumentRect page_rect = fz_bound_page(context_, page);
 
