@@ -100,12 +100,22 @@
     (limn:call "view/set" :|win-id| "w1" :|page| 0)
     (sleep 0.1)
     (let ((rss-before (limn-rss pid)))
+      ;; v0.37 Phase F: this is a key-bursting stress test; the
+      ;; assertion shouldn't gate on j's exact semantics.  pdf-mode
+      ;; binds j to pdf-scroll-down (smooth in-page scroll) — it
+      ;; advances offset-y rather than the page index, and never
+      ;; auto-rolls to the next page.  So we accept "page advanced
+      ;; OR offset advanced" — the point is that 200 keys made
+      ;; observable forward progress without crashing.
       ;; xdotool key --repeat is faster than 200 separate xdotool calls.
       (xdotool "key" "--repeat" "200" "--delay" "5" "j")
       (sleep 0.5)
-      (let ((p (page-of)))
-        (check (format nil "Ω1a — 200 j 後 page 推進 (~a, pc=~a)" p pc)
-               (and (integerp p) (> p 0))))
+      (let* ((v (data (limn:call "view/get" :|win-id| "w1")))
+             (p (getf v :|page|))
+             (off (or (getf v :|offset-y|) 0.0)))
+        (check (format nil "Ω1a — 200 j 後 page 或 offset 推進 (page=~a, off=~a, pc=~a)" p off pc)
+               (or (and (integerp p) (> p 0))
+                   (> off 0.5))))
       (let ((rss-after (limn-rss pid)))
         (check (format nil "Ω1b — RSS 增 < 50% (~a → ~a)" rss-before rss-after)
                (or (null rss-before) (null rss-after)

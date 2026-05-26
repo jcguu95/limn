@@ -163,11 +163,13 @@
            (rd (limn:call "bridge/engine-load"
                            :|engine| "mupdf"
                            :|path| diff-a :|win-id| "w1")))
+      ;; v0.37 Phase F: `(declare ...)` must be the FIRST form of a
+      ;; let body; the original had it at the END, which SBCL's strict
+      ;; compiler rejects as "function DECLARE undefined".
+      (declare (ignore before-count))
       ;; mupdf may refuse the fake; that's OK, we just check no crash
       (check "Ω4 — bridge 不 crash on fake PDF"
-             (or (ok? rd) (not (ok? rd))))
-      ;; cleanup count check：fake didn't load → no new sidecar
-      (declare (ignore before-count))))
+             (or (ok? rd) (not (ok? rd))))))
 
   ;; cleanup
   (nuke-sidecars)

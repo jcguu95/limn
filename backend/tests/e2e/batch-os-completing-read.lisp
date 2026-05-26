@@ -95,7 +95,7 @@
   (arm-events "minibuffer-submit" "minibuffer-cancel")
   (limn:call "minibuffer/open")
   (limn:call "minibuffer/set-text" :|text| "query")
-  (limn:call "test/inject-key" :|key| "RET" :|mods| nil)
+  (limn:call "test/inject-qt-key" :|key| "RET" :|mods| nil)
   (let* ((evs    (drain-events 0.4))
          (submit (find-if (lambda (e)
                             (string= (getf e :|type|) "minibuffer-submit"))
@@ -109,7 +109,7 @@
   (arm-events "minibuffer-submit" "minibuffer-cancel")
   (limn:call "minibuffer/open")
   (limn:call "minibuffer/set-text" :|text| "abandoned")
-  (limn:call "test/inject-key" :|key| "ESC" :|mods| nil)
+  (limn:call "test/inject-qt-key" :|key| "ESC" :|mods| nil)
   (let* ((evs    (drain-events 0.4))
          (cancel (find-if (lambda (e)
                             (string= (getf e :|type|) "minibuffer-cancel"))
@@ -120,11 +120,15 @@
   ;; ── Ω4: minibuffer closed after cancel ───────────────────────
   (format t "~%── Ω4: minibuffer closed after cancel ──~%")
   ;; After ESC the minibuffer should be closed.
-  ;; We verify: minibuffer/get returns open=false.
+  ;; We verify: minibuffer/get returns :|open| ≠ T.
+  ;; v0.37 Phase F: the bridge's JSON decoder maps `false` to the
+  ;; keyword :FALSE — which is NON-NIL in CL.  A plain `(not :|open|)`
+  ;; check treats closed as still-open.  Check explicitly: "open" means
+  ;; the value is EQ to T; anything else (NIL, :false) means closed.
   (let* ((r (limn:call "minibuffer/get"))
          (d (data r)))
     (check (format nil "Ω4a — open is false after cancel (got ~s)" (getf d :|open|))
-           (and (ok? r) (not (getf d :|open|)))))
+           (and (ok? r) (not (eq (getf d :|open|) t)))))
 
   ;; ── summary ─────────────────────────────────────────────────────
   (format t "~%~%── completing-read OS e2e results ──~%")

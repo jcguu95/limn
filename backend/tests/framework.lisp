@@ -601,13 +601,17 @@
 
 (defmacro with-buffer ((var &key (engine "mupdf") (path '*fixture-pdf*) (win "w1"))
                        &body body)
-  "Load a buffer, bind its buffer-id to VAR, run BODY, then close the buffer."
+  "Load a buffer, bind its buffer-id to VAR, run BODY, then close the buffer.
+   v0.37 Phase F: body is wrapped in (locally ,@body) instead of progn so
+   `(declare (ignore VAR))` at the head of body is valid — `progn` doesn't
+   accept declarations and SBCL's strict compiler rejects them with
+   'function DECLARE is undefined'."
   (let ((r (gensym)))
     `(let* ((,r (send! "bridge/engine-load"
                        :|win-id| ,win :|engine| ,engine :|path| ,path))
             (,var (json-get* ,r :|data| :|buffer-id|)))
        (unwind-protect
-            (progn ,@body)
+            (locally ,@body)
          (when ,var
            (ignore-errors (send! "buffer/close" :|buffer-id| ,var)))))))
 

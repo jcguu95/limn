@@ -445,6 +445,15 @@
       (when (plusp target)
         (indent-to target)))))
 
+(defun %indent-fallback (bid point)
+  "Insert one tab-stop worth of indentation at POINT.  Respects
+   indent-tabs-mode: t → literal tab character, nil → tab-width spaces."
+  (let ((str (if (%indent-tabs-mode)
+                 (string #\Tab)
+                 (make-string (%tab-width) :initial-element #\Space))))
+    (funcall *buffer-insert-fn* bid point str)
+    (funcall *set-point-fn* bid (+ point (length str)))))
+
 ;;; ── runtime wireup ────────────────────────────────────────────────────────
 ;;;
 ;;; install-wire-vtable wires the vtable hooks to limn:call so the module
@@ -497,18 +506,41 @@
   t)
 
 ;;; Install the default indent-line-function now that indent-relative is defined.
+;;; v0.37 Phase F: previous code only set the default if cl-user
+;;; already had *INDENT-LINE-FUNCTION* interned and bound — which
+;;; never happens at load time, so indent-for-tab-command in fresh
+;;; sessions saw nil and silently no-op'd ("after TAB key, buffer has
+;;; indent (got \"\")" in v036-tab-key-text-mode).  intern guarantees
+;;; the symbol exists; proclaim + setf gives it a default value the
+;;; buffer-local layer can override per-buffer.
 (eval-when (:load-toplevel :execute)
-  (let ((sym (find-symbol "*INDENT-LINE-FUNCTION*" :cl-user)))
-    (when (and sym (boundp sym) (null (symbol-value sym)))
+  (let ((sym (intern "*INDENT-LINE-FUNCTION*" :cl-user)))
+    (proclaim `(special ,sym))
+    (unless (and (boundp sym) (symbol-value sym))
       (setf (symbol-value sym) #'indent-relative))))
 
 ;;; ── §B  indent-for-tab-command + newline-and-indent ───────────────────────
 
 (defun indent-for-tab-command ()
-  "Invoke the buffer's *indent-line-function*."
-  (let ((fn (%indent-line-function)))
-    (when fn
-      (funcall fn))))
+  "Invoke the buffer's *indent-line-function*.  v0.37 Phase F: when
+   that function leaves point/buffer unchanged (e.g. indent-relative
+   on the first line, where there's no prior indent to copy), fall
+   back to inserting one tab-stop worth of whitespace at point.
+   Matches Emacs `indent-for-tab-command` (which similarly degrades
+   to tab-to-tab-stop when the indent function is a no-op).  Without
+   this fallback, Tab on a brand-new empty buffer silently did
+   nothing, breaking v036-tab-key-text-mode."
+  (let* ((bid       (%current-buffer-id))
+         (before-pt (and bid (funcall *point-fn* bid)))
+         (before-tx (and bid (funcall *buffer-text-fn* bid)))
+         (fn        (%indent-line-function)))
+    (when fn (funcall fn))
+    (when bid
+      (let ((after-pt (funcall *point-fn* bid))
+            (after-tx (funcall *buffer-text-fn* bid)))
+        (when (and (eql before-pt after-pt)
+                   (string= (or before-tx "") (or after-tx "")))
+          (%indent-fallback bid after-pt))))))
 
 (defun newline-and-indent ()
   "Insert a newline at point, then call indent-line-function on the new line."

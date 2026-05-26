@@ -836,6 +836,57 @@
       (assert-no-error (limn/mark:note-command 'self-insert-command "rc2h"))
       (assert-false (limn/mark:mark-active-p "rc2h")))))
 
+(deftest region-c2-auto-deactivate-on-buffer-modified
+  "v0.37 Phase F regression: install-auto-deactivate-handler subscribes
+   to event/buffer-modified.  When the wire fires that event for a
+   buffer with an active region and transient-mark-mode on, mark must
+   drop automatically — even if no Lisp command ran (xdotool type / IME
+   commit / paste bypass the dispatch layer's note-command callback).
+   Before this fix the v033b-edit-during-active-region OS test reported
+   'mark auto-deactivated after key (active=T)'."
+  (let ((limn/mark:*transient-mark-mode* t))
+    (limn/v024-helpers:with-mark-buf (b :id "rc2i" :text "hello")
+      (limn/mark:reset-marks "rc2i")
+      (limn/mark:set-mark 0 "rc2i")
+      (limn/mark:activate-mark "rc2i")
+      (assert-true (limn/mark:mark-active-p "rc2i") "setup: mark active")
+      ;; Force a fresh install for this test by clearing the idempotency
+      ;; flag (other tests may have installed it earlier with a different
+      ;; hook table state).
+      (setf (symbol-value (find-symbol "*AUTO-DEACTIVATE-INSTALLED*" '#:limn/mark)) nil)
+      (limn/mark:install-auto-deactivate-handler)
+      (limn/hooks:run-hook "event/buffer-modified"
+                            (list :|buffer-id| "rc2i"
+                                  :|op| "insert"
+                                  :|pos| 0
+                                  :|len| 1))
+      (assert-false (limn/mark:mark-active-p "rc2i")
+                    "buffer-modified event auto-deactivated mark"))))
+
+(deftest region-c2-auto-deactivate-idempotent-install
+  "install-auto-deactivate-handler is idempotent — multiple calls
+   subscribe at most once.  Without this, every limn:start would stack
+   another hook and a single edit would fire deactivate twice (harmless
+   today, but a footgun for callers that count hook invocations)."
+  (let ((limn/mark:*transient-mark-mode* t))
+    (limn/v024-helpers:with-mark-buf (b :id "rc2j" :text "hi")
+      (setf (symbol-value (find-symbol "*AUTO-DEACTIVATE-INSTALLED*" '#:limn/mark)) nil)
+      (limn/mark:install-auto-deactivate-handler)
+      (limn/mark:install-auto-deactivate-handler)
+      (limn/mark:install-auto-deactivate-handler)
+      (let* ((live (gethash "event/buffer-modified"
+                            (symbol-value (find-symbol "*HOOKS*" '#:limn/hooks)))))
+        ;; Other tests may have also added unrelated handlers — assert
+        ;; that *our* deactivate handler appears at most once.  Count
+        ;; closures whose printable representation contains "DEACTIVATE-MARK".
+        (let ((deact-count
+                (count-if (lambda (pair)
+                            (search "DEACTIVATE-MARK"
+                                    (princ-to-string (car pair))))
+                          live)))
+          (assert-true (<= deact-count 1)
+                       "deactivate hook installed exactly once across 3 install calls"))))))
+
 ;;; ── C3 region overlay 更新 ────────────────────────────────────────────
 
 (deftest region-c3-update-creates-overlay-when-active

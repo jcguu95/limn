@@ -13,8 +13,6 @@
 (in-package #:cl-user)
 
 (require 'sb-bsd-sockets)
-;; limn-runtime uses sb-posix:getenv; load before ASDF compiles it.
-(require :sb-posix)
 
 ;;; Resolve paths relative to this file
 (defparameter *test-dir*
@@ -24,28 +22,26 @@
 (defun rel (relpath)
   (namestring (merge-pathnames relpath *test-dir*)))
 
-;;; v0.37 G6: load backend via ASDF, same as run-unit.lisp / e2e drivers
-;;; (Phase F #B1).  Without this, individual suite files' ad-hoc
-;;; `(load "limn-regex.lisp")` etc. fail at READ time when cl-ppcre
-;;; isn't yet required — suite handler-case swallows it silently,
-;;; later the suite's tests fail with "function LIMN/REGEX:* is
-;;; undefined" without any indication WHY.  ASDF brings cl-ppcre +
-;;; every limn/* package up cleanly before any suite is read.
+;;; v0.37 Phase F: load the whole backend via ASDF before any suite —
+;;; every suite that exercises a v0.27+ module (pdf-mode, regex,
+;;; query-replace, ...) needs the package present at READ time, and
+;;; the per-suite dolist loaders rotted (e.g. regex-v034.lisp depends
+;;; on vendor/cl-ppcre-load.lisp which v0.37 A1a removed).  Same
+;;; ASDF bring-up as repl.lisp / load-limn-system.lisp.
+(require :asdf)
+(require :sb-bsd-sockets)
+(require :sb-posix)
 (defvar *muffle-asd-dup*
   (lambda (w)
     (let ((msg (princ-to-string w)))
       (when (and (search "found several entries" msg)
                  (search "lib/sbcl" msg))
         (muffle-warning w)))))
-
-(handler-bind ((warning *muffle-asd-dup*))
-  (require :asdf))
-
 (handler-bind ((warning *muffle-asd-dup*))
   (let ((backend-dir (namestring (merge-pathnames "../" *test-dir*))))
-    (push backend-dir asdf:*central-registry*))
-  (asdf:initialize-source-registry)
-  (asdf:load-system :limn))
+    (push backend-dir asdf:*central-registry*)
+    (asdf:initialize-source-registry)
+    (asdf:load-system :limn)))
 
 ;;; Load framework first
 (load (rel "framework.lisp"))

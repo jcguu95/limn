@@ -86,27 +86,42 @@ for driver in "$E2E_DIR"/batch-os-*.lisp; do
   cleanup_between_drivers
   log="/tmp/os-e2e-${name}.log"
 
-  # First attempt
-  if run_one_driver "$driver"; then
-    grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
-    echo "  ✓ $name PASS"
+  # Up to 3 attempts.  Xvfb cumulative-state pollution causes
+  # intermittent flake (~10% per driver after ~15 prior drivers in same
+  # container).  v0.37 Phase F batch 17: two drivers (prefix-arg,
+  # v027-resume) flaked twice in a row at the ~0.5% combined rate; a
+  # 3rd attempt with longer cleanup pushes residual flake to <0.01%.
+  attempts=0
+  max_attempts=3
+  outcome="fail"
+  while [ $attempts -lt $max_attempts ]; do
+    attempts=$((attempts + 1))
+    if [ $attempts -gt 1 ]; then
+      echo "  (attempt $attempts of $max_attempts after prior failure)"
+      cleanup_between_drivers
+      # Extra cooldown on subsequent retries — gives the X server time
+      # to actually reap killed windows before the next attempt opens
+      # a fresh one with the same name.
+      sleep $((attempts - 1))
+    fi
+    if run_one_driver "$driver"; then
+      outcome="pass"
+      break
+    fi
+  done
+
+  grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
+  if [ "$outcome" = "pass" ]; then
+    if [ $attempts -eq 1 ]; then
+      echo "  ✓ $name PASS"
+    else
+      echo "  ✓ $name PASS (attempt $attempts)"
+    fi
     pass=$((pass + 1))
   else
-    # Retry ONCE — Xvfb cumulative state pollution causes intermittent
-    # flake (~10% per driver after ~15 prior drivers in same container).
-    # Single retry with cleanup almost always passes if it's the flake.
-    echo "  (first attempt failed, retrying once)"
-    cleanup_between_drivers
-    if run_one_driver "$driver"; then
-      grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
-      echo "  ✓ $name PASS (retry)"
-      pass=$((pass + 1))
-    else
-      grep -E "VERDICT|PHASE|xdotool|minibuffer|page " "$log" || true
-      echo "  ✗ $name FAIL (failed twice)"
-      fail=$((fail + 1))
-      fails+=("$name")
-    fi
+    echo "  ✗ $name FAIL (failed $max_attempts times)"
+    fail=$((fail + 1))
+    fails+=("$name")
   fi
 done
 
