@@ -186,19 +186,22 @@
          (limn/keys:set-key-prefix sequence))
         ((functionp result)
          (limn/keys:set-key-prefix '())
-         (let ((cmd-pkg (find-package :limn/cmd)))
-           (if (and acc-int cmd-pkg)
-               (let ((slot (find-symbol "*PREFIX-ARG*" cmd-pkg)))
-                 (if slot
-                     (progv (list slot) (list acc-int)
-                       (handler-case (funcall result ev)
-                         (error (e) (format *error-output*
-                                            "limn: binding for ~{~a~^ ~} errored: ~a~%"
-                                            sequence e))))
-                     (handler-case (funcall result ev)
-                       (error (e) (format *error-output*
-                                          "limn: binding for ~{~a~^ ~} errored: ~a~%"
-                                          sequence e)))))
+         (let* ((cmd-pkg (find-package :limn/cmd))
+                (slot    (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+           ;; v0.38: always progv *prefix-arg*, whether or not user typed
+           ;; a prefix.  acc-int = typed value or NIL.  Commands using
+           ;; "p" spec that expect numeric default (e.g. scroll 1×) write
+           ;; (or prefix 1).  Commands wanting vim-style "no prefix →
+           ;; sentinel" (e.g. pdf-goto-page → last) write (or prefix end).
+           ;; Pre-v0.38 only progv'd when acc-int was set, leaving NO-prefix
+           ;; calls to see *prefix-arg*'s default of 1 — which made
+           ;; pdf-goto-page mis-route bare 'G' to page 1 (B11 follow-up).
+           (if slot
+               (progv (list slot) (list acc-int)
+                 (handler-case (funcall result ev)
+                   (error (e) (format *error-output*
+                                      "limn: binding for ~{~a~^ ~} errored: ~a~%"
+                                      sequence e))))
                (handler-case (funcall result ev)
                  (error (e) (format *error-output*
                                     "limn: binding for ~{~a~^ ~} errored: ~a~%"

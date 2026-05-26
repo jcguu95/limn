@@ -75,9 +75,11 @@
     (check "setup: tutorial.pdf has > 5 pages" (and pc (> pc 5))
            (format nil "page-count=~a" pc)))
 
-  ;; A. 12g → page 12 (if pdf has 12+ pages, else page (pc-1))
-  (format t "~%── A: 12g ──~%")
-  (key "1") (key "2") (key "g")
+  ;; A. 12G → page 12 (if pdf has 12+ pages, else page (pc-1))
+  ;; vim convention: G with prefix = goto N; lowercase g is multi-key prefix
+  ;; (gg → first-page).  Driver was sending 'g' which is :prefix in pdf-mode-map.
+  (format t "~%── A: 12G ──~%")
+  (key "1") (key "2") (key "G")
   (sleep 0.4)
   (let ((p (page-now)) (pc (page-count)))
     (let ((expected (min 12 (1- pc))))

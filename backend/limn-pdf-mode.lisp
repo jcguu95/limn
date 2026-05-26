@@ -1448,6 +1448,9 @@
       (%def km "p"        (intern "PDF-PREV-PAGE"   :cl-user))
       (%def km "J"        (intern "PDF-NEXT-PAGE"   :cl-user))
       (%def km "K"        (intern "PDF-PREV-PAGE"   :cl-user))
+      ;; v0.38: SPC = next-page (vim), b = prev-page (less convention)
+      (%def km "SPC"      (intern "PDF-NEXT-PAGE"   :cl-user))
+      (%def km "b"        (intern "PDF-PREV-PAGE"   :cl-user))
       ;; v0.38 B11: vim convention — G alone → last page; NG → page N.
       ;; pdf-goto-page now defaults to last page when prefix is nil, so
       ;; binding it on G gives both behaviors via one command.
@@ -1502,6 +1505,7 @@
                                 ("<down>" pdf-scroll-down)
                                 ("<up>" pdf-scroll-up)
                                 ("n" pdf-next-page) ("p" pdf-prev-page)
+                                ("SPC" pdf-next-page) ("b" pdf-prev-page)
                                 ("J" pdf-next-page) ("K" pdf-prev-page)
                                 ("G" pdf-goto-page) ("g g" pdf-first-page)
                                 ("+" pdf-zoom-in)   ("=" pdf-zoom-in)
