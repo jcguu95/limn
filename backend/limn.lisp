@@ -70,12 +70,29 @@
           ((string= s "super")                            "s")
           (t s))))
 
+(defun %strip-redundant-shift (mods key)
+  "v0.38 B12: drop \"shift\" from MODS when KEY is already an uppercase
+   single letter — the case already encodes the shift in Emacs conv.
+     {key:\"G\", mods:[\"shift\"]}        → mods = ()   (lookup is \"G\")
+     {key:\"G\", mods:[\"ctrl\",\"shift\"]} → (ctrl)    (lookup is \"C-G\")
+     {key:\"5\", mods:[\"shift\"]}        → keep shift (non-letter)"
+  (if (and mods key
+           (stringp key) (= (length key) 1)
+           (let ((c (char key 0))) (and (alpha-char-p c) (upper-case-p c))))
+      (remove "shift" mods :test #'string-equal)
+      mods))
+
 (defun %event-key-spec (ev)
   "Turn a `key` event plist (key + mods array) into an Emacs-style spec.
    Modifiers are mapped: ctrl → C, alt/meta → M, shift → S, super → s.
-   e.g. {key:\"d\", mods:[\"ctrl\"]} → \"C-d\"."
+   e.g. {key:\"d\", mods:[\"ctrl\"]} → \"C-d\".
+
+   v0.38 B12: when KEY is an uppercase letter, Shift is redundant and
+   gets stripped from MODS before formatting.  Otherwise Shift+G on
+   the wire becomes \"S-G\" which fails to match the keymap binding
+   \"G\" (which is the Emacs canonical form for uppercase letters)."
   (let* ((key  (getf ev :|key|))
-         (mods (getf ev :|mods|)))
+         (mods (%strip-redundant-shift (getf ev :|mods|) key)))
     (cond
       ((null mods) key)
       (t (format nil "~{~a-~}~a"
