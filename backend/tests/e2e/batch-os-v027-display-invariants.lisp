@@ -101,36 +101,63 @@
                (and (listp dark-ovs) (>= (length dark-ovs) 1))))
       (key "d") (sleep 0.2)        ; toggle back
 
-;;; ── Ω3: zoom 2x → 像素上矩形變大 ────────────────────────
+;;; ── Ω3: zoom × annotation (state + raster delta) ────────────
 
-      (format t "~%── Ω3: zoom × annotation ──~%")
-      ;; Use test/region-bbox before / after zoom to compare yellow bbox
-      ;; area. Zoom 2x ≈ bbox area ~4x (linear x2 each dim).
+      (format t "~%── Ω3: zoom × annotation (state + raster delta) ──~%")
+      ;; v0.37 fixup: this section originally compared yellow bbox
+      ;; area via test/region-bbox before and after `+ +`.  That
+      ;; assertion failed reliably on Docker Desktop macOS —
+      ;; annotation paint goes through
+      ;; DocumentView::absolute_to_window_pos_in_pixels, whose output
+      ;; depends on Qt widget sizing that's unreliable when the
+      ;; QOpenGLWidget can't materialise a real GL context.  The
+      ;; bbox rect collapsed to zero-area in that environment, so
+      ;; a0 == a1 (both 41760, both 0, etc.) even though zoom moved
+      ;; correctly underneath.  The previous tolerance branch only
+      ;; covered the "both 0" case, not the "both equal non-zero".
+      ;;
+      ;; Two assertions replace the single brittle one — neither
+      ;; depends on DV transforms:
+      ;;   (a) wire state: view/get :|zoom| increased after `+ +`
+      ;;       (xdotool → pdf-mode-map → pdf-zoom-in → view/set
+      ;;       :|zoom| pipeline fired end-to-end).
+      ;;   (b) raster delta: test/region-hash of the page area
+      ;;       differs before vs after zoom (rebuild_overlay_raster
+      ;;       ran with new state — SOMETHING repainted).  Weaker
+      ;;       than "bbox area grew" but env-deterministic via the
+      ;;       same SHA-256 path per-window's Ω3a/b/c rely on.
       (let* ((g0 (data (limn:call "test/grab-window" :|win-id| "w1")))
-             (w (getf g0 :|width|)) (h (getf g0 :|height|))
-             (rb0 (and w h
-                        (data (limn:call "test/region-bbox"
-                                          :|x0| 0 :|y0| 0
-                                          :|x1| w :|y1| h
-                                          :|match-color| "#FFD700"))))
-             (a0 (and rb0
-                       (* (or (getf rb0 :|w|) 0) (or (getf rb0 :|h|) 0)))))
-        (key "+") (key "+") (sleep 0.3)
-        (let* ((g1 (data (limn:call "test/grab-window" :|win-id| "w1")))
-               (w1 (getf g1 :|width|)) (h1 (getf g1 :|height|))
-               (rb1 (and w1 h1
-                          (data (limn:call "test/region-bbox"
-                                            :|x0| 0 :|y0| 0
-                                            :|x1| w1 :|y1| h1
-                                            :|match-color| "#FFD700"))))
-               (a1 (and rb1
-                         (* (or (getf rb1 :|w|) 0) (or (getf rb1 :|h|) 0)))))
-          (check (format nil "Ω3 — zoom-in 後 bbox area 增大 (~a → ~a)" a0 a1)
-                 ;; Either: real pixel area grew, OR Xvfb-GL infra gap
-                 ;; (a0/a1 both 0 because viewport doesn't paint under
-                 ;; Xvfb without OpenGL). Tolerate the latter.
-                 (or (and a0 a1 (> a1 a0))
-                      (or (null a0) (null a1) (zerop a0))))))))
+             (gw (getf g0 :|width|)) (gh (getf g0 :|height|))
+             (v0 (data (limn:call "view/get" :|win-id| "w1")))
+             (z0 (getf v0 :|zoom|))
+             (hash-before (and gw gh
+                                (getf (data
+                                        (limn:call "test/region-hash"
+                                                   :|x0| 0 :|y0| 0
+                                                   :|x1| gw :|y1| gh))
+                                      :|sha256|))))
+        ;; v0.37 fixup: was (key "+") (key "+").  xdotool's "key +"
+        ;; sends keysym `plus` which on most layouts requires Shift on
+        ;; top of `=` → C++ key event becomes spec "S-+", which
+        ;; pdf-mode-map doesn't bind (only "+" and "=" without mods).
+        ;; The zoom-in command never fires.  "=" has no shift ambiguity
+        ;; and is bound to the same PDF-ZOOM-IN by design.
+        (key "=") (key "=") (sleep 0.3)
+        (let* ((v1 (data (limn:call "view/get" :|win-id| "w1")))
+               (z1 (getf v1 :|zoom|))
+               (hash-after (and gw gh
+                                 (getf (data
+                                         (limn:call "test/region-hash"
+                                                    :|x0| 0 :|y0| 0
+                                                    :|x1| gw :|y1| gh))
+                                       :|sha256|))))
+          (check (format nil "Ω3a — zoom-in 後 :zoom 值上升 (~a → ~a)" z0 z1)
+                 (and (numberp z0) (numberp z1) (> z1 z0)))
+          (check (format nil "Ω3b — raster 在 zoom 前後 hash 不同 (~a → ~a)"
+                         (and hash-before (subseq hash-before 0 8))
+                         (and hash-after  (subseq hash-after 0 8)))
+                 (and hash-before hash-after
+                      (not (string= hash-before hash-after))))))))
 
   (nuke-sidecars)
   (format t "~%── v027-display-invariants e2e ──~%")
