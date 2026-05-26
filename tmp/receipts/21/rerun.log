@@ -1,7 +1,7 @@
 ; compiling file "/limn/backend/limn-auto-revert.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-auto-revert-tmp4QIPRMOF.fasl
-; compilation finished in 0:00:00.018
+; compilation finished in 0:00:00.017
 ; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
@@ -9,15 +9,15 @@
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.032
+; compilation finished in 0:00:00.031
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
 ; compilation finished in 0:00:00.005
-; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 02:41:29 PM):
+; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:04:43 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.030
+; compilation finished in 0:00:00.031
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -40,11 +40,11 @@
 
 ── W21 大檔 perf ──
   fixture: 2010000 bytes
-  [timed] find-file: 52.0 ms
-  ✓ perf find-file < 500ms   [52.0 ms]
-  [timed] view/get round-trip after large load: 39.0 ms
-  ✓ perf view/get round-trip after large load < 500ms   [39.0 ms]
-  [timed] 10× view/get rapid-fire: 325.0 ms
-  ✓ perf 10× view/get rapid-fire < 500ms   [325.0 ms]
+  [timed] find-file: 46.0 ms
+  ✓ perf find-file < 500ms   [46.0 ms]
+  [timed] view/get round-trip after large load: 14.0 ms
+  ✓ perf view/get round-trip after large load < 500ms   [14.0 ms]
+  [timed] 10× view/get rapid-fire: 314.0 ms
+  ✓ perf 10× view/get rapid-fire < 500ms   [314.0 ms]
 
 ── W21 result: 3 / 3 pass ──
