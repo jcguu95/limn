@@ -152,7 +152,30 @@
            (mb      (and mb-fn (funcall mb-fn win-id)))
            (mode-result (%mode-stack-lookup mb sequence lookup-seq))
            (global-result (and km (funcall lookup-seq km sequence)))
-           (result        (or mode-result global-result))
+           ;; v0.38 B7-leader fix: when sequence starts with *leader-key*
+           ;; (default "SPC"), consult *leader-keymap* with the remainder.
+           ;; Pre-v0.38 *leader-keymap* was populated by (map! :leader ...)
+           ;; but NOTHING ever looked at it — so user's leader bindings
+           ;; silently no-op'd at runtime.
+           (leader-result
+             (when (and (boundp 'limn/keys:*leader-key*)
+                        limn/keys:*leader-key*
+                        (boundp 'limn/keys:*leader-keymap*)
+                        sequence
+                        (string= (first sequence) limn/keys:*leader-key*))
+               (let ((rest-seq (rest sequence)))
+                 (if (null rest-seq)
+                     ;; SPC alone: act as prefix if *leader-keymap* has
+                     ;; any entries.  keymap-bindings is unexported;
+                     ;; use ::-internal access.
+                     (let* ((kbf (find-symbol "KEYMAP-BINDINGS" '#:limn/keys))
+                            (kb  (and kbf limn/keys:*leader-keymap*
+                                      (funcall (symbol-function kbf)
+                                                limn/keys:*leader-keymap*))))
+                       (when (and kb (plusp (hash-table-count kb))) :prefix))
+                     (funcall lookup-seq
+                              limn/keys:*leader-keymap* rest-seq)))))
+           (result        (or mode-result global-result leader-result))
            ;; Bind prefix-arg if accumulated; gather-args reads it
            ;; via :interactive "p". Reset accumulator regardless.
            (acc-int (when (plusp (length *prefix-arg-acc*))

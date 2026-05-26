@@ -1,4 +1,4 @@
-; compilation finished in 0:00:00.030
+; compilation finished in 0:00:00.035
 ; compiling file "/limn/backend/limn-file-notify.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-file-notify-tmpG6VFGMYP.fasl
@@ -6,7 +6,7 @@
 ; compiling file "/limn/backend/limn-auto-revert.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-auto-revert-tmp4QIPRMOF.fasl
-; compilation finished in 0:00:00.017
+; compilation finished in 0:00:00.018
 ; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
@@ -22,7 +22,7 @@
 ; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 02:41:29 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.030
+; compilation finished in 0:00:00.031
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER

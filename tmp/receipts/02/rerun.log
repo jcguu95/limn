@@ -1,17 +1,3 @@
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.031
-; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
-; compilation finished in 0:00:00.005
-; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 02:41:29 PM):
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.031
-
-; file: /limn/backend/limn-pdf-mode.lisp
-; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
 ;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
 ; 
 ; caught WARNING:
@@ -30,21 +16,35 @@
 ;   printed 6 notes
 
 ── W02 數字 prefix 跳頁 ──
-  page-count = 6
-  ✓ setup: tutorial.pdf has > 5 pages   [page-count=6]
+  page-count = NIL
+  ✗ setup: tutorial.pdf has > 5 pages   [page-count=NIL]
 
 ── A: 12g ──
-  ✗ A.1 12g → page approx 12   [page=0 expected=5 (pc=6)]
+While evaluating the form starting at line 54, column 0
+  of #P"/host-tmp/w02-driver.lisp":
+Unhandled TYPE-ERROR in thread #<SB-THREAD:THREAD tid=1 "main thread" RUNNING
+                                  {1000400003}>:
+  The value
+    NIL
+  is not of type
+    NUMBER
 
-── B: gg ──
-  ✓ B.1 gg → page 0   [page=0]
+Backtrace for: #<SB-THREAD:THREAD tid=1 "main thread" RUNNING {1000400003}>
+0: (SB-KERNEL:TWO-ARG-- NIL 1)
+1: ((LAMBDA NIL :IN "/host-tmp/w02-driver.lisp"))
+2: (SB-INT:SIMPLE-EVAL-IN-LEXENV (LET* ((SOCK (FORMAT NIL "/tmp/limn-w02-~a" (SB-POSIX:GETPID))) (LIMN-BIN (OR (SB-POSIX:GETENV "LIMN_BIN") "/limn/sioyek/limn")) (PROC (RUN-PROGRAM LIMN-BIN (LIST "--test-mode" "--socket" SOCK) :WAIT NIL :SEARCH NIL :OUTPUT "/tmp/limn-w02.log" :IF-OUTPUT-EXISTS :SUPERSEDE :ERROR ...))) (DECLARE (IGNORE PROC)) (LOOP REPEAT 100 UNTIL (PROBE-FILE SOCK) DO (SLEEP 0.05)) (LIMN:START SOCK) (WAIT-FOR-WINDOW "Limn" :TIMEOUT 5) (SLEEP 0.5) (XDOTOOL "search" "--name" "Limn" "windowactivate") (SLEEP 0.3) (SAFE-CALL "bridge/engine-load" :|engine| "mupdf" :|path| "/limn/sioyek/tutorial.pdf" :|win-id| "w1") (SLEEP 0.5) (LET ((PC (PAGE-COUNT))) (FORMAT T "  page-count = ~a~%" PC) (CHECK "setup: tutorial.pdf has > 5 pages" (AND PC (> PC 5)) (FORMAT NIL "page-count=~a" PC))) ...) #<NULL-LEXENV>)
+3: (EVAL-TLF (LET* ((SOCK (FORMAT NIL "/tmp/limn-w02-~a" (SB-POSIX:GETPID))) (LIMN-BIN (OR (SB-POSIX:GETENV "LIMN_BIN") "/limn/sioyek/limn")) (PROC (RUN-PROGRAM LIMN-BIN (LIST "--test-mode" "--socket" SOCK) :WAIT NIL :SEARCH NIL :OUTPUT "/tmp/limn-w02.log" :IF-OUTPUT-EXISTS :SUPERSEDE :ERROR ...))) (DECLARE (IGNORE PROC)) (LOOP REPEAT 100 UNTIL (PROBE-FILE SOCK) DO (SLEEP 0.05)) (LIMN:START SOCK) (WAIT-FOR-WINDOW "Limn" :TIMEOUT 5) (SLEEP 0.5) (XDOTOOL "search" "--name" "Limn" "windowactivate") (SLEEP 0.3) (SAFE-CALL "bridge/engine-load" :|engine| "mupdf" :|path| "/limn/sioyek/tutorial.pdf" :|win-id| "w1") (SLEEP 0.5) (LET ((PC (PAGE-COUNT))) (FORMAT T "  page-count = ~a~%" PC) (CHECK "setup: tutorial.pdf has > 5 pages" (AND PC (> PC 5)) (FORMAT NIL "page-count=~a" PC))) ...) 17 NIL)
+4: ((LABELS SB-FASL::EVAL-FORM :IN SB-INT:LOAD-AS-SOURCE) (LET* ((SOCK (FORMAT NIL "/tmp/limn-w02-~a" (SB-POSIX:GETPID))) (LIMN-BIN (OR (SB-POSIX:GETENV "LIMN_BIN") "/limn/sioyek/limn")) (PROC (RUN-PROGRAM LIMN-BIN (LIST "--test-mode" "--socket" SOCK) :WAIT NIL :SEARCH NIL :OUTPUT "/tmp/limn-w02.log" :IF-OUTPUT-EXISTS :SUPERSEDE :ERROR ...))) (DECLARE (IGNORE PROC)) (LOOP REPEAT 100 UNTIL (PROBE-FILE SOCK) DO (SLEEP 0.05)) (LIMN:START SOCK) (WAIT-FOR-WINDOW "Limn" :TIMEOUT 5) (SLEEP 0.5) (XDOTOOL "search" "--name" "Limn" "windowactivate") (SLEEP 0.3) (SAFE-CALL "bridge/engine-load" :|engine| "mupdf" :|path| "/limn/sioyek/tutorial.pdf" :|win-id| "w1") (SLEEP 0.5) (LET ((PC (PAGE-COUNT))) (FORMAT T "  page-count = ~a~%" PC) (CHECK "setup: tutorial.pdf has > 5 pages" (AND PC (> PC 5)) (FORMAT NIL "page-count=~a" PC))) ...) 17)
+5: ((LAMBDA (SB-KERNEL:FORM &KEY :CURRENT-INDEX &ALLOW-OTHER-KEYS) :IN SB-INT:LOAD-AS-SOURCE) (LET* ((SOCK (FORMAT NIL "/tmp/limn-w02-~a" (SB-POSIX:GETPID))) (LIMN-BIN (OR (SB-POSIX:GETENV "LIMN_BIN") "/limn/sioyek/limn")) (PROC (RUN-PROGRAM LIMN-BIN (LIST "--test-mode" "--socket" SOCK) :WAIT NIL :SEARCH NIL :OUTPUT "/tmp/limn-w02.log" :IF-OUTPUT-EXISTS :SUPERSEDE :ERROR ...))) (DECLARE (IGNORE PROC)) (LOOP REPEAT 100 UNTIL (PROBE-FILE SOCK) DO (SLEEP 0.05)) (LIMN:START SOCK) (WAIT-FOR-WINDOW "Limn" :TIMEOUT 5) (SLEEP 0.5) (XDOTOOL "search" "--name" "Limn" "windowactivate") (SLEEP 0.3) (SAFE-CALL "bridge/engine-load" :|engine| "mupdf" :|path| "/limn/sioyek/tutorial.pdf" :|win-id| "w1") (SLEEP 0.5) (LET ((PC (PAGE-COUNT))) (FORMAT T "  page-count = ~a~%" PC) (CHECK "setup: tutorial.pdf has > 5 pages" (AND PC (> PC 5)) (FORMAT NIL "page-count=~a" PC))) ...) :CURRENT-INDEX 17)
+6: (SB-C::%DO-FORMS-FROM-INFO #<FUNCTION (LAMBDA (SB-KERNEL:FORM &KEY :CURRENT-INDEX &ALLOW-OTHER-KEYS) :IN SB-INT:LOAD-AS-SOURCE) {FFFFA6820C6B}> #<SB-C::SOURCE-INFO {1001929BE3}> SB-C::INPUT-ERROR-IN-LOAD)
+7: (SB-INT:LOAD-AS-SOURCE #<SB-INT:FORM-TRACKING-STREAM for "file /host-tmp/w02-driver.lisp" {1000401B43}> :VERBOSE NIL :PRINT NIL :CONTEXT "loading")
+8: ((LABELS SB-FASL::LOAD-STREAM-1 :IN LOAD) #<SB-INT:FORM-TRACKING-STREAM for "file /host-tmp/w02-driver.lisp" {1000401B43}> NIL)
+9: (SB-FASL::CALL-WITH-LOAD-BINDINGS #<FUNCTION (LABELS SB-FASL::LOAD-STREAM-1 :IN LOAD) {FFFFA682084B}> #<SB-INT:FORM-TRACKING-STREAM for "file /host-tmp/w02-driver.lisp" {1000401B43}> NIL #<SB-INT:FORM-TRACKING-STREAM for "file /host-tmp/w02-driver.lisp" {1000401B43}>)
+10: (LOAD #P"/host-tmp/w02-driver.lisp" :VERBOSE NIL :PRINT NIL :IF-DOES-NOT-EXIST :ERROR :EXTERNAL-FORMAT :DEFAULT)
+11: (SB-IMPL::PROCESS-EVAL/LOAD-OPTIONS ((:LOAD . "/host-tmp/w02-driver.lisp") (:QUIT)))
+12: (SB-IMPL::TOPLEVEL-INIT)
+13: ((FLET SB-UNIX::BODY :IN SB-IMPL::START-LISP))
+14: ((FLET "WITHOUT-INTERRUPTS-BODY-3" :IN SB-IMPL::START-LISP))
+15: (SB-IMPL::%START-LISP)
 
-── C: G ──
-  ✗ C.1 G → last page (page-count - 1)   [page=0 / pc=6]
-
-── D: gg + 5j ──
-  ✓ D.1 5j scrolled 5× more than 1j (multi from prefix-arg)   [before=0 after=0.5d0 delta=0.5d0]
-
-── W02 result: 3 / 5 pass ──
-  • A.1 12g → page approx 12
-  • C.1 G → last page (page-count - 1)
+unhandled condition in --disable-debugger mode, quitting

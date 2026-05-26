@@ -1,7 +1,9 @@
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
+; compilation finished in 0:00:00.027
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.031
+; compilation finished in 0:00:00.032
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
@@ -9,7 +11,7 @@
 ; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 02:41:29 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.031
+; compilation finished in 0:00:00.032
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -40,11 +42,9 @@ XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
 
 ── Phase B: rewrite init.lisp + reload + press 'v' ──
 ;; reload-init-file: /tmp/.limn/init.lisp
-  ✗ B.1 after reload, 'v' triggers canary write   [canary: NIL]
+  ✓ B.1 after reload, 'v' triggers canary write   [canary: "V_KEY_PRESSED"]
 
 ── Phase C: pre-existing 'n' binding still works ──
   ✓ C.1 'n' still advances page (reload didn't break it)   [page=1]
 
-── W22 result: 3 / 4 pass ──
-FAILURES:
-  • B.1 after reload, 'v' triggers canary write
+── W22 result: 4 / 4 pass ──
