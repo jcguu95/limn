@@ -191,18 +191,28 @@
              (x0 (getf pr :|x|)) (y0 (getf pr :|y|))
              (x1 (+ x0 (getf pr :|w|))) (y1 (+ y0 (getf pr :|h|)))
              hashes-w1 hashes-w2)
-        (dotimes (i 3)
-          (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
-          (push (getf (region-hash x0 y0 x1 y1) :|sha256|) hashes-w1)
-          (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.2)
-          (push (getf (region-hash x0 y0 x1 y1) :|sha256|) hashes-w2))
-        (check (format nil "Ω3a — every w1-focused hash equal (~a)" hashes-w1)
-               (every (lambda (h) (string= h (first hashes-w1))) hashes-w1))
-        (check (format nil "Ω3b — every w2-focused hash equal (~a)" hashes-w2)
-               (every (lambda (h) (string= h (first hashes-w2))) hashes-w2))
-        (check (format nil "Ω3c — w1 hash ≠ w2 hash (~a vs ~a)"
-                       (first hashes-w1) (first hashes-w2))
-               (not (string= (first hashes-w1) (first hashes-w2)))))
+        (multiple-value-bind (cx cy) (norm-to-px-xy 0.5 0.5 pr)
+          (dotimes (i 3)
+            (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
+            (push (getf (region-hash x0 y0 x1 y1) :|sha256|) hashes-w1)
+            ;; v0.37 strict: verify content too — w1 has red overlay from
+            ;; Ω2 (set-overlay "w1" "#FF0000"), red should be visible at
+            ;; the center coord on every w1-focused snapshot.
+            (let ((p (sample-pixel cx cy)))
+              (check (format nil "Ω3a-content[~a] — w1 center pixel red (got ~a)" i p)
+                     (pixel-equals p 255 0 0)))
+            (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.2)
+            (push (getf (region-hash x0 y0 x1 y1) :|sha256|) hashes-w2)
+            (let ((p (sample-pixel cx cy)))
+              (check (format nil "Ω3b-content[~a] — w2 center pixel green (got ~a)" i p)
+                     (pixel-equals p 0 255 0))))
+          (check (format nil "Ω3a — every w1-focused hash equal (~a)" hashes-w1)
+                 (every (lambda (h) (string= h (first hashes-w1))) hashes-w1))
+          (check (format nil "Ω3b — every w2-focused hash equal (~a)" hashes-w2)
+                 (every (lambda (h) (string= h (first hashes-w2))) hashes-w2))
+          (check (format nil "Ω3c — w1 hash ≠ w2 hash (~a vs ~a)"
+                         (first hashes-w1) (first hashes-w2))
+                 (not (string= (first hashes-w1) (first hashes-w2))))))
 
 ;;; ── Ω4: page change on non-focused window invisible in raster ───
 
@@ -385,21 +395,36 @@
                                   (+ (getf pr :|x|) (getf pr :|w|))
                                   (+ (getf pr :|y|) (getf pr :|h|))
                                   "#FF00FF")))
-            (check (format nil "Ω12 — rotated bbox aspect inverted (w1 w/h=~a vs w2 w/h=~a)"
-                           (and b1 (and (getf b1 :|h|) (not (zerop (getf b1 :|h|))))
-                                       (/ (float (getf b1 :|w|))
-                                          (float (getf b1 :|h|))))
-                           (and b2 (and (getf b2 :|h|) (not (zerop (getf b2 :|h|))))
-                                       (/ (float (getf b2 :|w|))
-                                          (float (getf b2 :|h|)))))
-                   (and b1 b2
-                        (not (zerop (getf b1 :|h|)))
-                        (not (zerop (getf b2 :|h|)))
-                        ;; w1: wide-and-short (w/h > 1). w2 rotated 90°:
-                        ;; should be tall-and-narrow (w/h < 1).
-                        (let ((r1 (/ (float (getf b1 :|w|)) (float (getf b1 :|h|))))
-                              (r2 (/ (float (getf b2 :|w|)) (float (getf b2 :|h|)))))
-                          (and (> r1 1.5) (< r2 0.7)))))))
+            ;; v0.37 strict: was a loose aspect-ratio check (r1 > 1.5,
+            ;; r2 < 0.7).  Strengthen to expected pixel dimensions.
+            ;; Overlay rect page-norm (0.2, 0.4, 0.8, 0.5) on a pr-sized
+            ;; page: width = (0.8 - 0.2) * pr.w = 0.6 * pr.w, height =
+            ;; (0.5 - 0.4) * pr.h = 0.1 * pr.h.
+            ;; w1 rotation=0 → bbox ≈ (0.6*pr.w, 0.1*pr.h)
+            ;; w2 rotation=90 → bbox swaps → (0.1*pr.h, 0.6*pr.w)
+            ;; Tolerance ±15% absorbs anti-aliasing / sub-pixel rounding;
+            ;; tighter than the old "1.5/0.7" ratio.
+            (let ((exp-w1-w (round (* 0.6 (getf pr :|w|))))
+                  (exp-w1-h (round (* 0.1 (getf pr :|h|))))
+                  (exp-w2-w (round (* 0.1 (getf pr :|h|))))
+                  (exp-w2-h (round (* 0.6 (getf pr :|w|))))
+                  (tol 0.15))
+              (check (format nil "Ω12 — w1 bbox dims (~ax~a, expect ≈ ~ax~a ±~a%)"
+                             (and b1 (getf b1 :|w|)) (and b1 (getf b1 :|h|))
+                             exp-w1-w exp-w1-h (round (* 100 tol)))
+                     (and b1 (getf b1 :|w|) (getf b1 :|h|)
+                          (< (abs (- (getf b1 :|w|) exp-w1-w))
+                             (* tol exp-w1-w))
+                          (< (abs (- (getf b1 :|h|) exp-w1-h))
+                             (* tol exp-w1-h))))
+              (check (format nil "Ω12 — w2 bbox dims (~ax~a, expect ≈ ~ax~a ±~a%)"
+                             (and b2 (getf b2 :|w|)) (and b2 (getf b2 :|h|))
+                             exp-w2-w exp-w2-h (round (* 100 tol)))
+                     (and b2 (getf b2 :|w|) (getf b2 :|h|)
+                          (< (abs (- (getf b2 :|w|) exp-w2-w))
+                             (* tol exp-w2-w))
+                          (< (abs (- (getf b2 :|h|) exp-w2-h))
+                             (* tol exp-w2-h)))))))
 
 ;;; ── Ω13: selection per-window — state + raster ──────────────────
 ;;;
@@ -502,15 +527,25 @@
               (check (format nil "Ω13e — yellow selection bbox exists (~s)" yb)
                      (and yb (getf yb :|w|) (getf yb :|h|)
                           (> (getf yb :|w|) 0) (> (getf yb :|h|) 0)))
+              ;; v0.37 strict: bbox must match expected page-norm
+              ;; coords ±15% (selection at (0.2, 0.2) → (0.6, 0.22)
+              ;; on a pr-sized page).  With C++ simplified-math path
+              ;; for default-state windows, this should match exactly
+              ;; modulo rounding.
               (when (and yb (getf yb :|w|))
-                (let ((center-x (+ (getf yb :|x|) (floor (getf yb :|w|) 2)))
-                      (center-y (+ (getf yb :|y|) (floor (getf yb :|h|) 2))))
-                  (check (format nil "Ω13f — yellow bbox center (~a,~a) within page rect ~s"
-                                 center-x center-y pr)
-                         (and (>= center-x (getf pr :|x|))
-                              (<= center-x (+ (getf pr :|x|) (getf pr :|w|)))
-                              (>= center-y (getf pr :|y|))
-                              (<= center-y (+ (getf pr :|y|) (getf pr :|h|))))))))
+                (let ((exp-x (round (* 0.2 (getf pr :|w|))))
+                      (exp-y (round (* 0.2 (getf pr :|h|))))
+                      (exp-w (round (* (- 0.6 0.2) (getf pr :|w|))))
+                      (exp-h (round (* (- 0.22 0.2) (getf pr :|h|))))
+                      (tol 0.15))
+                  (check (format nil "Ω13f — yellow bbox (~ax~a at ~a,~a) matches expected (~ax~a at ~a,~a) ±~a%"
+                                 (getf yb :|w|) (getf yb :|h|)
+                                 (getf yb :|x|) (getf yb :|y|)
+                                 exp-w exp-h exp-x exp-y (round (* 100 tol)))
+                         (and (< (abs (- (getf yb :|x|) exp-x)) (* tol exp-w))
+                              (< (abs (- (getf yb :|y|) exp-y)) (* tol (max exp-h 10)))
+                              (< (abs (- (getf yb :|w|) exp-w)) (* tol exp-w))
+                              (< (abs (- (getf yb :|h|) exp-h)) (* tol (max exp-h 10))))))))
             ;; (d) focus to w2 → raster differs from w1-with-sel
             (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.3)
             (let ((h-w2 (getf (region-hash x0 y0 x1 y1) :|sha256|)))

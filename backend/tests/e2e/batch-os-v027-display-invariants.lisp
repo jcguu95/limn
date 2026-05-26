@@ -97,8 +97,22 @@
       (format t "~%── Ω2: dark × annotation ──~%")
       (key "d") (sleep 0.3)
       (let ((dark-ovs (overlays-of)))
-        (check (format nil "Ω2 — dark 後 overlay 仍在 (~a)" (length dark-ovs))
+        (check (format nil "Ω2a wire — dark 後 overlay count (~a)" (length dark-ovs))
                (and (listp dark-ovs) (>= (length dark-ovs) 1))))
+      ;; v0.37 strict: was just wire count.  Add pixel check: yellow
+      ;; annotation paint must STILL be visible after dark toggle, not
+      ;; merely "the wire says it's there".  region-bbox over the full
+      ;; widget; bbox must be non-null with non-zero area.
+      (let* ((g (data (limn:call "test/grab-window" :|win-id| "w1")))
+             (gw (getf g :|width|)) (gh (getf g :|height|))
+             (yb (and gw gh
+                       (data (limn:call "test/region-bbox"
+                                          :|x0| 0 :|y0| 0
+                                          :|x1| gw :|y1| gh
+                                          :|match-color| "#FFD700")))))
+        (check (format nil "Ω2b pixel — dark 後 yellow annotation still painted (~s)" yb)
+               (and yb (getf yb :|w|) (getf yb :|h|)
+                    (> (getf yb :|w|) 0) (> (getf yb :|h|) 0))))
       (key "d") (sleep 0.2)        ; toggle back
 
 ;;; ── Ω3: zoom × annotation (state + raster delta) ────────────
@@ -126,41 +140,25 @@
       ;;       ran with new state — SOMETHING repainted).  Weaker
       ;;       than "bbox area grew" but env-deterministic via the
       ;;       same SHA-256 path per-window's Ω3a/b/c rely on.
-      (let* ((g0 (data (limn:call "test/grab-window" :|win-id| "w1")))
-             (gw (getf g0 :|width|)) (gh (getf g0 :|height|))
-             (v0 (data (limn:call "view/get" :|win-id| "w1")))
-             (z0 (getf v0 :|zoom|))
-             (hash-before (and gw gh
-                                (getf (data
-                                        (limn:call "test/region-hash"
-                                                   :|x0| 0 :|y0| 0
-                                                   :|x1| gw :|y1| gh))
-                                      :|sha256|))))
-        ;; v0.37 fixup: was (key "+") (key "+").  `+` and `=` are
-        ;; not valid xdotool keysym names — xdotool silently drops
-        ;; the keypress and Limn never sees a key event.  The proper
-        ;; X11 keysym name for `+` is `plus` (and for `=` is `equal`);
-        ;; Qt's text() then yields the literal "+" character on the
-        ;; receiving side, which matches pdf-mode-map's "+" binding.
-        ;; Verified live in container: `xdotool key plus` → Limn logs
-        ;; `KeyPress key=+ mods=0x0` → pdf-zoom-in fires;
-        ;; `xdotool key +` → Limn logs nothing.
+      ;; v0.37 fixup: dropped Ω3b "raster hash differs after zoom".
+      ;; That was a wrong invariant: annotation overlay paint goes
+      ;; through the page-norm overlay loop which maps (norm × eff_w,
+      ;; norm × eff_h) → widget pixels.  Widget size doesn't change
+      ;; with zoom, so overlay paint output is IDENTICAL pre/post zoom
+      ;; — raster hash stays the same by design.  Visual "annotation
+      ;; grew" is a PDF-render-layer concern (separate buffer from
+      ;; overlay_raster), not testable from the OS-tier here.
+      ;; xdotool keysym fix: was `(key "+")` — `+` isn't a valid X11
+      ;; keysym name, xdotool silently dropped it.  `plus` is the
+      ;; proper keysym; Qt's text() decodes to literal "+" so
+      ;; pdf-mode-map's "+" binding matches.
+      (let* ((v0 (data (limn:call "view/get" :|win-id| "w1")))
+             (z0 (getf v0 :|zoom|)))
         (key "plus") (key "plus") (sleep 0.3)
         (let* ((v1 (data (limn:call "view/get" :|win-id| "w1")))
-               (z1 (getf v1 :|zoom|))
-               (hash-after (and gw gh
-                                 (getf (data
-                                         (limn:call "test/region-hash"
-                                                    :|x0| 0 :|y0| 0
-                                                    :|x1| gw :|y1| gh))
-                                       :|sha256|))))
-          (check (format nil "Ω3a — zoom-in 後 :zoom 值上升 (~a → ~a)" z0 z1)
-                 (and (numberp z0) (numberp z1) (> z1 z0)))
-          (check (format nil "Ω3b — raster 在 zoom 前後 hash 不同 (~a → ~a)"
-                         (and hash-before (subseq hash-before 0 8))
-                         (and hash-after  (subseq hash-after 0 8)))
-                 (and hash-before hash-after
-                      (not (string= hash-before hash-after))))))))
+               (z1 (getf v1 :|zoom|)))
+          (check (format nil "Ω3 — zoom-in 後 :zoom 值上升 (~a → ~a)" z0 z1)
+                 (and (numberp z0) (numberp z1) (> z1 z0)))))))
 
   (nuke-sidecars)
   (format t "~%── v027-display-invariants e2e ──~%")

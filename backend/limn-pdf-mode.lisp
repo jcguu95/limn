@@ -667,11 +667,18 @@
 
 (limn/pdf-mode::%defcmd pdf-toggle-dark nil
   (lambda ()
+    ;; v0.37 fixup: was calling "bridge/engine-params" which is NOT a
+    ;; registered wire command — silently failed.  Strict pixel test
+    ;; for "dark mode preserves overlay" caught it because dark mode
+    ;; never actually toggled in any prior run.  Real path is
+    ;; view/set with :|engine-params| nested object (see C++
+    ;; cmd_view_set line ~709).
     (let* ((v (limn/pdf-mode::%focused-view))
            (cur (getf v :|dark-mode|))
            (next (if (or (null cur) (eq cur :false)) t :false)))
-      (limn/pdf-mode::%limn-call "bridge/engine-params"
-                                  :|win-id| "w1" :|dark-mode| next))))
+      (limn/pdf-mode::%limn-call "view/set"
+                                  :|win-id| "w1"
+                                  :|engine-params| (list :|dark-mode| next)))))
 
 (limn/pdf-mode::%defcmd pdf-rotate-cw nil
   (lambda ()
