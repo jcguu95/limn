@@ -1,9 +1,9 @@
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
 ; compilation finished in 0:00:00.005
-; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:04:43 PM):
+; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:22:05 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.033
+; compilation finished in 0:00:00.032
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -35,11 +35,11 @@ XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
 ── Phase B: write broken init + reload ──
 ;; init: /tmp/.limn/init.lisp ERRORED (resilient): READ error during LOAD:
 
-                                                     end of file on #<SB-INT:FORM-TRACKING-STREAM for "file /tmp/.limn/init.lisp" {1007CCE423}>
+;; reload-init-file: /tmp/.limn/init.lisp
+                                                     end of file on #<SB-INT:FORM-TRACKING-STREAM for "file /tmp/.limn/init.lisp" {100813A1D3}>
 
                                                      (in form starting at line: 5,
                                                      column: 0, position: 199)
-;; reload-init-file: /tmp/.limn/init.lisp
   ✓ B.1 limn responds to view/get after broken reload   [ok]
   ✓ B.2a broken init's first form (before error) ran   [canary-half: "BROKEN_HALF_RAN"]
   ✓ B.2b broken init's post-error form did NOT run   [canary-after: NIL (should be NIL)]

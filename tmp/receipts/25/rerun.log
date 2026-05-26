@@ -1,4 +1,12 @@
-; compilation finished in 0:00:00.019
+; compilation finished in 0:00:00.033
+; compiling file "/limn/backend/limn-file-notify.lisp" (written 26 MAY 2026 11:43:09 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-file-notify-tmpG6VFGMYP.fasl
+; compilation finished in 0:00:00.030
+; compiling file "/limn/backend/limn-auto-revert.lisp" (written 26 MAY 2026 11:43:09 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-auto-revert-tmp4QIPRMOF.fasl
+; compilation finished in 0:00:00.020
 ; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
@@ -6,7 +14,7 @@
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.035
+; compilation finished in 0:00:00.038
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
@@ -14,7 +22,7 @@
 ; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:22:05 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.036
+; compilation finished in 0:00:00.034
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -35,16 +43,8 @@
 ;   caught 2 WARNING conditions
 ;   printed 6 notes
 
-── W06 single-file search ──
-  baseline overlay count = NIL
+── W25 which-key prefix popup ──
+;; loaded init: /tmp/.limn/init.lisp
+  ✓ A.1 SPC f s 觸發 my-w25-fs   [canary="FS"]
 
-── press / ──
-  ✓ A.1 / opens minibuffer for isearch   [minibuffer: (cursor 0 open T prompt Search:  text )]
-  ✓ A.2 minibuffer contains 'the' after typing   [text="the"]
-  after RET: overlay count = 122
-  ✓ A.3 search produced overlays (hits highlighted)   [overlays=122]
-  ✓ A.4 limn still alive after n/N navigation
-  after C-g: overlay count = NIL
-  ✓ A.5 C-g cleared search overlays   [overlays=NIL]
-
-── W06 result: 5 / 5 pass ──
+── W25 result: 1 / 1 pass ──

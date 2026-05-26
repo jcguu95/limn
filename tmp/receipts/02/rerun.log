@@ -1,20 +1,16 @@
-; compilation finished in 0:00:00.019
-; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
-; compilation finished in 0:00:00.030
+; compilation finished in 0:00:00.027
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.035
+; compilation finished in 0:00:00.032
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
-; compilation finished in 0:00:00.006
+; compilation finished in 0:00:00.005
 ; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:22:05 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.036
+; compilation finished in 0:00:00.031
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -35,16 +31,20 @@
 ;   caught 2 WARNING conditions
 ;   printed 6 notes
 
-── W06 single-file search ──
-  baseline overlay count = NIL
+── W02 數字 prefix 跳頁 ──
+  page-count = 6
+  ✓ setup: tutorial.pdf has > 5 pages   [page-count=6]
 
-── press / ──
-  ✓ A.1 / opens minibuffer for isearch   [minibuffer: (cursor 0 open T prompt Search:  text )]
-  ✓ A.2 minibuffer contains 'the' after typing   [text="the"]
-  after RET: overlay count = 122
-  ✓ A.3 search produced overlays (hits highlighted)   [overlays=122]
-  ✓ A.4 limn still alive after n/N navigation
-  after C-g: overlay count = NIL
-  ✓ A.5 C-g cleared search overlays   [overlays=NIL]
+── A: 12G ──
+  ✓ A.1 12g → page approx 12   [page=5 expected=5 (pc=6)]
 
-── W06 result: 5 / 5 pass ──
+── B: gg ──
+  ✓ B.1 gg → page 0   [page=0]
+
+── C: G ──
+  ✓ C.1 G → last page (page-count - 1)   [page=5 / pc=6]
+
+── D: gg + 5j ──
+  ✓ D.1 5j scrolled 5× more than 1j (multi from prefix-arg)   [before=0 after=0.5d0 delta=0.5d0]
+
+── W02 result: 5 / 5 pass ──

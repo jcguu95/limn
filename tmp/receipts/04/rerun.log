@@ -1,0 +1,50 @@
+                                                       (:|children| NIL :|page|
+                                                        5 :|title|
+                                                        "11. Extensions ")).
+  ✗ A.1 minibuffer/TOC chrome opened after 't'   [minibuffer state: (cursor 0 open FALSE prompt  text )]
+  ✓ A.2 pdf-toc is registered in defcommand registry   [cmd=T]
+While evaluating the form starting at line 46, column 0
+  of #P"/host-tmp/w04-driver.lisp":
+Unhandled SIMPLE-TYPE-ERROR in thread #<SB-THREAD:THREAD tid=1 "main thread" RUNNING
+                                         {1000400003}>:
+  malformed property list: ((:|children| NIL :|page| 0 :|title| "1. Basics ")
+                            (:|children| NIL :|page| 1 :|title|
+                             "2. Command Palette ")
+                            (:|children| NIL :|page| 1 :|title| "3. Search ")
+                            (:|children| NIL :|page| 1 :|title| "4. Marks ")
+                            (:|children| NIL :|page| 2 :|title|
+                             "5. Bookmarks ")
+                            (:|children| NIL :|page| 2 :|title|
+                             "6. Highlights ")
+                            (:|children| NIL :|page| 3 :|title|
+                             "7. Smart Jump ")
+                            (:|children| NIL :|page| 3 :|title| "8. Portals ")
+                            (:|children| NIL :|page| 3 :|title|
+                             "9. Configuration ")
+                            (:|children| NIL :|page| 4 :|title| "10. Synctex ")
+                            (:|children| NIL :|page| 5 :|title|
+                             "11. Extensions ")).
+
+Backtrace for: #<SB-THREAD:THREAD tid=1 "main thread" RUNNING {1000400003}>
+0: (SB-DEBUG::DEBUGGER-DISABLED-HOOK #<SIMPLE-TYPE-ERROR expected-type: CONS datum: NIL> #<unused argument> :QUIT T)
+1: (SB-DEBUG::RUN-HOOK *INVOKE-DEBUGGER-HOOK* #<SIMPLE-TYPE-ERROR expected-type: CONS datum: NIL>)
+2: (INVOKE-DEBUGGER #<SIMPLE-TYPE-ERROR expected-type: CONS datum: NIL>)
+3: (ERROR SIMPLE-TYPE-ERROR :DATUM NIL :EXPECTED-TYPE CONS :FORMAT-CONTROL "malformed property list: ~S." :FORMAT-ARGUMENTS (((:|children| NIL :|page| 0 :|title| "1. Basics ") (:|children| NIL :|page| 1 :|title| "2. Command Palette ") (:|children| NIL :|page| 1 :|title| "3. Search ") (:|children| NIL :|page| 1 :|title| "4. Marks ") (:|children| NIL :|page| 2 :|title| "5. Bookmarks ") (:|children| NIL :|page| 2 :|title| "6. Highlights ") (:|children| NIL :|page| 3 :|title| "7. Smart Jump ") (:|children| NIL :|page| 3 :|title| "8. Portals ") (:|children| NIL :|page| 3 :|title| "9. Configuration ") (:|children| NIL :|page| 4 :|title| "10. Synctex ") (:|children| NIL :|page| 5 :|title| "11. Extensions "))))
+4: (GETF ((:|children| NIL :|page| 0 :|title| "1. Basics ") (:|children| NIL :|page| 1 :|title| "2. Command Palette ") (:|children| NIL :|page| 1 :|title| "3. Search ") (:|children| NIL :|page| 1 :|title| "4. Marks ") (:|children| NIL :|page| 2 :|title| "5. Bookmarks ") (:|children| NIL :|page| 2 :|title| "6. Highlights ") (:|children| NIL :|page| 3 :|title| "7. Smart Jump ") (:|children| NIL :|page| 3 :|title| "8. Portals ") (:|children| NIL :|page| 3 :|title| "9. Configuration ") (:|children| NIL :|page| 4 :|title| "10. Synctex ") (:|children| NIL :|page| 5 :|title| "11. Extensions ")) :|items| NIL)
+5: ((LAMBDA NIL :IN "/host-tmp/w04-driver.lisp"))
+6: (SB-INT:SIMPLE-EVAL-IN-LEXENV (LET* ((SOCK (FORMAT NIL "/tmp/limn-w04-~a" (SB-POSIX:GETPID))) (LIMN-BIN (OR (SB-POSIX:GETENV "LIMN_BIN") "/limn/sioyek/limn")) (PROC (RUN-PROGRAM LIMN-BIN (LIST "--test-mode" "--socket" SOCK) :WAIT NIL :SEARCH NIL :OUTPUT "/tmp/limn-w04.log" :IF-OUTPUT-EXISTS :SUPERSEDE :ERROR ...))) (DECLARE (IGNORE PROC)) (LOOP REPEAT 100 UNTIL (PROBE-FILE SOCK) DO (SLEEP 0.05)) (LIMN:START SOCK) (WAIT-FOR-WINDOW "Limn" :TIMEOUT 5) (SLEEP 0.5) (XDOTOOL "search" "--name" "Limn" "windowactivate") (SLEEP 0.3) (SAFE-CALL "bridge/engine-load" :|engine| "mupdf" :|path| "/limn/sioyek/tutorial.pdf" :|win-id| "w1") (SLEEP 0.5) (LET ((P0 (PAGE-NOW))) (FORMAT T "  baseline page = ~a~%" P0) (FORMAT T "~%── press 't' (TOC) ──~%") (XDOTOOL "key" "--clearmodifiers" "t") (SLEEP 0.25) (LET* ((MB #) (OPEN #)) (CHECK "A.1 minibuffer/TOC chrome opened after 't'" OPEN (FORMAT NIL "minibuffer state: ~a" #))) (XDOTOOL "key" "--clearmodifiers" "Escape") (SLEEP 0.3) (LET* ((SYM #) (CMD #)) (CHECK "A.2 pdf-toc is registered in defcommand registry" (AND CMD T) (FORMAT NIL "cmd=~a" #))) (LET* ((R #) (ITEMS #)) (CHECK "A.3 TOC has at least 1 entry" (AND ITEMS #) (FORMAT NIL "items count=~a" #)))) ...) #<NULL-LEXENV>)
+7: (EVAL-TLF (LET* ((SOCK (FORMAT NIL "/tmp/limn-w04-~a" (SB-POSIX:GETPID))) (LIMN-BIN (OR (SB-POSIX:GETENV "LIMN_BIN") "/limn/sioyek/limn")) (PROC (RUN-PROGRAM LIMN-BIN (LIST "--test-mode" "--socket" SOCK) :WAIT NIL :SEARCH NIL :OUTPUT "/tmp/limn-w04.log" :IF-OUTPUT-EXISTS :SUPERSEDE :ERROR ...))) (DECLARE (IGNORE PROC)) (LOOP REPEAT 100 UNTIL (PROBE-FILE SOCK) DO (SLEEP 0.05)) (LIMN:START SOCK) (WAIT-FOR-WINDOW "Limn" :TIMEOUT 5) (SLEEP 0.5) (XDOTOOL "search" "--name" "Limn" "windowactivate") (SLEEP 0.3) (SAFE-CALL "bridge/engine-load" :|engine| "mupdf" :|path| "/limn/sioyek/tutorial.pdf" :|win-id| "w1") (SLEEP 0.5) (LET ((P0 (PAGE-NOW))) (FORMAT T "  baseline page = ~a~%" P0) (FORMAT T "~%── press 't' (TOC) ──~%") (XDOTOOL "key" "--clearmodifiers" "t") (SLEEP 0.25) (LET* ((MB #) (OPEN #)) (CHECK "A.1 minibuffer/TOC chrome opened after 't'" OPEN (FORMAT NIL "minibuffer state: ~a" #))) (XDOTOOL "key" "--clearmodifiers" "Escape") (SLEEP 0.3) (LET* ((SYM #) (CMD #)) (CHECK "A.2 pdf-toc is registered in defcommand registry" (AND CMD T) (FORMAT NIL "cmd=~a" #))) (LET* ((R #) (ITEMS #)) (CHECK "A.3 TOC has at least 1 entry" (AND ITEMS #) (FORMAT NIL "items count=~a" #)))) ...) 15 NIL)
+8: ((LABELS SB-FASL::EVAL-FORM :IN SB-INT:LOAD-AS-SOURCE) (LET* ((SOCK (FORMAT NIL "/tmp/limn-w04-~a" (SB-POSIX:GETPID))) (LIMN-BIN (OR (SB-POSIX:GETENV "LIMN_BIN") "/limn/sioyek/limn")) (PROC (RUN-PROGRAM LIMN-BIN (LIST "--test-mode" "--socket" SOCK) :WAIT NIL :SEARCH NIL :OUTPUT "/tmp/limn-w04.log" :IF-OUTPUT-EXISTS :SUPERSEDE :ERROR ...))) (DECLARE (IGNORE PROC)) (LOOP REPEAT 100 UNTIL (PROBE-FILE SOCK) DO (SLEEP 0.05)) (LIMN:START SOCK) (WAIT-FOR-WINDOW "Limn" :TIMEOUT 5) (SLEEP 0.5) (XDOTOOL "search" "--name" "Limn" "windowactivate") (SLEEP 0.3) (SAFE-CALL "bridge/engine-load" :|engine| "mupdf" :|path| "/limn/sioyek/tutorial.pdf" :|win-id| "w1") (SLEEP 0.5) (LET ((P0 (PAGE-NOW))) (FORMAT T "  baseline page = ~a~%" P0) (FORMAT T "~%── press 't' (TOC) ──~%") (XDOTOOL "key" "--clearmodifiers" "t") (SLEEP 0.25) (LET* ((MB #) (OPEN #)) (CHECK "A.1 minibuffer/TOC chrome opened after 't'" OPEN (FORMAT NIL "minibuffer state: ~a" #))) (XDOTOOL "key" "--clearmodifiers" "Escape") (SLEEP 0.3) (LET* ((SYM #) (CMD #)) (CHECK "A.2 pdf-toc is registered in defcommand registry" (AND CMD T) (FORMAT NIL "cmd=~a" #))) (LET* ((R #) (ITEMS #)) (CHECK "A.3 TOC has at least 1 entry" (AND ITEMS #) (FORMAT NIL "items count=~a" #)))) ...) 15)
+9: ((LAMBDA (SB-KERNEL:FORM &KEY :CURRENT-INDEX &ALLOW-OTHER-KEYS) :IN SB-INT:LOAD-AS-SOURCE) (LET* ((SOCK (FORMAT NIL "/tmp/limn-w04-~a" (SB-POSIX:GETPID))) (LIMN-BIN (OR (SB-POSIX:GETENV "LIMN_BIN") "/limn/sioyek/limn")) (PROC (RUN-PROGRAM LIMN-BIN (LIST "--test-mode" "--socket" SOCK) :WAIT NIL :SEARCH NIL :OUTPUT "/tmp/limn-w04.log" :IF-OUTPUT-EXISTS :SUPERSEDE :ERROR ...))) (DECLARE (IGNORE PROC)) (LOOP REPEAT 100 UNTIL (PROBE-FILE SOCK) DO (SLEEP 0.05)) (LIMN:START SOCK) (WAIT-FOR-WINDOW "Limn" :TIMEOUT 5) (SLEEP 0.5) (XDOTOOL "search" "--name" "Limn" "windowactivate") (SLEEP 0.3) (SAFE-CALL "bridge/engine-load" :|engine| "mupdf" :|path| "/limn/sioyek/tutorial.pdf" :|win-id| "w1") (SLEEP 0.5) (LET ((P0 (PAGE-NOW))) (FORMAT T "  baseline page = ~a~%" P0) (FORMAT T "~%── press 't' (TOC) ──~%") (XDOTOOL "key" "--clearmodifiers" "t") (SLEEP 0.25) (LET* ((MB #) (OPEN #)) (CHECK "A.1 minibuffer/TOC chrome opened after 't'" OPEN (FORMAT NIL "minibuffer state: ~a" #))) (XDOTOOL "key" "--clearmodifiers" "Escape") (SLEEP 0.3) (LET* ((SYM #) (CMD #)) (CHECK "A.2 pdf-toc is registered in defcommand registry" (AND CMD T) (FORMAT NIL "cmd=~a" #))) (LET* ((R #) (ITEMS #)) (CHECK "A.3 TOC has at least 1 entry" (AND ITEMS #) (FORMAT NIL "items count=~a" #)))) ...) :CURRENT-INDEX 15)
+10: (SB-C::%DO-FORMS-FROM-INFO #<FUNCTION (LAMBDA (SB-KERNEL:FORM &KEY :CURRENT-INDEX &ALLOW-OTHER-KEYS) :IN SB-INT:LOAD-AS-SOURCE) {FFFF83390C6B}> #<SB-C::SOURCE-INFO {1001929BE3}> SB-C::INPUT-ERROR-IN-LOAD)
+11: (SB-INT:LOAD-AS-SOURCE #<SB-INT:FORM-TRACKING-STREAM for "file /host-tmp/w04-driver.lisp" {1000401B43}> :VERBOSE NIL :PRINT NIL :CONTEXT "loading")
+12: ((LABELS SB-FASL::LOAD-STREAM-1 :IN LOAD) #<SB-INT:FORM-TRACKING-STREAM for "file /host-tmp/w04-driver.lisp" {1000401B43}> NIL)
+13: (SB-FASL::CALL-WITH-LOAD-BINDINGS #<FUNCTION (LABELS SB-FASL::LOAD-STREAM-1 :IN LOAD) {FFFF8339084B}> #<SB-INT:FORM-TRACKING-STREAM for "file /host-tmp/w04-driver.lisp" {1000401B43}> NIL #<SB-INT:FORM-TRACKING-STREAM for "file /host-tmp/w04-driver.lisp" {1000401B43}>)
+14: (LOAD #P"/host-tmp/w04-driver.lisp" :VERBOSE NIL :PRINT NIL :IF-DOES-NOT-EXIST :ERROR :EXTERNAL-FORMAT :DEFAULT)
+15: (SB-IMPL::PROCESS-EVAL/LOAD-OPTIONS ((:LOAD . "/host-tmp/w04-driver.lisp") (:QUIT)))
+16: (SB-IMPL::TOPLEVEL-INIT)
+17: ((FLET SB-UNIX::BODY :IN SB-IMPL::START-LISP))
+18: ((FLET "WITHOUT-INTERRUPTS-BODY-3" :IN SB-IMPL::START-LISP))
+19: (SB-IMPL::%START-LISP)
+
+unhandled condition in --disable-debugger mode, quitting

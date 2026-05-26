@@ -1,10 +1,13 @@
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-file-notify-tmpG6VFGMYP.fasl
+; compilation finished in 0:00:00.029
+; compiling file "/limn/backend/limn-auto-revert.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-auto-revert-tmp4QIPRMOF.fasl
-; compilation finished in 0:00:00.019
+; compilation finished in 0:00:00.017
 ; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
-; compilation finished in 0:00:00.028
+; compilation finished in 0:00:00.027
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
@@ -12,11 +15,11 @@
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
-; compilation finished in 0:00:00.005
-; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:04:43 PM):
+; compilation finished in 0:00:00.006
+; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:22:05 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.033
+; compilation finished in 0:00:00.034
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -37,14 +40,11 @@
 ;   caught 2 WARNING conditions
 ;   printed 6 notes
 
-── W12 sidecar manual destruction ──
-  3 highlights → overlay count = 3
-  ✓ A.1 baseline: 3 highlights present   [overlays=3]
-  sidecar files before nuke: 1
-  deleted 1 sidecar files
-  ✓ A.2 sidecars existed before nuke   [1 files]
-  ✓ A.3 reopen after sidecar nuke does not crash   [ok]
-  ✓ A.4 after nuke + reopen, 0 highlights   [overlays=0]
-  ✓ A.5 limn process still alive (wire responds)
+── W09 建/刪/再建高亮 ──
+  ✓ A.1 3 highlights created   [overlays=3]
+  current path = "/limn/sioyek/tutorial.pdf"
+  ✓ A.2 delete-at-point returned truthy (target found)   [deleted=T]
+  ✓ A.3 remaining 2 after middle deletion   [overlays=2]
+  ✓ A.4 add 4th → 3 highlights total   [overlays=3]
 
-── W12 result: 5 / 5 pass ──
+── W09 result: 4 / 4 pass ──

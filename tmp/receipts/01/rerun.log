@@ -1,20 +1,14 @@
-; compiling file "/limn/backend/limn-auto-revert.lisp" (written 26 MAY 2026 11:43:09 AM):
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-auto-revert-tmp4QIPRMOF.fasl
-; compilation finished in 0:00:00.017
-; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
-
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
 ; compilation finished in 0:00:00.027
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.031
+; compilation finished in 0:00:00.034
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
 ; compilation finished in 0:00:00.005
-; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:04:43 PM):
+; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:22:05 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
 ; compilation finished in 0:00:00.031
@@ -38,13 +32,19 @@
 ;   caught 2 WARNING conditions
 ;   printed 6 notes
 
-── W10 跨檔 bookmark ──
-  paper A buffer-id = b1
-  ✓ A.1 set bookmark m on paper-A page 3   [ok]
-  paper B buffer-id = b2
-  ✓ A.2 set bookmark b on paper-B page 5   [ok]
-  paper A re-opened buffer-id = b3
-  ✓ A.3 'm on paper-A jumps to page 3 (持久化)   [page=3]
-  ✓ A.4 'b on paper-B jumps to page 5 (跨檔)   [page=5]
+── W01 j×30 連續翻頁 ──
+  state-00 = (0 . 0)
+  after  5 × j: state = (0 . 0.5d0)
+  after 10 × j: state = (0 . 1)
+  after 15 × j: state = (0 . 1.5d0)
+  after 20 × j: state = (0 . 2)
+  after 25 × j: state = (0 . 2.5d0)
+  after 30 × j: state = (0 . 3)
+  ✓ A.1 every 5-step snapshot differs from previous (j actually moves)   [snapshots: ((0 . 0) (0 . 0.5d0) (0 . 1) (0 . 1.5d0) (0 . 2) (0 . 2.5d0) (0 . 3))]
+  ✓ A.2 final state differs from initial after 30 j   [init=(0 . 0)  final=(0 . 3)]
+  ✓ A.3 gg returns to page 0 (or offset 0)   [after gg: (0 . 0)]
 
-── W10 result: 4 / 4 pass ──
+── 變奏: 用 l 取代 j ──
+  ✓ B.1 l×10 also moves state   [init=(0 . 0)  after-10-l=(5 . 3960)]
+
+── W01 result: 4 / 4 pass ──
