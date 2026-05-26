@@ -405,3 +405,112 @@ fix but deferred).
     pre/post zoom → hash same BY DESIGN.  Wrong invariant;
     the visual "annotation grew" concern is a PDF-render-layer
     invariant (PDF render not in overlay_raster).
+
+## Phase G' — strict-pass round 2 (8 more drivers)
+
+After the first strict pass surfaced #G'-1 / #G'-2 / #G'-3, did
+a systematic strict-conversion across 8 more drivers that had
+loose pixel assertions (bbox-existence-only / bare width
+thresholds / wire-only without pixel verification).  Pattern:
+
+  was   loose       → would-pass for "garbage paint at wrong loc"
+  now   strict      → bounded dimensions + positional containment
+
+### Strict conversions (8 drivers, 0 regressions)
+
+| Driver                           | Was                              | Now                                              | Result |
+|----------------------------------|----------------------------------|--------------------------------------------------|--------|
+| batch-os-overlays Ω1             | wire only (overlay-count)        | + red rect dims match page-norm ±15%             | ✓      |
+| v033-region-highlight Ω2         | width > 10 px                    | 30..150 × 8..40 + top-left                       | ✓      |
+| v033-multi-line-region Ω2        | height ≥ 30                      | 40..120 × ≥35 + top-left                         | ✓      |
+| v033-region-clear-on-edit Ω1     | bbox exists                      | + 30..150 × 8..40 + top-left                     | ✓      |
+| v033b-edit-during-active Ω1      | bbox exists                      | + 30..150 × 8..40 sensible                       | ✓      |
+| v033b-wrapped-line-region Ω2     | height ≥ 25                      | + height ≤ 200, width ≥ 50                       | ✓      |
+| v033b-viewport-resize-reflow Ω1  | bbox exists                      | + narrow dims sensible (w≥30, h≥15)              | ✓      |
+| v027-display-invariants Ω1       | wire only (rotate preserves)     | + pixel yellow visible after rotate              | ✗ RED  |
+| v027-display-invariants Ω2       | wire only (overlay count)        | + pixel yellow visible after dark toggle         | ✗ RED  |
+
+### Red — open bugs for next agent
+
+These two strict pixel assertions are RED.  Both reveal the same
+underlying Limn paint bug: **after `view/set` with
+`engine-params: { rotation | dark-mode }`, the existing
+annotation overlay disappears from `overlay_raster`** even though
+the wire-side `view/get :|overlays|` still reports count = 1.
+
+**Diagnostic evidence**:
+
+  Standalone display-invariants run, sequence:
+    1. engine-load mupdf test.pdf
+    2. selection-set (0.2, 0.3) → (0.6, 0.4)
+    3. key h → pdf-highlight-selection → annotation added
+       → overlay_raster has yellow rect at (240, 260, 480, 87)
+    4. key r → pdf-rotate-cw → view/set :|engine-params|
+       :|rotation| (rotation += 90, then rebuild_overlay_raster)
+       → bbox region-bbox(#FFD700) returns NIL.  Yellow GONE.
+    5. (wire side) view/get :|overlays| still returns 1 layer.
+    6. key d → pdf-toggle-dark (#G'-1 fix: now actually toggles)
+       → same disappearance pattern.
+
+**Hypothesis**:
+
+  `rebuild_overlay_raster(rw, rh)` is called from cmd_view_set's
+  trailing block when msg contains "engine-params".  It iterates
+  `focused_window_overlays()` (which reads `win->overlays`) and
+  paints each layer.  Either:
+
+  (a) `focused_window_overlays()` returns empty list after the
+      rotation / dark-mode mutation (state leak in C++?).
+  (b) The paint loop's iteration includes the layer but the
+      coord transform yields zero-area rect (similar to the
+      DV-degenerate-rect issue selection paint hit pre-#G'-3).
+  (c) The annotation's stored color got transformed/inverted
+      somewhere — region-bbox for #FFD700 finds nothing because
+      paint produced a different color.
+
+  Suggested debug:
+    - Add `fprintf(stderr, "[paint] overlay-loop entry, layers=%d",
+      focused_window_overlays().size())` in
+      rebuild_overlay_raster's overlay loop.
+    - Run a fresh standalone v027-display-invariants driver with
+      `LIMN_BIN=… driver.lisp 2>&1 | grep paint` to count overlays
+      at each rebuild.
+    - If layers = 0 at rebuild-after-rotate: state leak (look at
+      cmd_view_set rotation block — does it touch win->overlays?).
+    - If layers = 1 but bbox NIL: coord math issue (instrument the
+      page-norm × eff_w/eff_h calculation; eff_w/eff_h after
+      rotation gets axes-swapped, maybe wrongly).
+    - If layers = 1 and coords sane: color transform issue (check
+      QImage format / painter compositionMode).
+
+  Once root cause found, the fix likely sits in:
+    sioyek/pdf_viewer/limn_command.cpp
+      rebuild_overlay_raster (around lines 2700-2980)
+      cmd_view_set (around lines 660-748)
+
+### Test files containing the new strict assertions
+
+  backend/tests/e2e/batch-os-v027-display-invariants.lisp Ω1b, Ω2b
+  backend/tests/e2e/batch-os-overlays.lisp                Ω1b, Ω1c
+  backend/tests/e2e/batch-os-v033-region-highlight.lisp   Ω2 (3 sub)
+  backend/tests/e2e/batch-os-v033-multi-line-region.lisp  Ω2b–d
+  backend/tests/e2e/batch-os-v033-region-clear-on-edit.lisp Ω1 (2 sub)
+  backend/tests/e2e/batch-os-v033b-edit-during-active-region.lisp Ω1
+  backend/tests/e2e/batch-os-v033b-wrapped-line-region.lisp Ω2 (2 sub)
+  backend/tests/e2e/batch-os-v033b-viewport-resize-reflow.lisp Ω1
+
+### Phase G' final tier scoreboard
+
+  Tier         | Pass / Total
+  ─────────────┼────────────────
+  unit         |  2581 / 2581   ✓
+  qt-e2e       |     3 / 3      ✓
+  os-e2e       |   110 / 111    1 red (intentional — open bug above)
+  integration  |  1566 / 26     (unchanged from Phase F)
+
+Strict assertions added: 14 (across 8 drivers).
+Reds intentionally left for next agent: 2 (Ω1b + Ω2b, same bug).
+Bugs already fixed in this sprint: 3 (#G'-1 pdf-toggle-dark wire
+  name; #G'-3 selection paint two-path debt).
+Bugs flagged but not yet fixed: 1 (#G'-2 pdf-toggle-dark read
+  field).
