@@ -229,6 +229,27 @@ pdf-scroll-down 不讀 prefix、(c) %dispatch-key 在 mode-buffer lookup
 
 ---
 
+## B14 — `pdf-toc` dump 結構到 stdout 而非開 completing-read
+
+**症狀**：W04 按 't' 後 limn 把 TOC 結構（list of plist）`format` 印
+到 stdout，不開 interactive minibuffer。畫面上沒有 TOC、Down/Return
+沒效果，page 沒變。
+
+**例證輸出**：
+
+    (:|children| NIL :|page| 3 :|title| "7. Smart Jump ")
+    (:|children| NIL :|page| 4 :|title| "10. Synctex ")
+    ...
+
+**修法**：pdf-toc 應該把 toc entries 餵給 completing-read（或 list-
+buffer / popup widget），讓 user 選一個跳。目前的實作只 print。
+
+**Block 哪些 workflow**：W04。
+
+**處理時機**：sprint 結尾。
+
+---
+
 ## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
 
 **症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
