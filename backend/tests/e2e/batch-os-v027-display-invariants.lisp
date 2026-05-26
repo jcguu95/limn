@@ -136,13 +136,16 @@
                                                    :|x0| 0 :|y0| 0
                                                    :|x1| gw :|y1| gh))
                                       :|sha256|))))
-        ;; v0.37 fixup: was (key "+") (key "+").  xdotool's "key +"
-        ;; sends keysym `plus` which on most layouts requires Shift on
-        ;; top of `=` → C++ key event becomes spec "S-+", which
-        ;; pdf-mode-map doesn't bind (only "+" and "=" without mods).
-        ;; The zoom-in command never fires.  "=" has no shift ambiguity
-        ;; and is bound to the same PDF-ZOOM-IN by design.
-        (key "=") (key "=") (sleep 0.3)
+        ;; v0.37 fixup: was (key "+") (key "+").  `+` and `=` are
+        ;; not valid xdotool keysym names — xdotool silently drops
+        ;; the keypress and Limn never sees a key event.  The proper
+        ;; X11 keysym name for `+` is `plus` (and for `=` is `equal`);
+        ;; Qt's text() then yields the literal "+" character on the
+        ;; receiving side, which matches pdf-mode-map's "+" binding.
+        ;; Verified live in container: `xdotool key plus` → Limn logs
+        ;; `KeyPress key=+ mods=0x0` → pdf-zoom-in fires;
+        ;; `xdotool key +` → Limn logs nothing.
+        (key "plus") (key "plus") (sleep 0.3)
         (let* ((v1 (data (limn:call "view/get" :|win-id| "w1")))
                (z1 (getf v1 :|zoom|))
                (hash-after (and gw gh
