@@ -147,23 +147,31 @@
 (defun find-file (path)
   "Open the file at PATH. If a buffer for that (normalized) path
    already exists, return its buf-id without re-reading. Otherwise
-   read content, create a buffer, fire *find-file-hook*."
+   read content (or create empty buffer if file does not exist) and
+   fire *find-file-hook*.
+
+   v0.38 B8: matches Emacs semantics — for a non-existent text path,
+   open a fresh buffer with empty content + path visited, so the
+   user can type and `save-buffer` materializes the file.  Pre-v0.38
+   the call raised an error which made `C-x C-f new-file` unusable.
+   PDF paths still error when missing (no point opening a 'new PDF'
+   buffer)."
   (let* ((abs (%normalize path))
          (existing (gethash abs *by-path*)))
     (if existing
         existing
-        (progn
-          (unless (funcall *file-exists-p-fn* abs)
-            (error "limn/file: file does not exist: ~s" abs))
-          (let* ((kind  (file-type abs))
-                 (id    (%fresh-id))
-                 (raw   (if (eq kind :pdf)
-                            nil
-                            (funcall *read-file-fn* abs)))
-                 (content (if (eq kind :pdf)
-                              ""
-                              (%decode-file-content raw abs id))))
-            (when (eq kind :pdf)
+        (let* ((file-exists-p (funcall *file-exists-p-fn* abs))
+               (kind  (file-type abs)))
+          (when (and (not file-exists-p) (eq kind :pdf))
+            (error "limn/file: PDF file does not exist: ~s" abs))
+          (let* ((id    (%fresh-id))
+                 (raw   (when (and file-exists-p (not (eq kind :pdf)))
+                          (funcall *read-file-fn* abs)))
+                 (content (cond
+                            ((eq kind :pdf) "")
+                            ((not file-exists-p) "")          ; new file: empty
+                            (t (%decode-file-content raw abs id)))))
+            (when (and file-exists-p (eq kind :pdf))
               (handler-case (funcall *engine-load-fn* abs id)
                 (error () nil)))
             (funcall *buffer-set-content-fn* id content)

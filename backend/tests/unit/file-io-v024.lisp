@@ -462,3 +462,32 @@
                (assert-equal "Rev" got-content "bytes decoded → \"Rev\"")))
         (when (and coding-pkg saved-name)
           (rename-package "LIMN/CODING-HIDDEN-FOR-TEST-2" saved-name))))))
+
+;;; ═════════════════════════════════════════════════════════════════════
+;;; v0.38 B8: find-file should open empty buffer for non-existent path
+;;; (Emacs convention).  Pre-v0.38 it errored.
+;;; ═════════════════════════════════════════════════════════════════════
+
+(deftest v038-b8-find-file-nonexistent-text-path-opens-empty-buffer
+  "find-file on a non-existent .txt should return a buffer-id (not error)."
+  (with-file-env ()
+    (let* ((err-marker (gensym))
+           (bid (handler-case
+                    (limn/file:find-file "/tmp/v038-b8-new.txt")
+                  (error () err-marker))))
+      (assert-true (not (eq bid err-marker))
+                   "find-file on missing .txt should not signal an error")
+      (when (not (eq bid err-marker))
+        (assert-equal "/tmp/v038-b8-new.txt"
+                      (limn/file:visited-file-name bid)
+                      "visited-file-name = the requested path")
+        (assert-equal nil (limn/file:buffer-modified-p bid)
+                      "new buffer should not yet be modified")))))
+
+(deftest v038-b8-find-file-nonexistent-pdf-still-errors
+  "find-file on a non-existent .pdf SHOULD still error (no 'new PDF' semantic)."
+  (with-file-env ()
+    (let ((errored-p nil))
+      (handler-case (limn/file:find-file "/tmp/v038-b8-new.pdf")
+        (error () (setf errored-p t)))
+      (assert-true errored-p "PDF path should still error when missing"))))
