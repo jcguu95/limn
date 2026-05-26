@@ -44,11 +44,14 @@
               :|end|   (list :|page| p :|x| 0.6 :|y| y1))
   (sleep 0.2))
 
+(defun %ann-dir ()
+  (format nil "~a/.limn/annotations/"
+          (or (sb-posix:getenv "HOME") "/root")))
+
 (defun nuke-sidecars ()
-  (let ((dir (merge-pathnames ".limn/annotations/"
-                              (or (sb-posix:getenv "HOME") "/root/"))))
+  (let ((dir (%ann-dir)))
     (when (probe-file dir)
-      (dolist (f (ignore-errors (directory (merge-pathnames "*.lisp" dir))))
+      (dolist (f (ignore-errors (directory (concatenate 'string dir "*.lisp"))))
         (ignore-errors (delete-file f))))))
 
 (format t "~%── W12 sidecar manual destruction ──~%")
@@ -83,11 +86,13 @@
            (and (numberp n) (>= n 3))
            (format nil "overlays=~a" n)))
 
-  ;; Find + delete sidecar files (external action)
-  (let* ((dir (merge-pathnames ".limn/annotations/"
-                                (or (sb-posix:getenv "HOME") "/root/")))
+  ;; Find + delete sidecar files (external action).
+  ;; v0.38 B16 trace: do NOT use merge-pathnames with bare "/root" — Common
+  ;; Lisp parses it as a filename root component, giving
+  ;; #P"/.limn/annotations/root" (wrong!).  String concat is unambiguous.
+  (let* ((dir (%ann-dir))
          (files (and (probe-file dir)
-                     (ignore-errors (directory (merge-pathnames "*.lisp" dir))))))
+                     (ignore-errors (directory (concatenate 'string dir "*.lisp"))))))
     (format t "  sidecar files before nuke: ~a~%" (length files))
     (dolist (f files) (ignore-errors (delete-file f)))
     (format t "  deleted ~a sidecar files~%" (length files))

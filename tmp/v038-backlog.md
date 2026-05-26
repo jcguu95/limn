@@ -285,7 +285,38 @@ register 包裝。
 
 ---
 
-## B16 — `pdf-highlight-selection` 沒實際寫 sidecar (path 解析空)
+## B16 — **FALSE ALARM** — sidecar 持久化 OK，W12 driver path 解析錯
+
+**Trace 結果 (v0.38)**: 寫了 tmp/b16-trace.lisp 詳細 trace 整條 save 路徑：
+
+```
+%effective-sidecar-path → /root/.limn/annotations/<content-hash>.lisp
+save returned: T
+ls /root/.limn/annotations/  →  該檔存在含 annotations
+```
+
+Sidecar **是真的寫到 disk**。
+
+**W12 driver 的 path bug**:
+
+```lisp
+(merge-pathnames ".limn/annotations/" "/root")
+  → #P"/.limn/annotations/root"   ← Common Lisp 解析錯
+```
+
+Common Lisp 看 "/root" 為 root-pathname，把 ".limn/annotations/" merge 進去
+反而把 root 接到後面。W12 找的是 `/.limn/annotations/root` 這個不存在的
+路徑，所以「sidecar 0 files」是 driver 錯覺，不是 Limn 缺陷。
+
+**修法**: W12 driver 改用 `(format nil "~a/.limn/annotations/" HOME)` + 
+字串 concat，不要用 merge-pathnames。
+
+**結果**: W12 從 3/5 → **5/5 PASS**。
+
+**Implication for W08**: W08 的「5 highlights 持久化」其實是**真的 sidecar 持久化**，
+不是 in-memory 假相。W12 揭發的不是 sidecar bug，是 W12 driver bug。
+
+---
 
 **症狀**：W12 跑 3 個 highlight 然後找 `/root/.limn/annotations/*.lisp`
 完全沒有檔。但 `buffer/close + bridge/engine-load 同 path` 後 overlays
