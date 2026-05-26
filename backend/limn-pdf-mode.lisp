@@ -975,6 +975,30 @@
         (limn/pdf-mode:pdf-annotations-delete-at-point
          path page off-x off-y)))))
 
+;;; v0.39 W13 — copy current PDF selection text onto the kill-ring.
+;;; Emacs convention: M-w `copy-region-as-kill`.  PDF read-only buffers
+;;; can't `kill`, only copy, so this is the only kill-family command
+;;; in pdf-mode.  Subsequent C-y / `yank` in any text-mode buffer pulls
+;;; the head of *kill-ring* and inserts at point — cross-engine paste.
+(limn/pdf-mode::%defcmd pdf-copy-region-as-kill nil
+  (lambda ()
+    (let* ((r (limn/pdf-mode::%limn-call "view/selection-get"
+                                          :|win-id| "w1"))
+           (d (limn/pdf-mode::%response-data r))
+           (txt (and d (getf d :|text|))))
+      (when (and txt (stringp txt) (plusp (length txt)))
+        (let ((kpkg (find-package '#:limn/kill)))
+          (when kpkg
+            (let ((kn (find-symbol "KILL-NEW" kpkg)))
+              (when (and kn (fboundp kn))
+                (funcall (symbol-function kn) txt)))))
+        ;; Echo confirmation so the user knows the copy landed (and
+        ;; the e2e log carries evidence). v0.37 echo helper.
+        (handler-case
+            (limn/pdf-mode::%limn-call "message/echo"
+                                        :|text| "Copied selection")
+          (error () nil))))))
+
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §D TOC
 ;;; ═════════════════════════════════════════════════════════════════════
@@ -1484,6 +1508,9 @@
       ;; annotation
       (%def km "h"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
+      ;; v0.39 W13 — M-w copies the current PDF selection text onto
+      ;; the kill-ring so a follow-up C-y in any text buffer pastes it.
+      (%def km "M-w"      (intern "PDF-COPY-REGION-AS-KILL" :cl-user))
       ;; TOC
       (%def km "t"        (intern "PDF-TOC" :cl-user))
       ;; v0.37 Phase D: file + session ops
@@ -1527,7 +1554,9 @@
                                 ("?"   pdf-isearch-backward)
                                 ("o"   find-file)
                                 ("q"   pdf-close)
-                                (":"   execute-command)))
+                                (":"   execute-command)
+                                ;; v0.39 W13
+                                ("M-w" pdf-copy-region-as-kill)))
                 (let* ((spec (first entry))
                        (cmd (second entry))
                        (parts

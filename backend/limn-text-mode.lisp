@@ -148,6 +148,78 @@
       (when buf
         (limn/text::%limn-call "buffer/save" :|buffer-id| buf)))))
 
+;;; v0.39 W17 — set-mark-command pins POS=cursor in the focused buffer.
+;;; Emacs C-SPC; the inverse half of kill-region.  Stores into
+;;; limn/mark, which kill-region reads via limn/mark:mark on the same
+;;; buf-id.  Idempotent — pressing C-SPC twice overwrites.
+(limn/cmd:defcommand set-mark-command (:interactive nil)
+  (lambda ()
+    (let* ((buf  (limn/text::%focused-text-buffer))
+           (cur  (and buf (limn/text::%cursor buf)))
+           (mpkg (find-package '#:limn/mark))
+           (sm   (and mpkg (find-symbol "SET-MARK" mpkg))))
+      (when (and buf (integerp cur) sm (fboundp sm))
+        (funcall (symbol-function sm) cur buf)
+        ;; Echo so the user sees the mark landed.
+        (ignore-errors
+          (limn/text::%limn-call "message/echo" :|text| "Mark set"))))))
+
+;;; v0.39 W17 — kill-region deletes [mark, point) and pushes the text
+;;; onto *kill-ring*.  Symmetric: deletion via buffer/delete + read
+;;; via buffer/text (substring locally — the wire returns full text
+;;; for text-engine buffers).  No-op when mark unset or empty range.
+(limn/cmd:defcommand kill-region (:interactive nil)
+  (lambda ()
+    (let* ((buf  (limn/text::%focused-text-buffer))
+           (cur  (and buf (limn/text::%cursor buf)))
+           (mpkg (find-package '#:limn/mark))
+           (mf   (and mpkg (find-symbol "MARK" mpkg)))
+           (mk   (and buf mf (fboundp mf)
+                      (funcall (symbol-function mf) buf))))
+      (when (and buf (integerp cur) (integerp mk))
+        (let ((from (min mk cur))
+              (to   (max mk cur)))
+          (when (< from to)
+            ;; Read full buffer text, slice the range.
+            (let* ((tr  (limn/text::%limn-call "buffer/text"
+                                                :|buffer-id| buf))
+                   (td  (limn/text::%response-data tr))
+                   (all (and td (getf td :|text|)))
+                   (txt (and (stringp all)
+                              (<= to (length all))
+                              (subseq all from to))))
+              (when (and txt (plusp (length txt)))
+                (let* ((kpkg (find-package '#:limn/kill))
+                       (kn   (and kpkg (find-symbol "KILL-NEW" kpkg))))
+                  (when (and kn (fboundp kn))
+                    (funcall (symbol-function kn) txt)))))
+            ;; Delete the range.  buffer/delete uses [from, to) codepoints.
+            (limn/text::%limn-call "buffer/delete"
+                                    :|buffer-id| buf
+                                    :|from| from :|to| to)))))))
+
+;;; v0.39 W13 / W17 — yank inserts the head of limn/kill:*kill-ring* at
+;;; point. Cross-engine: M-w in pdf-mode pushes a string onto the ring,
+;;; C-y in text-mode pulls it back out into a buffer.  We bypass
+;;; limn/kill:yank's vtable (*buffer-insert-fn* etc.) because text-mode
+;;; already knows the focused buffer-id via *current-text-buffer* and
+;;; can call buffer/insert directly — same shape as self-insert-command.
+(limn/cmd:defcommand yank (:interactive nil)
+  (lambda ()
+    (let* ((buf  (limn/text::%focused-text-buffer))
+           (kpkg (find-package '#:limn/kill))
+           (ring-sym (and kpkg (find-symbol "*KILL-RING*" kpkg)))
+           (text (and ring-sym (boundp ring-sym)
+                       (car (symbol-value ring-sym)))))
+      (when (and buf (stringp text) (plusp (length text)))
+        (limn/text::%limn-call "buffer/insert"
+                                :|buffer-id| buf :|text| text)
+        ;; Mark *last-command* so a follow-up M-y can yank-pop.
+        (let* ((cpkg (find-package '#:limn/cmd))
+               (lc   (and cpkg (find-symbol "*LAST-COMMAND*" cpkg))))
+          (when (and lc (boundp lc))
+            (set lc 'yank)))))))
+
 ;;; v0.36 — TAB / C-j commands. Delegate to limn/indent; bind *current-buffer*
 ;;; (and limn/local's parallel slot) to the focused text buffer so the
 ;;; module's vtable picks up the right buf-id.
@@ -253,6 +325,9 @@
         (c-find  (intern "FIND-FILE"                :cl-user))
         (c-tab   (intern "INDENT-FOR-TAB-COMMAND"   :cl-user))
         (c-nl    (intern "NEWLINE-AND-INDENT"       :cl-user))
+        (c-yank  (intern "YANK"                     :cl-user))   ; v0.39 W13
+        (c-mark  (intern "SET-MARK-COMMAND"         :cl-user))   ; v0.39 W17
+        (c-kill  (intern "KILL-REGION"              :cl-user))   ; v0.39 W17
         (sym-tm  (intern "TEXT-MODE"                :cl-user)))
 
     ;; Ensure fundamental-mode exists (limn.lisp bootstrap normally
@@ -280,11 +355,26 @@
       (%def-cmd km "<right>" c-fwd)
       (%def-cmd km "<home>"  c-bol)
       (%def-cmd km "<end>"   c-eol)
+      ;; v0.39 W17 — Emacs C-a / C-e mirror their <home>/<end> twins.
+      ;; W17 driver hits C-e to extend mark→eol before C-w; without
+      ;; these the cursor stayed at 0, kill-region grabbed zero chars.
+      (%def-cmd km "C-a"     c-bol)
+      (%def-cmd km "C-e"     c-eol)
       (%def-cmd km "C-x C-s" c-save)
       (%def-cmd km "C-x C-f" c-find)
       ;; v0.36: TAB → indent-for-tab-command, C-j → newline-and-indent.
       (%def-cmd km "TAB"     c-tab)
       (%def-cmd km "C-j"     c-nl)
+      ;; v0.39 W13 / W17 — C-y yanks head of *kill-ring* at point.
+      ;; The kill side is whoever called limn/kill:kill-new (pdf-mode's
+      ;; M-w binding, future text-mode C-w kill-region, init.lisp user
+      ;; bindings, ...).
+      (%def-cmd km "C-y"     c-yank)
+      ;; v0.39 W17 — set-mark / kill-region.  C-SPC pins the mark;
+      ;; C-w deletes [mark, point) into *kill-ring* (then a follow-up
+      ;; C-y in another buffer yanks it back).
+      (%def-cmd km "C-SPC"   c-mark)
+      (%def-cmd km "C-w"     c-kill)
 
       ;; Register the mode.
       (let ((fund (find-symbol "FUNDAMENTAL-MODE" :limn/runtime)))
