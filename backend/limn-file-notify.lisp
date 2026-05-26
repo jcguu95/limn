@@ -149,10 +149,34 @@
             (and (plusp (length line)) line))))
     (error () nil)))
 
+;;; v0.39 B17 — readiness handshake.
+;;;
+;;; Pre-v0.39, file-notify-add-watch returned the moment the inotifywait
+;;; (or fswatch) subprocess had been *spawned* — but the helper had not
+;;; yet executed inotify_add_watch(2) on the kernel side.  W30's driver
+;;; (typical user pattern: enable auto-revert → external write → wait)
+;;; consistently lost the very first event because the write happened
+;;; in that ~50ms gap before the kernel watch was installed.
+;;;
+;;; Fix: emit one synchronous wait on a per-spawn semaphore that the
+;;; stderr reader signals when it sees "Watches established." from
+;;; inotifywait (or "<ready>" sentinel for fswatch, which doesn't
+;;; print a banner — we use a marker file round-trip instead).  The
+;;; spawn returns only after the kernel watch is live.
+
+(defvar *helper-ready-timeout* 3.0
+  "Max seconds to wait for the helper subprocess to report 'kernel
+   watch is live' before giving up and returning anyway.  Tests can
+   shorten this; production users almost never hit the timeout
+   (inotifywait reports ready in ~10-50ms on a warm system).")
+
 (defun %spawn-real-helper (kind)
   "Spawn the real OS helper. Returns the limn/process handle.
    The helper writes one event per line to stdout. Resolves the binary
-   via %which so NixOS / non-FHS systems work."
+   via %which so NixOS / non-FHS systems work.
+
+   v0.39 B17: blocks until the helper reports its kernel watches are
+   live — see *helper-ready-timeout* docstring."
   (let ((mk (and (find-package '#:limn/process)
                  (symbol-function (find-symbol "MAKE-PROCESS"
                                                 '#:limn/process)))))
@@ -160,41 +184,82 @@
       (error "limn/file-notify: limn/process not loaded; cannot spawn helper"))
     (ecase kind
       (:inotify
-       (let ((bin    (or (%which "inotifywait")
-                         (error "limn/file-notify: inotifywait not on PATH")))
-             (stdbuf (%which "stdbuf")))
-         ;; inotifywait fully-buffers stdout when piped; wrap with stdbuf -oL
-         ;; so events flush per-line. Falls back to no-stdbuf on systems
-         ;; without it (macOS Homebrew gstdbuf, BSD etc.).
+       (let* ((bin    (or (%which "inotifywait")
+                          (error "limn/file-notify: inotifywait not on PATH")))
+              (stdbuf (%which "stdbuf"))
+              ;; v0.39 B17 — semaphore signalled by stderr reader on the
+              ;; "Watches established." banner.  inotifywait prints both
+              ;; "Setting up watches.\n" and "Watches established.\n" to
+              ;; STDERR (not stdout) before it starts emitting events,
+              ;; so we don't need to disturb the stdout event format —
+              ;; just remove --quiet (which suppressed the stderr banner
+              ;; too) and read stderr separately.
+              (ready  (sb-thread:make-semaphore :count 0)))
          (let ((cmd (if stdbuf
-                        (list stdbuf "-oL" bin)
+                        (list stdbuf "-oL" "-eL" bin)
                         (list bin))))
-           (funcall mk
-                    :command (append cmd
-                                      '("--monitor" "--recursive"
-                                        "--event" "modify"
-                                        "--event" "create"
-                                        "--event" "delete"
-                                        "--event" "move"
-                                        "--event" "attrib"
-                                        "--format" "%e %w%f"
-                                        "--quiet"
-                                        "/tmp"))
-                    :stdout (lambda (proc chunk)
-                              (declare (ignore proc))
-                              (%dispatch-chunk chunk))))))
+           (let ((proc
+                   (funcall mk
+                            :command (append cmd
+                                              '("--monitor" "--recursive"
+                                                "--event" "modify"
+                                                "--event" "create"
+                                                "--event" "delete"
+                                                "--event" "move"
+                                                "--event" "attrib"
+                                                "--format" "%e %w%f"
+                                                "/tmp"))
+                            :stdout (lambda (proc chunk)
+                                      (declare (ignore proc))
+                                      (%dispatch-chunk chunk))
+                            :stderr (lambda (proc chunk)
+                                      (declare (ignore proc))
+                                      (when (search "Watches established"
+                                                    chunk)
+                                        (sb-thread:signal-semaphore ready))))))
+             ;; Block (up to *helper-ready-timeout* s) until the helper
+             ;; has its kernel watches installed.  We swallow timeout
+             ;; silently: if the banner never arrives, the worst case
+             ;; is that we miss a few early events (same as pre-fix),
+             ;; not a deadlock.
+             (sb-thread:wait-on-semaphore ready :timeout *helper-ready-timeout*)
+             proc))))
       (:fswatch
-       (let ((bin    (or (%which "fswatch")
-                         (error "limn/file-notify: fswatch not on PATH")))
-             (stdbuf (%which "stdbuf")))
+       (let* ((bin    (or (%which "fswatch")
+                          (error "limn/file-notify: fswatch not on PATH")))
+              (stdbuf (%which "stdbuf"))
+              ;; v0.39 B17 — fswatch doesn't print a ready banner; do
+              ;; a marker-file round-trip instead.  We spawn, write a
+              ;; tiny marker into /tmp, and wait for the corresponding
+              ;; event to come back via stdout.  Once we see it, the
+              ;; kernel watch is provably live.  Falls back to a fixed
+              ;; sleep if the marker never round-trips (paranoia).
+              (marker (format nil "/tmp/.limn-fnotify-ready-~a"
+                              (sb-posix:getpid)))
+              (ready  (sb-thread:make-semaphore :count 0))
+              (saw-marker nil))
          (let ((cmd (if stdbuf
                         (list stdbuf "-oL" bin)
                         (list bin))))
-           (funcall mk
-                    :command (append cmd '("-x" "/tmp"))
-                    :stdout (lambda (proc chunk)
-                              (declare (ignore proc))
-                              (%dispatch-chunk chunk)))))))))
+           (let ((proc
+                   (funcall mk
+                            :command (append cmd '("-x" "/tmp"))
+                            :stdout (lambda (proc chunk)
+                                      (declare (ignore proc))
+                                      (when (and (not saw-marker)
+                                                 (search marker chunk))
+                                        (setf saw-marker t)
+                                        (sb-thread:signal-semaphore ready))
+                                      (%dispatch-chunk chunk)))))
+             ;; Poke the marker; first round-trip signals readiness.
+             (ignore-errors
+               (with-open-file (s marker :direction :output
+                                          :if-exists :supersede
+                                          :if-does-not-exist :create)
+                 (write-string "ready" s)))
+             (sb-thread:wait-on-semaphore ready :timeout *helper-ready-timeout*)
+             (ignore-errors (delete-file marker))
+             proc)))))))
 
 (defun %helper-alive-p ()
   "True if the current *helper-proc* is a real, still-running process."
