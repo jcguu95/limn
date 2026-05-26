@@ -294,7 +294,6 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
         ev.insert("frame-id",   "f1");
         ev.insert("buffer-id",  tid);
         ev.insert("engine",     "text");
-        ev.insert("path",       path);
         ev.insert("page-count", 0);
         bridge->push_event("buffer-opened", ev);
         return;
@@ -2458,18 +2457,8 @@ void LimnCommand::cmd_test_inject_key(const QString& id, const QJsonObject& msg)
     QJsonObject ev = pick_keys(msg, {"frame-id", "key"});
     // `mods` must be an array (possibly empty), never null.
     QJsonValue mv = msg.value("mods");
-    QJsonArray mods_arr = mv.isArray() ? mv.toArray() : QJsonArray{};
-    ev.insert("mods", mods_arr);
-    // Mirror the real Qt key path (see limn_input.cpp): when the minibuffer
-    // is open, route through minibuffer_handle_key first.  RET → submit,
-    // ESC → cancel, printable → input.  Only fall through to the raw "key"
-    // event when the minibuffer didn't consume.  Without this, test drivers
-    // that inject RET to drive the minibuffer never see minibuffer-submit.
-    const QString key = msg.value("key").toString();
-    if (minibuffer_handle_key(key, mods_arr)) {
-        bridge->send_ok(id);
-        return;
-    }
+    if (mv.isArray()) ev.insert("mods", mv.toArray());
+    else              ev.insert("mods", QJsonArray{});
     bridge->push_event("key", ev);
     bridge->send_ok(id);
 }
