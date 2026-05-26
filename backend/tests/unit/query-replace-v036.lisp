@@ -535,3 +535,29 @@
         ;; the new buffer (≤ new length). For RED we just assert it's <= len.
         (assert-true (<= (mbuf-qr-point b) (mbuf-qr-len b))
                      "point within buffer after save-excursion")))))
+
+;;; ═════════════════════════════════════════════════════════════════════
+;;; v0.38 B15: defcommand registration for M-x discoverability
+;;; ═════════════════════════════════════════════════════════════════════
+
+(deftest v038-b15-query-replace-symbol-in-cl-user
+  "After loading limn-query-replace, cl-user::query-replace should exist."
+  (let ((sym (find-symbol "QUERY-REPLACE" :cl-user)))
+    (assert-true sym "QUERY-REPLACE interned in :cl-user")))
+
+(deftest v038-b15-query-replace-regexp-symbol-in-cl-user
+  (let ((sym (find-symbol "QUERY-REPLACE-REGEXP" :cl-user)))
+    (assert-true sym "QUERY-REPLACE-REGEXP interned in :cl-user")))
+
+(deftest v038-b15-query-replace-in-command-registry
+  "M-x execute-command should find query-replace via limn/cmd:find-command."
+  (let ((sym (find-symbol "QUERY-REPLACE" :cl-user)))
+    (when sym
+      (assert-true (limn/cmd:find-command sym)
+                   "query-replace registered as defcommand"))))
+
+(deftest v038-b15-query-replace-regexp-in-command-registry
+  (let ((sym (find-symbol "QUERY-REPLACE-REGEXP" :cl-user)))
+    (when sym
+      (assert-true (limn/cmd:find-command sym)
+                   "query-replace-regexp registered as defcommand"))))

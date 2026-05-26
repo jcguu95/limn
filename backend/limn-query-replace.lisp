@@ -368,3 +368,29 @@
             (set (car pair) (cdr pair))))))
     (setf *wire-vtable-installed* t))
   t)
+
+;;; ── v0.38 B15: defcommand registration for M-x discovery ──────────────
+;;; The actual `defcommand` register calls live in limn-default-config.lisp
+;;; (which depends on us) so they survive limn/cmd:clear-commands cycles
+;;; that unit tests do for isolation.  Here we only expose the wrappers.
+
+(defun %qr-interactive ()
+  "Prompt user for FROM/TO then run query-replace."
+  (let* ((rd (find-symbol "READ-FROM-MINIBUFFER" '#:limn/completion))
+         (from (and rd (fboundp rd) (funcall (symbol-function rd) "Query replace: ")))
+         (to   (and rd (fboundp rd)
+                    (funcall (symbol-function rd)
+                             (format nil "Replace ~s with: " from)))))
+    (when (and from to (plusp (length from)))
+      (query-replace from to))))
+
+(defun %qrr-interactive ()
+  "Prompt user for FROM/TO then run query-replace-regexp."
+  (let* ((rd (find-symbol "READ-FROM-MINIBUFFER" '#:limn/completion))
+         (from (and rd (fboundp rd) (funcall (symbol-function rd) "Query replace regexp: ")))
+         (to   (and rd (fboundp rd)
+                    (funcall (symbol-function rd)
+                             (format nil "Replace regexp ~s with: " from)))))
+    (when (and from to (plusp (length from)))
+      (query-replace-regexp from to))))
+
