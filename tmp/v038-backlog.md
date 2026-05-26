@@ -124,6 +124,63 @@ reload-init-file 成功（log 印 `;; reload-init-file: ...`，無 ERRORED），
 
 ---
 
+## B8 — `limn/file:find-file` 拒絕不存在的路徑
+
+**症狀**：dogfood spec W20 「C-x C-f 一個還沒存在的路徑、打內容、
+存」對應的 `limn/file:find-file` 卻 `(error "limn/file: file does
+not exist: ~s")`。Emacs 慣例是：找不到的 path 自動開 new buffer
+（modeline 顯示 "(New file)"）。
+
+**位置**：`backend/limn-file.lisp:155`：
+
+    (unless (funcall *file-exists-p-fn* abs)
+      (error "limn/file: file does not exist: ~s" abs))
+
+**Block 哪些 workflow**：W14 + W20 直接撞（"新檔" 場景）。其他「開
+既有檔」workflow 不撞。
+
+**處理時機**：sprint 結尾 batch；workaround：先 shell `touch` 再
+find-file。已套用於 W20。
+
+---
+
+## B9 — `limn/file` 的 buffer registry 跟 wire `buffer/list` 互不相通
+
+**症狀**：W20 A.2 ── `(limn/file:find-file path)` 回 `limn-file-buf-1`
+buffer-id，但 wire `buffer/list` 回空 list (paths=NIL)。兩個 buffer
+namespace 各自獨立。
+
+**影響**：(a) M-x switch-to-buffer 看不到 find-file 開的檔；(b) wire
+的 buffer-opened event 也不會 fire；(c) sidecar hook 不會跑。對「find-
+file」這個 user-facing action 來說是嚴重 design split。
+
+**Block 哪些 workflow**：W14, W17 (跨檔 kill/yank), 任何用到 buffer/list
+看「我打開了什麼」的 workflow。
+
+**處理時機**：是 design issue，需要規格決議才修。sprint 結尾 surface。
+
+---
+
+## B10 — `xdotool type STRING` 沒觸發 self-insert (text-mode)
+
+**症狀**：W20 Phase B 用 `xdotool type "hello"` 對一個 limn/file
+開的 .txt buffer 送 5 個字元 — limn C++ 應該收到 5 個 KeyPress，
+text-mode 應該 self-insert "hello" 進 buffer，save-buffer 後 disk 內
+容應該是 "hello"。實際 disk 內容是空 string。
+
+**可能原因**（跟 W22 B7 同源？）：
+- text-mode 沒在這個 buffer 上 activate（limn/file:find-file 不裝 mode？）
+- self-insert 沒綁，或綁了但 dispatch 不上
+- buffer 不是 focused window 的 buffer（xdotool 送到某個 dummy buffer）
+
+**Block 哪些 workflow**：W14 (打 TODO), W16 (CJK 編輯), W17 (kill/yank),
+W19 (query-replace 替換的字), W18 同。**很多文字編輯 workflow 都會撞**。
+
+**處理時機**：撞到 W14 / W16 再決定。如果是 limn/file 不 activate 
+mode 的問題，那可能跟 B9 同根。
+
+---
+
 ## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
 
 **症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
