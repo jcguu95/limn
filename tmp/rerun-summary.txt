@@ -1,11 +1,11 @@
-v0.38 rerun verification — 2026-05-26T23:21:26Z
-git: 870910562367
+v0.38 rerun verification — 2026-05-26T23:42:58Z
+git: df6ffc1499fc
 
 W01  ... ── W01 result: 4 / 4 pass ──
 W02  ... ── W02 result: 5 / 5 pass ──
 W03  ... ── W03 result: 3 / 3 pass ──
-W04  ... 
-W05  ... 
+W04  ... ── W04 result: 3 / 3 pass ──
+W05  ... ── W05 result: 5 / 5 pass ──
 W06  ... ── W06 result: 5 / 5 pass ──
 W07  ... ── W07 result: 4 / 4 pass ──
 W08  ... ── W08 result: 2 / 2 pass ──
@@ -30,7 +30,7 @@ W26  ... ── W26 result: 3 / 3 pass ──
 W27  ... ── W27 result: 5 / 5 pass ──
 W28  ... ── W28 result: 3 / 3 pass ──
 W29  ... ── W29 result: 4 / 4 pass ──
-W30  ... ── W30 result: 2 / 3 pass ──
+W30  ... ── W30 result: 3 / 3 pass ──
 
 === TALLY ==
 

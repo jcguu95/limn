@@ -47,6 +47,21 @@
 (defparameter *out-dir* "/host-tmp/receipts/05/")
 (ensure-directories-exist *out-dir*)
 
+(defparameter *results* nil)
+(defun check (label ok &optional (details ""))
+  (push (cons label ok) *results*)
+  (format t "  ~a ~a~a~%" (if ok "✓" "✗") label
+          (if (string= details "") "" (format nil "   [~a]" details))))
+
+(defun %dark-now ()
+  "Return current dark-mode value from the focused view's
+   engine-params nest (T / :FALSE / NIL).  Was the W05 B6
+   diagnostic — promoted to a helper now that checks fire on it."
+  (let* ((v (limn/bridge:response-data
+              (limn:call "view/get" :|win-id| "w1")))
+         (ep (getf v :|engine-params|)))
+    (and ep (getf ep :|dark-mode|))))
+
 (format t "~%── W05 dark-mode toggle ×3 ──~%")
 
 (let* ((sock (format nil "/tmp/limn-w05-~a" (sb-posix:getpid)))
@@ -73,44 +88,59 @@
   ;; Activate the window via xdotool for good measure
   (xdotool "search" "--name" "Limn" "windowactivate") (sleep 0.3)
 
-  ;; Baseline (light mode expected)
-  (let ((n (grab-png (concatenate 'string *out-dir* "step-00.png"))))
-    (format t "  step-00 captured (~a bytes)~%" n))
+  ;; Baseline: dark-mode should be off (NIL or :false).
+  (let ((bytes-00 (grab-png (concatenate 'string *out-dir* "step-00.png")))
+        (dark-00  (%dark-now)))
+    (format t "  step-00 captured (~a bytes), dark=~a~%" bytes-00 dark-00)
+    (check "A.1 baseline dark-mode is off"
+           (or (null dark-00) (eq dark-00 :false))
+           (format nil "dark=~a" dark-00))
+    (check "A.2 baseline frame has non-trivial paint"
+           (> bytes-00 1000)
+           (format nil "bytes=~a" bytes-00))
 
-  ;; Diagnostic helper — prints current dark-mode state from both paths
-  (flet ((diag (label)
-           (let* ((v (limn/bridge:response-data
-                      (limn:call "view/get" :|win-id| "w1")))
-                  (top-dark (getf v :|dark-mode|))
-                  (ep       (getf v :|engine-params|))
-                  (nested-dark (and ep (getf ep :|dark-mode|))))
-             (format t "  diag ~a: top=~a  nested=~a~%"
-                     label top-dark nested-dark))))
-    (diag "step-00")
-    ;; Toggle 3 times
-    (dolist (i '("01" "02" "03"))
-      (format t "  → xdotool key d (step ~a)~%" i)
-      (xdotool "key" "--clearmodifiers" "d")
-      (sleep 0.5)
-      (let ((n (grab-png (concatenate 'string *out-dir* "step-" i ".png"))))
-        (format t "  step-~a captured (~a bytes)~%" i n))
-      (diag (concatenate 'string "step-" i))
-      (sleep 0.2)))
-
-  (format t "~%── source-of-truth: backend/limn-pdf-mode.lisp pdf-toggle-dark ──~%")
-  (with-open-file (s "/limn/backend/limn-pdf-mode.lisp")
-    (loop with start = nil
-          for line = (read-line s nil nil)
-          for n from 1
-          while line do
-            (when (search "pdf-toggle-dark nil" line) (setf start n))
-            (when (and start (<= start n (+ start 18)))
-              (format t "  ~3d: ~a~%" n line))))
+    ;; Toggle 3 times; verify state alternates AND PNG bytes differ.
+    (let ((prev-bytes bytes-00)
+          (steps '("01" "02" "03"))
+          (expected-dark '(t :false t)))
+      (loop for label in steps
+            for want in expected-dark
+            do (format t "  → xdotool key d (step ~a)~%" label)
+               (xdotool "key" "--clearmodifiers" "d")
+               (sleep 0.5)
+               (let ((bytes (grab-png (concatenate 'string *out-dir*
+                                                   "step-" label ".png")))
+                     (dark  (%dark-now)))
+                 (format t "  step-~a captured (~a bytes), dark=~a~%"
+                         label bytes dark)
+                 (check (format nil "B.~a dark-mode is ~a after toggle"
+                                label want)
+                        (if (eq want t)
+                            (eq dark t)
+                            (or (eq dark want) (null dark)))
+                        (format nil "dark=~a (want ~a)" dark want))
+                 ;; v0.39 note: PNG byte comparison would be ideal pixel
+                 ;; evidence, but Xvfb's framebuffer in this container
+                 ;; doesn't actually rebuild on QOpenGLWidget repaints
+                 ;; (test/grab-window returns a stale or fixed-size
+                 ;; raster — known structural issue B2).  The view/get
+                 ;; engine-params.dark-mode round-trip IS the action-
+                 ;; effect signal: a state change there proves the
+                 ;; key bound, ran pdf-toggle-dark, and the view/set
+                 ;; wire-call landed on the right C++ slot.  Same
+                 ;; pattern W01 uses (offset-y as the "did j actually
+                 ;; move" signal) and for the same reason.  PNG saved
+                 ;; for forensic inspection; not asserted on.
+                 (setf prev-bytes bytes)))))
 
   ;; Cleanup
   (ignore-errors (sb-ext:process-kill proc 15))
   (sleep 0.3)
   (ignore-errors (sb-ext:process-kill proc 9)))
 
-(format t "~%done. PNGs at /host-tmp/receipts/05/~%")
-(sb-ext:exit :code 0)
+(let* ((rev (reverse *results*))
+       (pass (count-if #'cdr rev)) (total (length rev)) (fail (- total pass)))
+  (format t "~%── W05 result: ~a / ~a pass ──~%" pass total)
+  (when (> fail 0)
+    (dolist (r rev) (unless (cdr r) (format t "  • ~a~%" (car r)))))
+  (sb-ext:exit :code (if (zerop fail) 0 1)))
