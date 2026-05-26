@@ -269,6 +269,27 @@ register 包裝。
 
 ---
 
+## B16 — `pdf-highlight-selection` 沒實際寫 sidecar (path 解析空)
+
+**症狀**：W12 跑 3 個 highlight 然後找 `/root/.limn/annotations/*.lisp`
+完全沒有檔。但 `buffer/close + bridge/engine-load 同 path` 後 overlays
+仍是 3（C++ 端記憶體保留），所以看起來「持久化」但其實沒寫 disk。
+
+**根因**：`%add-annotation` 走 `pdf-annotations-save path all`，但
+test-mode 下 `%current-pdf-path` 解析靠 `*buffer-id-to-path*` cache，
+而那個 cache 由 `buffer-opened` event 填。test-mode 下不知道有沒有
+fire / 或 fire 帶 NIL path。
+
+**驗證方式**：要做「kill process → start new limn → 同 path engine-load
+→ overlay 還在嗎」才是真持久化。本次 in-process close+reopen 不夠。
+
+**Block 哪些 workflow**：W08 的「持久化」claim 其實是 in-memory 假相。
+W11/W12 真持久化測試也撞。
+
+**處理時機**：sprint 結尾；要從 buffer-opened event 把 path 傳對。
+
+---
+
 ## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
 
 **症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
