@@ -1,0 +1,50 @@
+; compilation finished in 0:00:00.030
+; compiling file "/limn/backend/limn-file-notify.lisp" (written 26 MAY 2026 11:43:09 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-file-notify-tmpG6VFGMYP.fasl
+; compilation finished in 0:00:00.028
+; compiling file "/limn/backend/limn-auto-revert.lisp" (written 26 MAY 2026 11:43:09 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-auto-revert-tmp4QIPRMOF.fasl
+; compilation finished in 0:00:00.017
+; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
+; compilation finished in 0:00:00.027
+; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
+; compilation finished in 0:00:00.032
+; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
+; compilation finished in 0:00:00.005
+; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 02:41:29 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
+; compilation finished in 0:00:00.030
+
+; file: /limn/backend/limn-pdf-mode.lisp
+; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
+;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+; in: DEFUN LIMN/PDF-MODE::%CURRENT-PDF-PATH
+;     (GETHASH BID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+; 
+; compilation unit finished
+;   Undefined variable:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+;   caught 2 WARNING conditions
+;   printed 6 notes
+
+── W17 跨檔 kill/yank ──
+  ✓ A.1 open both files   [a=limn-file-buf-1 b=limn-file-buf-2]
+  ✗ A.2 B has yanked content   [B=""]
+
+── W17 result: 1 / 2 pass ──

@@ -1,0 +1,50 @@
+; 
+; caught WARNING:
+;   undefined variable: COMMON-LISP-USER::*LIMN-PROCESS*
+
+;     (FORMAT T "   socket: ~a~%" *LIMN-SOCKET-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: COMMON-LISP-USER::*LIMN-SOCKET-PATH*
+; 
+; compilation unit finished
+;   Undefined variables:
+;     *LIMN-PROCESS* *LIMN-SOCKET-PATH*
+;   caught 3 WARNING conditions
+
+── W05 dark-mode toggle ×3 ──
+XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
+  step-00 captured (6464 bytes)
+  diag step-00: top=NIL  nested=FALSE
+  → xdotool key d (step 01)
+  step-01 captured (6464 bytes)
+  diag step-01: top=NIL  nested=T
+  → xdotool key d (step 02)
+  step-02 captured (6464 bytes)
+  diag step-02: top=NIL  nested=FALSE
+  → xdotool key d (step 03)
+  step-03 captured (6464 bytes)
+  diag step-03: top=NIL  nested=T
+
+── source-of-truth: backend/limn-pdf-mode.lisp pdf-toggle-dark ──
+  685: (limn/pdf-mode::%defcmd pdf-toggle-dark nil
+  686:   (lambda ()
+  687:     ;; v0.37 fixup: was calling "bridge/engine-params" which is NOT a
+  688:     ;; registered wire command — silently failed.  Strict pixel test
+  689:     ;; for "dark mode preserves overlay" caught it because dark mode
+  690:     ;; never actually toggled in any prior run.  Real path is
+  691:     ;; view/set with :|engine-params| nested object (see C++
+  692:     ;; cmd_view_set line ~709).
+  693:     ;;
+  694:     ;; v0.38 W05 fix (G'-2): reader was reading top-level :|dark-mode|,
+  695:     ;; but C++ collect_view_state nests it under :|engine-params|. So
+  696:     ;; cur always returned NIL → next always computed T → toggle was
+  697:     ;; one-way (off→on works once, on→off never).  Read nested path.
+  698:     (let* ((v (limn/pdf-mode::%focused-view))
+  699:            (cur (getf (getf v :|engine-params|) :|dark-mode|))
+  700:            (next (if (or (null cur) (eq cur :false)) t :false)))
+  701:       (limn/pdf-mode::%limn-call "view/set"
+  702:                                   :|win-id| "w1"
+  703:                                   :|engine-params| (list :|dark-mode| next)))))
+
+done. PNGs at /host-tmp/receipts/05/

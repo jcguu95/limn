@@ -1,0 +1,50 @@
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
+; compilation finished in 0:00:00.005
+; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 02:41:29 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
+; compilation finished in 0:00:00.031
+
+; file: /limn/backend/limn-pdf-mode.lisp
+; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
+;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+; in: DEFUN LIMN/PDF-MODE::%CURRENT-PDF-PATH
+;     (GETHASH BID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+; 
+; compilation unit finished
+;   Undefined variable:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+;   caught 2 WARNING conditions
+;   printed 6 notes
+
+── W27 init.lisp 帶語法錯誤 → reload ──
+;; loaded init: /tmp/.limn/init.lisp
+XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
+
+── Phase A: valid init reload ──
+;; reload-init-file: /tmp/.limn/init.lisp
+  ✓ A.1 valid init canary file exists with VALID_LOADED_ALPHA after M-r   [canary content: "VALID_LOADED_ALPHA"]
+
+── Phase B: write broken init + reload ──
+;; reload-init-file: /tmp/.limn/init.lisp
+;; init: /tmp/.limn/init.lisp ERRORED (resilient): READ error during LOAD:
+
+                                                     end of file on #<SB-INT:FORM-TRACKING-STREAM for "file /tmp/.limn/init.lisp" {1007886413}>
+
+                                                     (in form starting at line: 5,
+                                                     column: 0, position: 199)
+  ✓ B.1 limn responds to view/get after broken reload   [ok]
+  ✓ B.2a broken init's first form (before error) ran   [canary-half: "BROKEN_HALF_RAN"]
+  ✓ B.2b broken init's post-error form did NOT run   [canary-after: NIL (should be NIL)]
+
+── Phase B.3: j key still works ──
+  ✓ B.3 j key still scrolls/turns after broken-reload   [page=0 offset-y=0.10000000149011612d0]
+
+── W27 result: 5 / 5 pass ──

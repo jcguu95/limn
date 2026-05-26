@@ -1,0 +1,50 @@
+; compilation finished in 0:00:00.035
+; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
+; compilation finished in 0:00:00.032
+; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
+; compilation finished in 0:00:00.039
+; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
+; compilation finished in 0:00:00.007
+; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 02:41:29 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
+; compilation finished in 0:00:00.039
+
+; file: /limn/backend/limn-pdf-mode.lisp
+; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
+;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+; in: DEFUN LIMN/PDF-MODE::%CURRENT-PDF-PATH
+;     (GETHASH BID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+; 
+; compilation unit finished
+;   Undefined variable:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+;   caught 2 WARNING conditions
+;   printed 6 notes
+
+── W12 sidecar manual destruction ──
+  3 highlights → overlay count = 3
+  ✓ A.1 baseline: 3 highlights present   [overlays=3]
+  sidecar files before nuke: 0
+  deleted 0 sidecar files
+  ✗ A.2 sidecars existed before nuke   [0 files]
+  ✓ A.3 reopen after sidecar nuke does not crash   [ok]
+  ✗ A.4 after nuke + reopen, 0 highlights   [overlays=3]
+  ✓ A.5 limn process still alive (wire responds)
+
+── W12 result: 3 / 5 pass ──
+  • A.2 sidecars existed before nuke
+  • A.4 after nuke + reopen, 0 highlights

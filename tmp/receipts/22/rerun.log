@@ -1,0 +1,50 @@
+; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
+; compilation finished in 0:00:00.031
+; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
+; compilation finished in 0:00:00.005
+; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 02:41:29 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
+; compilation finished in 0:00:00.031
+
+; file: /limn/backend/limn-pdf-mode.lisp
+; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
+;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+; in: DEFUN LIMN/PDF-MODE::%CURRENT-PDF-PATH
+;     (GETHASH BID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+; 
+; compilation unit finished
+;   Undefined variable:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+;   caught 2 WARNING conditions
+;   printed 6 notes
+
+── W22 keybind + hot-reload ──
+;; loaded init: /tmp/.limn/init.lisp
+XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
+  ✓ setup: engine-load tutorial.pdf   [ok]
+
+── Phase A: empty init, press 'v' (expect no canary) ──
+  ✓ A.1 'v' produces no canary (no binding yet)   [canary: NIL (should be NIL)]
+
+── Phase B: rewrite init.lisp + reload + press 'v' ──
+;; reload-init-file: /tmp/.limn/init.lisp
+  ✗ B.1 after reload, 'v' triggers canary write   [canary: NIL]
+
+── Phase C: pre-existing 'n' binding still works ──
+  ✓ C.1 'n' still advances page (reload didn't break it)   [page=1]
+
+── W22 result: 3 / 4 pass ──
+FAILURES:
+  • B.1 after reload, 'v' triggers canary write
