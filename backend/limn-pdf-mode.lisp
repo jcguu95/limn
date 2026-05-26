@@ -687,11 +687,17 @@
 
 (limn/pdf-mode::%defcmd pdf-rotate-cw nil
   (lambda ()
+    ;; v0.38 B1 fix: was calling "bridge/engine-params" which is NOT a
+    ;; registered wire cmd (same bug as v0.37 G'-1 toggle-dark, never
+    ;; fixed for rotate-cw).  Real path is view/set with :|engine-params|
+    ;; nested object.  Also: rotation lives at engine-params/rotation,
+    ;; not top-level (same G'-2 issue as dark-mode reader).
     (let* ((v (limn/pdf-mode::%focused-view))
-           (rot (or (getf v :|rotation|) 0))
+           (rot (or (getf (getf v :|engine-params|) :|rotation|) 0))
            (next (mod (+ rot 90) 360)))
-      (limn/pdf-mode::%limn-call "bridge/engine-params"
-                                  :|win-id| "w1" :|rotation| next))))
+      (limn/pdf-mode::%limn-call "view/set"
+                                  :|win-id| "w1"
+                                  :|engine-params| (list :|rotation| next)))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §B search commands

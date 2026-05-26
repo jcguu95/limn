@@ -316,15 +316,16 @@
                             (offset-y 0.0) (offset-x 0.0)
                             (buffer-id "b1") (dark-mode :false)
                             (rotation 0))
-  ;; v0.38 W05: dark-mode nests under :|engine-params| matching C++
-  ;; collect_view_state shape.  Pre-v0.38 mock placed it at top level
-  ;; which silently masked the G'-2 reader bug.
+  ;; v0.38 W05/B1: dark-mode + rotation both nest under :|engine-params|
+  ;; matching C++ collect_view_state shape (ep.insert dark-mode/rotation).
+  ;; Pre-v0.38 mock placed both at top level which silently masked the
+  ;; G'-2 (dark-mode reader) and B1 (rotation reader) bugs.
   (cons "view/get"
         (%make-ok (list :|page| page :|zoom| zoom :|page-count| page-count
                          :|offset-x| offset-x :|offset-y| offset-y
                          :|buffer-id| buffer-id
-                         :|engine-params| (list :|dark-mode| dark-mode)
-                         :|rotation| rotation))))
+                         :|engine-params| (list :|dark-mode| dark-mode
+                                                  :|rotation|  rotation)))))
 
 (deftest v027-a-next-page-sends-view-set
   "pdf-next-page 應該透過 view/set 把 page +1。"
@@ -463,8 +464,35 @@
           (assert-equal t (getf ep :|dark-mode|)
                         "dark-mode=:false 該 toggle 成 T"))))))
 
+;; v0.38 B1: strengthen rotate-cw assertions — pre-fix accepted either
+;; "bridge/engine-params" (non-existent wire cmd) OR "view/set" so the
+;; test couldn't catch the wrong-wire bug.  Pin to view/set + nested.
+(deftest v038-b1-rotate-cw-sends-view-set-engine-params-rotation
+  "pdf-rotate-cw should send view/set with :|engine-params| :|rotation| 90 when starting at 0."
+  (with-mock-bridge (:responses (list (%fake-view-get :rotation 0)))
+    (let ((r (%call-cmd "PDF-ROTATE-CW")))
+      (unless (eq r :missing)
+        (let* ((args (%mock-call-of "view/set"))
+               (ep   (and args (getf args :|engine-params|))))
+          (assert-true args "view/set wire call should fire")
+          (assert-true ep "view/set should carry :|engine-params|")
+          (when ep
+            (assert-equal 90 (getf ep :|rotation|)
+                          "rotation 0 → 90 after one cw step")))))))
+
+(deftest v038-b1-rotate-cw-wraps-270-to-0
+  "pdf-rotate-cw should mod 360: 270 → 0."
+  (with-mock-bridge (:responses (list (%fake-view-get :rotation 270)))
+    (let ((r (%call-cmd "PDF-ROTATE-CW")))
+      (unless (eq r :missing)
+        (let* ((args (%mock-call-of "view/set"))
+               (ep   (and args (getf args :|engine-params|))))
+          (when ep
+            (assert-equal 0 (getf ep :|rotation|)
+                          "rotation 270 + 90 = 360 mod 360 = 0")))))))
+
 (deftest v027-a-rotate-cw-adds-90
-  "pdf-rotate-cw 應該把 rotation += 90 (mod 360)。"
+  "pdf-rotate-cw 應該把 rotation += 90 (mod 360) (kept for back-compat — does NOT pin wire shape)."
   (with-mock-bridge (:responses (list (%fake-view-get :rotation 0)))
     (let ((r (%call-cmd "PDF-ROTATE-CW")))
       (unless (eq r :missing)
