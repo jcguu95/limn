@@ -250,6 +250,25 @@ buffer / popup widget），讓 user 選一個跳。目前的實作只 print。
 
 ---
 
+## B15 — `limn/cmd` defcommand registry 缺編輯指令
+
+**症狀**：W28 listing 42 commands — 全部是 PDF / file / 基本 motion
+(forward-char, backward-char, self-insert-command, ...) — 但完全沒
+有：query-replace, query-replace-regexp, kill-region, yank, mark,
+exchange-point-and-mark, set-fill-column, occur, isearch, etc.
+
+v0.34 query-replace 應該 ship 了，但**沒有以 defcommand 註冊**。
+所以 M-x 看不到它。
+
+**Block 哪些 workflow**：W18 / W19 (都需要 query-replace)。
+也讓 W28（M-x completion）的「query-replace 出現在 completion」變
+不可能。
+
+**處理時機**：sprint 結尾；需把 v0.34/v0.36 的編輯指令加 defcommand
+register 包裝。
+
+---
+
 ## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
 
 **症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
