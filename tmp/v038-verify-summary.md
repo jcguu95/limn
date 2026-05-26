@@ -2,13 +2,13 @@
 
 ## 量化結果
 
-| Status | Pre-fix | After 9 fix | After 11 fix | Δ vs Pre |
-|--------|---------|-------------|--------------|----------|
-| PASS workflows    | 10      | 12          | **16**       | **+6**   |
-| PARTIAL workflows | 15      | 16          | 14           | -1       |
-| FAIL workflows    | 5       | 2           | **0**\*      | **-5**   |
-| Assertion totals  | 61/95   | 71/95       | **76/95**    | **+15**  |
-| Pass rate         | 64.2%   | 74.7%       | **80.0%**    | **+16pp**|
+| Status | Pre-fix | 9 fix | 11 fix | 16 fix | 17 fix | Δ vs Pre |
+|--------|---------|-------|--------|--------|--------|----------|
+| PASS    | 10      | 12    | 16     | 21     | **22** | **+12**  |
+| PARTIAL | 15      | 16    | 14     |  9     |  8     | -7       |
+| FAIL    | 5       | 2     | 0      |  0     |  0     | -5       |
+| Assert  | 61/95   | 71/95 | 76/95  | 85/95  | **86/95** | **+25** |
+| Rate    | 64.2%   | 74.7% | 80.0%  | 89.5%  | **90.5%** | **+26pp** |
 
 \* W08 在 batch run 偶發 B6 stack-smashing crash (overlays=NIL)，
 single-run retry 即 2/2 PASS。視為 flake，不計 FAIL。
