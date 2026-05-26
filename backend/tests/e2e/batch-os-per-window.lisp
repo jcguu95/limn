@@ -428,7 +428,23 @@
 ;;; proven deterministic in this driver — see Ω3a/b/c above.
 
         (format t "~%── Ω13: selection per-window (state + raster) ──~%")
-        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
+        ;; v0.37 fixup: reset DV-affecting state on both windows before
+        ;; the selection-paint check.  Earlier Ω steps (Ω12 specifically)
+        ;; leave w2 at rotation=90 and the live DV at non-default state;
+        ;; in headless Docker Desktop the win-focus rotation-resync isn't
+        ;; reliable, leaving DV's coord transform in a half-rotated state
+        ;; that returns degenerate rects for selection paint.  Forcing
+        ;; both windows back to rotation=0 + zoom=1 + page=0 + offset 0
+        ;; gives the selection-paint code a clean DV to work with.
+        (limn:call "view/set" :|win-id| "w1"
+                    :|engine-params| (list :|rotation| 0))
+        (limn:call "view/set" :|win-id| w2
+                    :|engine-params| (list :|rotation| 0))
+        (limn:call "view/set" :|win-id| "w1"
+                    :|zoom| 1.0 :|page| 0 :|offset-y| 0.0)
+        (limn:call "view/set" :|win-id| w2
+                    :|zoom| 1.0 :|page| 0 :|offset-y| 0.0)
+        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.3)
         (clear-ov "w1") (clear-ov w2) (sleep 0.2)
         (limn:call "view/selection-clear" :|win-id| "w1")
         (limn:call "view/selection-clear" :|win-id| w2)
