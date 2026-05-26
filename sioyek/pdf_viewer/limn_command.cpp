@@ -400,7 +400,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     data.insert("supports", supports);
     bridge->send_ok(id, data);
 
-    emit_buffer_opened(buffer_id, doc, "mupdf", path);
+    emit_buffer_opened(buffer_id, doc, "mupdf");
 }
 
 // ─── bridge/win-list ──────────────────────────────────────────────────
@@ -1557,7 +1557,7 @@ void LimnCommand::cmd_buffer_open(const QString& id, const QJsonObject& msg) {
     main_widget->opengl_widget()->set_dark_mode(false);
 
     bridge->send_ok(id, build_open_data(buffer_id, doc));
-    emit_buffer_opened(buffer_id, doc, engine, path);
+    emit_buffer_opened(buffer_id, doc, engine);
 }
 
 // ─── buffer/close ─────────────────────────────────────────────────────
@@ -2148,12 +2148,11 @@ QJsonObject LimnCommand::collect_view_state(const QString& win_id) {
 }
 
 void LimnCommand::emit_buffer_opened(const QString& buffer_id, Document* doc,
-                                      const QString& engine, const QString& path) {
+                                      const QString& engine) {
     QJsonObject ev;
     ev.insert("frame-id",   "f1");
     ev.insert("buffer-id",  buffer_id);
     ev.insert("engine",     engine);
-    ev.insert("path",       path);
     ev.insert("page-count", doc ? doc->num_pages() : 0);
     // v0.37 Phase F: include the source path so Lisp hooks
     // (pdf-mode-on-buffer-opened, which loads sidecar annotations +
