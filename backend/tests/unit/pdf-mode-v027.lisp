@@ -2151,6 +2151,42 @@
                    :buffer-id nil :path nil :engine nil)
           "hook 收 nil 不該 crash")))))
 
+;; v0.38 B18: *pdf-default-zoom* applied on every pdf-mode buffer-opened.
+(deftest v038-b18-default-zoom-nil-skips-view-set
+  "When *pdf-default-zoom* is NIL, no view/set :|zoom| call should be made on buffer-opened."
+  (with-mock-bridge ()
+    (let* ((pkg (find-package '#:limn/pdf-mode))
+           (hook (and pkg (find-symbol "PDF-MODE-ON-BUFFER-OPENED" pkg)))
+           (zoom-var (and pkg (find-symbol "*PDF-DEFAULT-ZOOM*" pkg))))
+      (when (and hook (fboundp hook) zoom-var (boundp zoom-var))
+        (progv (list zoom-var) (list nil)
+          (funcall (symbol-function hook)
+                   :buffer-id "b1" :path "/x.pdf" :engine "mupdf")
+          (let ((vs-calls
+                  (remove-if-not
+                   (lambda (c) (and (consp c)
+                                     (equal (car c) "view/set")
+                                     (member :|zoom| (cdr c))))
+                   *mock-call-log*)))
+            (assert-true (null vs-calls)
+                         "nil *pdf-default-zoom* → no view/set :zoom call")))))))
+
+(deftest v038-b18-default-zoom-set-applies-on-buffer-opened
+  "When *pdf-default-zoom* is 1.5, buffer-opened should send view/set :|zoom| 1.5."
+  (with-mock-bridge ()
+    (let* ((pkg (find-package '#:limn/pdf-mode))
+           (hook (and pkg (find-symbol "PDF-MODE-ON-BUFFER-OPENED" pkg)))
+           (zoom-var (and pkg (find-symbol "*PDF-DEFAULT-ZOOM*" pkg))))
+      (when (and hook (fboundp hook) zoom-var (boundp zoom-var))
+        (progv (list zoom-var) (list 1.5)
+          (funcall (symbol-function hook)
+                   :buffer-id "b1" :path "/x.pdf" :engine "mupdf")
+          (let ((args (%mock-call-of "view/set")))
+            (assert-true args "view/set should have fired")
+            (when args
+              (assert-equal 1.5 (getf args :|zoom|)
+                            "view/set :zoom == *pdf-default-zoom*"))))))))
+
 (deftest v027-m-goto-beyond-page-count-clamps
   "5G on a 3-page doc → 跳到最後一頁 (page=2)，不是 5（也不是 crash）。"
   (with-mock-bridge (:responses (list (%fake-view-get :page 0 :page-count 3)))

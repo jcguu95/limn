@@ -37,6 +37,7 @@
    #:*pdf-half-page-step*           ; v0.37 Phase D
    #:*pdf-zoom-in-factor*
    #:*pdf-zoom-out-factor*
+   #:*pdf-default-zoom*              ; v0.38 B18
    #:*pdf-annotation-color*
    ;; §B search state
    #:*pdf-search-state* #:make-pdf-search-state
@@ -213,6 +214,14 @@
 
 #-:limn/custom-available
 (defvar *pdf-zoom-out-factor* 0.8)
+
+;; v0.38 B18: default zoom applied to newly-opened PDF buffers.
+;; NIL means: don't override the engine's natural zoom (1.0).  Set to
+;; a number (e.g. 1.5) in user init.lisp to make every PDF open at that
+;; zoom level.
+(defvar *pdf-default-zoom* nil
+  "Override zoom applied on every pdf-mode buffer-opened.  NIL = no override.
+   Set in user init.lisp, e.g. (setf limn/pdf-mode:*pdf-default-zoom* 1.5).")
 
 #+:limn/custom-available
 (limn/custom:defcustom *pdf-annotation-color* "#FFD700"
@@ -1250,7 +1259,18 @@
     (handler-case
         (limn/pdf-mode:pdf-mode-update-modeline
          :buffer-id buffer-id :path path)
-      (error () nil))))
+      (error () nil))
+    ;; v0.38 B18: apply *pdf-default-zoom* if set in user init.lisp.
+    ;; NOTE: this defun is in cl-user package (see in-package at top of
+    ;; file), so bare *pdf-default-zoom* would resolve to cl-user's
+    ;; symbol — must qualify with limn/pdf-mode: prefix.
+    (let ((z limn/pdf-mode:*pdf-default-zoom*))
+      (when (and z (numberp z))
+        (handler-case
+            (limn/pdf-mode::%limn-call "view/set"
+                                        :|win-id| "w1"
+                                        :|zoom| z)
+          (error () nil))))))
 
 (defun limn/pdf-mode:pdf-mode-on-buffer-closed (&key buffer-id)
   "Called before a PDF buffer closes: save last-position, clear search state."
