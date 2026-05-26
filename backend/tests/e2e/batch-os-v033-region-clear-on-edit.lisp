@@ -114,7 +114,17 @@
                                        (getf pr :|w|) (getf pr :|h|)
                                        "#3366ff"))))
       (check (format nil "Ω1 — region visible before edit (bbox=~s)" bbox)
-             (not (null bbox))))
+             (not (null bbox)))
+      ;; v0.37 strict: 5 chars selected (offset 3..8 = "lo wo"
+      ;; from "hello world"), sensible bbox dims.
+      (when bbox
+        (check (format nil "Ω1 — region bbox dims sensible (30..150 × 8..40, got ~ax~a)"
+                       (getf bbox :|w|) (getf bbox :|h|))
+               (and (>= (getf bbox :|w|) 30) (<= (getf bbox :|w|) 150)
+                    (>= (getf bbox :|h|) 8)  (<= (getf bbox :|h|) 40)))
+        (check (format nil "Ω1 — region positioned top-left (x<100,y<100, got (~a,~a))"
+                       (getf bbox :|x|) (getf bbox :|y|))
+               (and (< (getf bbox :|x|) 100) (< (getf bbox :|y|) 100)))))
 
     ;; Ω2: type a char — self-insert via xdotool → keymap fires
     ;; note-command 'self-insert-command'. We also do it explicitly in

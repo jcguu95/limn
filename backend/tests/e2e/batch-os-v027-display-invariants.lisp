@@ -81,13 +81,29 @@
       (key "r") (sleep 0.3)
       (let ((after-rects
               (mapcar (lambda (o) (getf o :|rect|)) (overlays-of))))
-        (check "Ω1 — rotate 後 overlay 數量保留"
+        (check "Ω1a wire — rotate 後 overlay 數量保留"
                (= (length before-rects) (length after-rects)))
         ;; page-normalized rects 不該變
         (when (and before-rects after-rects)
-          (check (format nil "Ω1 — page-normalized rects 不變 (~a vs ~a)"
+          (check (format nil "Ω1a wire — page-normalized rects 不變 (~a vs ~a)"
                           (first before-rects) (first after-rects))
                  (equal (first before-rects) (first after-rects)))))
+      ;; v0.37 strict: was wire-only.  Add pixel check: yellow
+      ;; annotation must STILL be visible after rotate (rotation
+      ;; preserves overlay paint, just at rotated coords).  Without
+      ;; this check, a "rotation clears overlay" bug would silently
+      ;; pass — wire-side overlay count + page-norm rects are
+      ;; metadata, not pixels.
+      (let* ((g (data (limn:call "test/grab-window" :|win-id| "w1")))
+             (gw (getf g :|width|)) (gh (getf g :|height|))
+             (yb (and gw gh
+                       (data (limn:call "test/region-bbox"
+                                          :|x0| 0 :|y0| 0
+                                          :|x1| gw :|y1| gh
+                                          :|match-color| "#FFD700")))))
+        (check (format nil "Ω1b pixel — rotate 後 yellow annotation still painted (~s)" yb)
+               (and yb (getf yb :|w|) (getf yb :|h|)
+                    (> (getf yb :|w|) 0) (> (getf yb :|h|) 0))))
 
       ;; reset rotation for next steps
       (key "r") (key "r") (key "r") (sleep 0.2)

@@ -122,6 +122,14 @@
                                   "#ffcc00"))))
       (check (format nil "Ω1 — region bbox at narrow (bbox=~s)" bbox-narrow)
              (not (null bbox-narrow)))
+      ;; v0.37 strict: also bound the bbox dims so "appears as a tiny
+      ;; smudge at random coord" doesn't pass.  Narrow window is wide
+      ;; enough for at least a few line wraps.
+      (when bbox-narrow
+        (check (format nil "Ω1 — narrow bbox dims sensible (w>=30, h>=15, got ~ax~a)"
+                       (getf bbox-narrow :|w|) (getf bbox-narrow :|h|))
+               (and (>= (getf bbox-narrow :|w|) 30)
+                    (>= (getf bbox-narrow :|h|) 15))))
 
       ;; Widen the window — text widget should reflow, layout changes.
       ;; Critical: we do NOT re-push overlays here. C++ side must re-layout

@@ -99,9 +99,19 @@
       (check (format nil "Ω2a — multi-line region bbox found (~s)" bbox)
              (not (null bbox)))
       (when bbox
-        (check (format nil "Ω2b — bbox height >= 30 (3 lines, got ~A)"
+        ;; v0.37 strict: was just `>= 30`.  3-line region (offset
+        ;; 0..16 = "alpha\nbeta\ngamma") at typical font, single
+        ;; line ≈ 14-22 px → 3 lines ≈ 42-80 px (with line-spacing).
+        ;; Width >= 35 (longest line "alpha" / "gamma" ~ 5 chars × 7px).
+        (check (format nil "Ω2b — bbox height matches 3 lines (40..120 px, got ~A)"
                        (getf bbox :|h|))
-               (>= (getf bbox :|h|) 30)))))
+               (and (>= (getf bbox :|h|) 40) (<= (getf bbox :|h|) 120)))
+        (check (format nil "Ω2c — bbox width sensible (>=35 px, got ~A)"
+                       (getf bbox :|w|))
+               (>= (getf bbox :|w|) 35))
+        (check (format nil "Ω2d — bbox positioned at widget top-left (x<100,y<100, got (~a,~a))"
+                       (getf bbox :|x|) (getf bbox :|y|))
+               (and (< (getf bbox :|x|) 100) (< (getf bbox :|y|) 100))))))
 
   (format t "~%── v033-multi-line-region results ──~%")
   (if (null *failures*)
