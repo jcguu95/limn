@@ -78,6 +78,52 @@ build script 要 copy。
 
 ---
 
+## B6 — limn C++ stack smashing crash 中 dogfood session
+
+**症狀**：W22 跑到 Phase B（v 按鍵或更早）limn 突然死，stderr：
+
+    *** stack smashing detected ***: terminated
+
+死前 view/get / engine-load 都還 OK。死後 wire 連線 broken pipe。
+
+**位置**：未定。可能在 keypress 處理路徑、或 buffer focus 路徑、
+或 wire JSON 解碼。需要 gdb-attach 才能定位。
+
+**Block 哪些 workflow**：
+- W22 (keybind+reload) 直接撞到
+- 任何其他在連續操作中可能踩到的 — 不可預測，但 v0.37 OS-tier
+  跑 111 個 driver 是 0/0，所以崩潰罕見。可能 W22 的特定 sequence
+  (init.lisp + map! + 按 v) 才會 trigger
+- 暫定不 block 其他 workflow，撞到再說
+
+**處理時機**：sprint 結尾 batch（需要 debugger 才能定位，重活）。
+
+---
+
+## B7 — `(map! :mode 'pdf-mode KEY FN)` 從 init.lisp 設的綁定，
+       reload 後按 KEY 沒觸發
+
+**症狀**：W22 Phase B 寫 init.lisp 含
+`(limn/map-macro:map! :mode 'pdf-mode "v" 'my-w22-canary)`，呼
+reload-init-file 成功（log 印 `;; reload-init-file: ...`，無 ERRORED），
+但隨後 xdotool key v 沒觸發 my-w22-canary（檔案 /tmp/w22-canary 不存在）。
+
+**可能原因**：
+- pdf-mode 並未啟用在 active buffer 上（engine-load 沒 auto-activate？）
+- pdf-mode-map 是 reload 後重建的 keymap object，但 dispatch 仍指向
+  舊的 keymap 物件
+- limn/map-macro:map! :mode 路徑展開有問題（fbound 但實際沒 install）
+- 或 limn 已經 crash 了（見 B6）只是 driver 不知道
+
+**Block 哪些 workflow**：
+- W22, W23 直接撞
+- W26 (add-hook) 可能撞同個 path
+- W24 (default zoom) 用 setf 不用 map!，可能 OK
+
+**處理時機**：撞到 W23 / W26 後再決定。可能跟 B6 同源。
+
+---
+
 ## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
 
 **症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
