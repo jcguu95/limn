@@ -309,6 +309,22 @@ W11/W12 真持久化測試也撞。
 
 ---
 
+## B18 — 沒有「PDF 預設 zoom」可設
+
+**症狀**：W24 想用 init.lisp `(setf *pdf-default-zoom* 1.5)` 設 zoom，
+但 limn/pdf-mode 裡找不到這類 var。只有 `*PDF-ZOOM-IN-FACTOR*`、
+`*PDF-ZOOM-OUT-FACTOR*` 跟 `%ZOOM-SET` / `PDF-ZOOM-RESET` 等。沒
+default-zoom 設定點。
+
+**修法**：加一個 `*pdf-default-zoom*` 給 user init.lisp setf。
+engine-load 後 view/set :|zoom| 它。
+
+**Block 哪些 workflow**：W24。
+
+**處理時機**：sprint 結尾。
+
+---
+
 ## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
 
 **症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
