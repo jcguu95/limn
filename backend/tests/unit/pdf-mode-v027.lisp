@@ -1045,6 +1045,40 @@
                          (%mock-call-of "buffer/insert"))
                      "PDF-TOC 應該呼叫 buffer/toc + 開浮動 window")))))
 
+;; v0.38 B14: pdf-toc should feed flattened entries to completing-read
+;; instead of dumping the tree to stdout (W04 dogfood finding).
+(deftest v038-b14-toc-flatten-depth-first-preorder
+  "%toc-flatten walks the TOC tree in depth-first preorder, recording depth."
+  (let* ((pkg (find-package '#:limn/pdf-mode))
+         (fn (and pkg (find-symbol "%TOC-FLATTEN" pkg)))
+         (tree '((:|title| "A" :|page| 0
+                  :|children| ((:|title| "A.1" :|page| 1)
+                               (:|title| "A.2" :|page| 2)))
+                 (:|title| "B" :|page| 3))))
+    (when (and fn (fboundp fn))
+      (let ((flat (funcall (symbol-function fn) tree 0)))
+        (assert-equal 4 (length flat) "4 entries flat")
+        (assert-equal "A" (getf (first flat) :title))
+        (assert-equal 0   (getf (first flat) :depth) "A is depth 0")
+        (assert-equal "A.1" (getf (second flat) :title))
+        (assert-equal 1   (getf (second flat) :depth) "A.1 is depth 1")
+        (assert-equal "A.2" (getf (third flat) :title))
+        (assert-equal "B" (getf (fourth flat) :title))
+        (assert-equal 0   (getf (fourth flat) :depth) "B back to depth 0")))))
+
+(deftest v038-b14-toc-line-is-parseable-by-parse-toc-line-page
+  "%toc-line output should be acceptable input to parse-toc-line-page."
+  (let* ((pkg (find-package '#:limn/pdf-mode))
+         (line-fn (and pkg (find-symbol "%TOC-LINE" pkg)))
+         (parse-fn (and pkg (find-symbol "PARSE-TOC-LINE-PAGE" pkg))))
+    (when (and line-fn (fboundp line-fn)
+               parse-fn (fboundp parse-fn))
+      (let* ((entry '(:title "Chapter 1" :page 4 :depth 1))
+             (line  (funcall (symbol-function line-fn) entry))
+             (page  (funcall (symbol-function parse-fn) line)))
+        (assert-equal 4 page
+                      "%toc-line of page 4 → parse-toc-line-page returns 4")))))
+
 
 ;;; ══════════════════════════════════════════════════════════════════════
 ;;; §E. 書籤 UI

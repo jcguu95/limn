@@ -1011,19 +1011,67 @@
       ;; 1-indexed in display → 0-indexed internally
       (1- (parse-integer digits)))))
 
+;; v0.38 B14: helpers to flatten the nested TOC tree into a single list
+;; of (title page depth) tuples for completing-read.
+(defun limn/pdf-mode::%toc-flatten (items depth)
+  "Walk the TOC tree producing a flat list of (:title T :page P :depth D)
+   plists in display order (parent before its children)."
+  (let ((acc nil))
+    (dolist (it items)
+      (let ((title (getf it :|title|))
+            (page  (or (getf it :|page|) 0))
+            (kids  (getf it :|children|)))
+        (push (list :title title :page page :depth depth) acc)
+        (when (listp kids)
+          (dolist (sub (limn/pdf-mode::%toc-flatten kids (1+ depth)))
+            (push sub acc)))))
+    (nreverse acc)))
+
+(defun limn/pdf-mode::%toc-line (entry)
+  "Render one flat TOC entry as 'PAGE  INDENT TITLE  PAGE' for
+   completing-read display.  The trailing PAGE is what
+   parse-toc-line-page picks up (TITLE may itself end in digits
+   like 'Chapter 1', so we cannot rely on title-then-page parsing
+   alone — but the parse looks at the LAST run of digits, so any
+   title-internal digits are fine as long as the page comes after.
+   Leading PAGE is also displayed for quick visual scan."
+  (let* ((title (or (getf entry :title) ""))
+         (page  (or (getf entry :page) 0))
+         (depth (or (getf entry :depth) 0))
+         (display-page (1+ page))
+         (indent (with-output-to-string (s)
+                   (loop repeat (* depth 2) do (write-char #\Space s))))
+         ;; sentinel "  " separator + trailing page — parse-toc-line-page
+         ;; grabs trailing digits past any non-digit, so the title's own
+         ;; trailing digits get the prefix re-read as one number.  To
+         ;; ensure correctness we append an em-dash plus the page:
+         (suffix (format nil " — p.~a" display-page)))
+    (format nil "~a~a~a" indent title suffix)))
+
 (limn/pdf-mode::%defcmd pdf-toc nil
   (lambda ()
+    ;; v0.38 B14: open completing-read with TOC entries.  Pre-v0.38
+    ;; sent the formatted tree to a `bridge/win-float-create :|text|`
+    ;; call but that wire command ignores :|text| so the user saw
+    ;; nothing interactive.  This new impl flattens the tree, shows
+    ;; each entry "  P | Title" via completing-read, then parses out
+    ;; the page and jumps.
     (let* ((bid (limn/pdf-mode::%focused-buffer-id))
            (r (and bid (limn/pdf-mode::%limn-call "buffer/toc"
                                                     :|buffer-id| bid)))
            (d (limn/pdf-mode::%response-data r))
            (items (and d (getf d :|items|))))
       (when (listp items)
-        (let ((text (limn/pdf-mode:format-toc-tree items)))
-          (limn/pdf-mode::%limn-call
-           "bridge/win-float-create"
-           :|name| limn/pdf-mode:*pdf-toc-buffer-name*
-           :|text| text))))))
+        (let* ((flat (limn/pdf-mode::%toc-flatten items 0))
+               (lines (mapcar #'limn/pdf-mode::%toc-line flat))
+               (completing (find-symbol "COMPLETING-READ" '#:limn/completion))
+               (pick (and completing (fboundp completing)
+                          (funcall (symbol-function completing)
+                                   "TOC: " lines :require-match t))))
+          (when (and pick (stringp pick) (plusp (length pick)))
+            (let ((p (limn/pdf-mode:parse-toc-line-page pick)))
+              (when (integerp p)
+                (limn/pdf-mode::%page-set p)))))))))
 
 (limn/pdf-mode::%defcmd pdf-toc-jump-at-point nil
   (lambda (&optional line)
