@@ -638,21 +638,25 @@
            (target (limn/pdf-mode::%clamp-page (or prefix default-target) pc)))
       (limn/pdf-mode::%page-set target))))
 
-(limn/pdf-mode::%defcmd pdf-scroll-down nil
-  (lambda ()
+;; v0.38 B13: pdf-scroll-down/up honor numeric prefix-arg.
+;; `5j` should scroll 5× the base step; plain `j` scrolls 1×.
+(limn/pdf-mode::%defcmd pdf-scroll-down "p"
+  (lambda (&optional prefix)
     (let* ((v (limn/pdf-mode::%focused-view))
            (off (or (getf v :|offset-y|) 0.0))
-           (step (/ limn/pdf-mode:*pdf-scroll-step* 30.0)))
+           (n   (or prefix 1))
+           (step (* n (/ limn/pdf-mode:*pdf-scroll-step* 30.0))))
       ;; Move within page via offset-y if engine supports it; otherwise
       ;; the wire layer ignores the field.
       (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
                                   :|offset-y| (+ off step)))))
 
-(limn/pdf-mode::%defcmd pdf-scroll-up nil
-  (lambda ()
+(limn/pdf-mode::%defcmd pdf-scroll-up "p"
+  (lambda (&optional prefix)
     (let* ((v (limn/pdf-mode::%focused-view))
            (off (or (getf v :|offset-y|) 0.0))
-           (step (/ limn/pdf-mode:*pdf-scroll-step* 30.0)))
+           (n   (or prefix 1))
+           (step (* n (/ limn/pdf-mode:*pdf-scroll-step* 30.0))))
       (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
                                   :|offset-y| (max 0.0 (- off step))))))
 

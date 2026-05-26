@@ -426,6 +426,51 @@
         (when name
           (assert-equal "PDF-GOTO-PAGE" name "G → PDF-GOTO-PAGE"))))))
 
+;; v0.38 B13: numeric prefix-arg multiplies scroll step.
+(deftest v038-b13-scroll-down-prefix-multiplies-step
+  "5j should scroll 5× the base step."
+  (with-mock-bridge (:responses (list (%fake-view-get :offset-y 0.0)))
+    (let* ((cmd-pkg (find-package '#:limn/cmd))
+           (pa-var (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+      (when pa-var
+        (progv (list pa-var) (list 5)
+          (let ((r (%call-cmd "PDF-SCROLL-DOWN")))
+            (unless (eq r :missing)
+              (let ((args (%mock-call-of "view/set")))
+                (when args
+                  ;; step = 5 * (3/30) = 0.5 ; offset-y = 0 + 0.5 = 0.5
+                  (assert-equal 0.5 (float (getf args :|offset-y|))
+                                "scroll-down 5× → offset-y 0 + 5*(3/30) = 0.5"))))))))))
+
+(deftest v038-b13-scroll-down-no-prefix-default-1x
+  "Plain j (no prefix) should scroll 1× base step."
+  (with-mock-bridge (:responses (list (%fake-view-get :offset-y 0.0)))
+    (let* ((cmd-pkg (find-package '#:limn/cmd))
+           (pa-var (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+      (when pa-var
+        (progv (list pa-var) (list nil)
+          (let ((r (%call-cmd "PDF-SCROLL-DOWN")))
+            (unless (eq r :missing)
+              (let ((args (%mock-call-of "view/set")))
+                (when args
+                  ;; step = 1 * (3/30) = 0.1
+                  (assert-equal 0.1 (float (getf args :|offset-y|))
+                                "plain j → 1× step = 0.1"))))))))))
+
+(deftest v038-b13-scroll-up-prefix-multiplies-step
+  "5k starting at offset 1.0 → offset 0.5."
+  (with-mock-bridge (:responses (list (%fake-view-get :offset-y 1.0)))
+    (let* ((cmd-pkg (find-package '#:limn/cmd))
+           (pa-var (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+      (when pa-var
+        (progv (list pa-var) (list 5)
+          (let ((r (%call-cmd "PDF-SCROLL-UP")))
+            (unless (eq r :missing)
+              (let ((args (%mock-call-of "view/set")))
+                (when args
+                  (assert-equal 0.5 (float (getf args :|offset-y|))
+                                "scroll-up 5× → 1.0 - 0.5 = 0.5"))))))))))
+
 (deftest v027-a-zoom-in-multiplies-by-factor
   (with-mock-bridge (:responses (list (%fake-view-get :zoom 1.0)))
     (let ((r (%call-cmd "PDF-ZOOM-IN")))
