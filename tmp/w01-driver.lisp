@@ -110,18 +110,21 @@
                         (and (numberp off) (< off 0.05)))))
              (format nil "after gg: ~s" s-gg))))
 
-  ;; Variant: same with space key (W01 變奏)
-  (format t "~%── 變奏: 用 space 取代 j ──~%")
+  ;; Variant: same with 'l' (also bound to pdf-next-page).
+  ;; NB: SPC is reserved as Doom-style leader key (limn/keys:*leader-key*),
+  ;; so the original spec's "space×10 翻頁" 慣例不適用 — leader takes
+  ;; precedence; use 'l' which is the explicit next-page binding.
+  (format t "~%── 變奏: 用 l 取代 j ──~%")
   (safe-call "view/set" :|win-id| "w1" :|page| 0 :|offset-y| 0.0)
   (sleep 0.3)
   (let ((s0 (state)))
     (dotimes (i 10)
-      (xdotool "key" "--clearmodifiers" "space")
+      (xdotool "key" "--clearmodifiers" "l")
       (sleep 0.18))
     (let ((s10 (state)))
-      (check "B.1 space×10 also moves state"
+      (check "B.1 l×10 also moves state"
              (not (equal s0 s10))
-             (format nil "init=~s  after-10-space=~s" s0 s10))))
+             (format nil "init=~s  after-10-l=~s" s0 s10))))
 
   (let ((log (with-open-file (s "/tmp/limn-w01.log" :if-does-not-exist nil)
                (when s (let ((b (make-string (file-length s))))

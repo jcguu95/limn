@@ -1448,8 +1448,10 @@
       (%def km "p"        (intern "PDF-PREV-PAGE"   :cl-user))
       (%def km "J"        (intern "PDF-NEXT-PAGE"   :cl-user))
       (%def km "K"        (intern "PDF-PREV-PAGE"   :cl-user))
-      ;; v0.38: SPC = next-page (vim), b = prev-page (less convention)
-      (%def km "SPC"      (intern "PDF-NEXT-PAGE"   :cl-user))
+      ;; v0.38: b = prev-page (less convention).  NB: do NOT bind SPC —
+      ;; SPC is the Doom-style leader key (limn/keys:*leader-key*).
+      ;; Pre-fix W22/W23/W25 broke when pdf-mode-map's SPC binding shadowed
+      ;; *leader-keymap* dispatch.
       (%def km "b"        (intern "PDF-PREV-PAGE"   :cl-user))
       ;; v0.38 B11: vim convention — G alone → last page; NG → page N.
       ;; pdf-goto-page now defaults to last page when prefix is nil, so
@@ -1505,7 +1507,7 @@
                                 ("<down>" pdf-scroll-down)
                                 ("<up>" pdf-scroll-up)
                                 ("n" pdf-next-page) ("p" pdf-prev-page)
-                                ("SPC" pdf-next-page) ("b" pdf-prev-page)
+                                ("b" pdf-prev-page)
                                 ("J" pdf-next-page) ("K" pdf-prev-page)
                                 ("G" pdf-goto-page) ("g g" pdf-first-page)
                                 ("+" pdf-zoom-in)   ("=" pdf-zoom-in)
