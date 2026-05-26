@@ -78,6 +78,35 @@ build script 要 copy。
 
 ---
 
+## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
+
+**症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
+看到 `KeyPress key=r mods=0x8000000 obj=MainWidget`（Qt::AltModifier
+正確），但 driver SBCL 端的 `*global-keymap*` "M-r" binding 沒被呼。
+init.lisp 沒被 reload。
+
+**位置**：dispatch chain from C++ keypress event → wire → driver
+keymap lookup。可能是 mods 轉成 "M-r" 字串的步驟有 mismatch。
+
+**證據**：
+- W27 第一次跑 `xdotool key alt+r` → canary 檔沒寫入
+- 改成 `(limn/cmd:call-interactively ...)` 直接呼 → 5/5 PASS
+
+**修法**：要 trace 從 wire keypress 到 keymap lookup string。或許
+"alt"+"r" 的 keysym 字串組起來不是 "M-r"。可能在 limn-input.lisp /
+limn-keys.lisp。
+
+**Block 哪些 workflow**：
+- W22 (keybind hot-reload) — 要按 n 翻頁，n 是 pdf-mode 內 binding
+  （不是 M-r），可能 OK
+- W23 (defun + bind <SPC>m) — SPC + m，無 modifier，可能 OK
+- W28 (M-x completion) — 需要 M-x dispatch 到 execute-command，**很可能 block**
+- W29 (C-g abort) — C-g 是 control，跟 M- 不同 modifier path，**待測**
+
+**處理時機**：撞到 W28 / W29 真 block 時再修。沒就 sprint 結尾 batch。
+
+---
+
 ## B4 — macOS host osascript 不適合並行使用者
 
 **症狀**：user 同時在 macOS 上工作，會搶 focus，鍵打到別處。
