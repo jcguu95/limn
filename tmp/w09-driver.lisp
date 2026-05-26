@@ -82,20 +82,21 @@
     (check "A.1 3 highlights created"
            (= n 3) (format nil "overlays=~a" n)))
 
-  ;; Delete the middle highlight via wire (R3 nuance: no "delete-at-point"
-  ;; binding for testing; use wire helper).
-  ;; The middle highlight is overlay 2 (0-indexed: 1).
-  (let* ((all (overlays))
-         (mid (nth 1 all))
-         (mid-id (and mid (getf mid :|id|))))
-    (format t "  middle overlay id = ~a~%" mid-id)
-    (if mid-id
-        (let ((r (safe-call "view/overlay-delete" :|win-id| "w1" :|id| mid-id)))
+  ;; Delete the middle highlight via the Lisp API pdf-annotations-delete-at-point.
+  ;; No "view/overlay-delete" wire cmd exists; the user-facing path is
+  ;; %add-annotation / pdf-annotations-delete-at-point + %refresh-overlays.
+  ;; Middle rect was at y 0.30..0.35; use the mid-point of the rect as
+  ;; the (x,y) for delete-at-point.
+  (let ((path (limn/pdf-mode::%current-pdf-path)))
+    (format t "  current path = ~s~%" path)
+    (if path
+        (let ((deleted (limn/pdf-mode:pdf-annotations-delete-at-point
+                         path 0 0.4 0.32)))
           (sleep 0.3)
-          (check "A.2 delete-middle wire returned ok"
-                 (eq (car r) :ok)
-                 (if (eq (car r) :err) (format nil "err: ~a" (cdr r)) "ok")))
-        (check "A.2 could find middle overlay id" nil "no id")))
+          (check "A.2 delete-at-point returned truthy (target found)"
+                 deleted
+                 (format nil "deleted=~a" deleted)))
+        (check "A.2 path resolves" nil "no path")))
 
   (let ((n (length (overlays))))
     (check "A.3 remaining 2 after middle deletion"
