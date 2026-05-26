@@ -181,6 +181,54 @@ mode 的問題，那可能跟 B9 同根。
 
 ---
 
+## B11 — pdf-goto-page 沒綁任何 key（vim 12g 失效）
+
+**症狀**：W02 試 "12g" 期望跳到 page 12 — 沒效。digits 進 prefix-arg
+但隨後的 'g' 是 "g g" sequence 的開頭，不會 trigger pdf-goto-page。
+找了 limn-pdf-mode.lisp：`pdf-goto-page` 有 defcmd 但**沒綁任何 key**。
+
+**修法**：在 pdf-mode-map 加一個能 take 數字 prefix 然後跳頁的 binding。
+vim 慣例是 N + 'G' 跳第 N 頁；目前 G 是 last-page。可改 'g g' 帶
+prefix → goto, 或專屬 ':p' / 'gg' 邏輯。需要規格決議。
+
+**Block 哪些 workflow**：W02 直接撞。
+
+**處理時機**：sprint 結尾。
+
+---
+
+## B12 — `xdotool key G`（Shift+g）不觸發 pdf-last-page
+
+**症狀**：W02 試 `G` 期望跳 last page (page-count - 1 = 5)，page 仍
+是 0。limn log 顯示 `key=G mods=0x2000000 obj=MainWidget`（Qt::Shift
++ G 正確抵達 C++ 端），但 dispatch 不到 "G" binding。
+
+**可能原因**：keymap dispatch 在 mods=Shift 時 key string 變 "S-G"
+或 "S-g"，而 binding 是 "G"（缺 S- 前綴）。需查 keymap normalize。
+
+**Block 哪些 workflow**：W02 / 任何需要 Shift+letter 的 binding。
+注意 v0.37 W05 的 'd' (lowercase, 無 shift) 是 OK 的。
+
+**處理時機**：sprint 結尾；可能也牽涉 B5（M-r 是 Alt+r 同類）。
+
+---
+
+## B13 — 數字 prefix-arg 沒倍乘 pdf-scroll-down (5j ≠ 5×j)
+
+**症狀**：W02 試 `5j`：digit 5 accumulate 後 j 應 scroll 5×，但實際
+只 scroll 1× (offset-y += 0.1 而非 0.5)。
+
+**可能原因**：(a) prefix accumulator 已被前一個 sequence 清空、(b)
+pdf-scroll-down 不讀 prefix、(c) %dispatch-key 在 mode-buffer lookup
+時把 prefix-arg 吞掉。v0.37 G' A10 fix 明確改成「mode-binding lookup
+先，數字才當 prefix」— 可能那個 fix 有 side-effect。
+
+**Block 哪些 workflow**：W02 + 任何用 prefix 的 vim 動作。
+
+**處理時機**：sprint 結尾；跟 B11 同源（prefix-arg 流程）。
+
+---
+
 ## B5 — `xdotool key alt+r` 沒觸發 M-r → reload-init-file
 
 **症狀**：W27 走測試發現，從 docker xdotool 送 `alt+r`，limn C++ 端
