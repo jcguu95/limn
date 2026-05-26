@@ -22,9 +22,12 @@
   (let ((bid (limn/file:find-file *path*)))
     (check "A.1 file open" bid)
     (let ((found-qrr (find-symbol "QUERY-REPLACE-REGEXP" :cl-user)))
+      ;; v0.38: defcommand 把實作存進 command struct，不會 fbind 到
+      ;; cl-user symbol。"interned" 是 defcommand 副效果但 sym 本身
+      ;; 沒被 fset。檢查 symbol 存在即可，不需 fboundp。
       (check "A.2 query-replace-regexp 在 :cl-user package"
-             (and found-qrr (fboundp found-qrr))
-             (format nil "sym=~a fboundp=~a" found-qrr (and found-qrr (fboundp found-qrr))))
+             (and found-qrr t)
+             (format nil "sym=~a" found-qrr))
       (check "A.3 query-replace-regexp 在 defcommand registry"
              (and found-qrr (limn/cmd:find-command found-qrr))
              (format nil "in-registry=~a" (and found-qrr (limn/cmd:find-command found-qrr))))))
