@@ -84,6 +84,12 @@
            (text (cond ((null ch) nil)
                        ;; SPC → actual space character.
                        ((string= ch "SPC") " ")
+                       ;; v0.39 B10 — RET / TAB are named keys but they
+                       ;; insert literal whitespace characters. Without
+                       ;; this, xdotool's `type "line1\nline2"` lost the
+                       ;; newlines (RET key fell on the floor — W14).
+                       ((string= ch "RET") (string #\newline))
+                       ((string= ch "TAB") (string #\tab))
                        ;; Any other single-char key spec is the literal char.
                        ((= 1 (length ch)) ch)
                        (t nil))))
@@ -264,6 +270,11 @@
       (dolist (ch (%printable-ascii-chars))
         (%def-cmd km ch c-self))
       (%def-cmd km "SPC"     c-self)            ; space char
+      ;; v0.39 B10 — RET inserts a newline (Emacs convention is
+      ;; `newline-and-indent` in some modes; for fundamental text we
+      ;; treat it as self-insert with the literal #\newline).  Without
+      ;; this, xdotool's multi-line `type` lost line breaks.
+      (%def-cmd km "RET"     c-self)
       (%def-cmd km "BS"      c-bksp)
       (%def-cmd km "<left>"  c-bwd)
       (%def-cmd km "<right>" c-fwd)

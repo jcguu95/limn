@@ -1,3 +1,4 @@
+
 ; --> LET UNWIND-PROTECT FLET #:CLEANUP-FUN-0 BLOCK WHEN IF CLOSE 
 ; ==>
 ;   S
@@ -42,9 +43,8 @@ XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
 ── Phase C: save-buffer via direct call ──
   ✓ C.1 save-buffer returns without error   [ok]
   ✓ D.1 file exists on disk   [/tmp/w20-fresh-1.txt]
-  ✗ D.2 file content is 'hello' (xdotool type landed in buffer)   [content: ""]
+  ✓ D.2 file content is 'hello' (xdotool type landed in buffer)   [content: "hello"]
 
-── W20 result: 4 / 6 pass ──
+── W20 result: 5 / 6 pass ──
 FAILURES:
   • A.2 buffer list contains the new path
-  • D.2 file content is 'hello' (xdotool type landed in buffer)

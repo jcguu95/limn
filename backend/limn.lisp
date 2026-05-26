@@ -458,6 +458,11 @@
     ;; downstream callers (update-region-overlay, deactivate-mark, etc.)
     ;; see actual cursor positions.
     (%install-cursor-vtables)
+    ;; v0.39 B10 — install limn/file text-engine bridge.  Pre-v0.39 the
+    ;; text path of find-file never told C++ anything, so xdotool keys
+    ;; routed to the wrong widget and self-insert vanished.  See
+    ;; backend/limn-file.lisp commentary above the hook defvars.
+    (%install-file-text-bridge)
     ;; Spawn a background pump thread so events the user generates in the
     ;; Qt window fire their bindings while the REPL is at the prompt. Tests
     ;; with mock clients can call STOP-PUMP-THREAD if they don't want it.
@@ -486,6 +491,68 @@
                 (s (find-symbol "*BUFFER-SET-CURSOR-FN*" p)))
             (when (and g (boundp g)) (set g get-fn))
             (when (and s (boundp s)) (set s set-fn))))))))
+
+(defun %install-file-text-bridge ()
+  "Bind limn/file:*open-text-engine-fn* / *fetch-wire-content-fn* to
+   real-wire implementations.  Decoupled from limn/file so unit tests
+   keep their no-op defaults (which the with-file-env fixture
+   re-binds).  Idempotent — safe to call from every limn:start.
+
+   *open-text-engine-fn* path content
+     1. bridge/engine-load engine=text → fresh C++ text_buffers tid
+     2. if PATH names an existing file: buffer/load-file to populate
+        the GapBuffer and register buffer_paths[tid] for buffer/save
+     3. cache tid in limn/text:*current-text-buffer* (the self-insert
+        hot path uses this; the buffer-opened pump-thread event also
+        sets it, but synchronously now avoids a race window)
+     4. activate text-mode on w1's mode-buffer so %dispatch-key
+        routes printable keys into self-insert-command
+     5. return tid (or NIL on any wire failure — caller stays usable
+        as a pure-Lisp fbuf even without C++)"
+  (let ((open-fn
+          (lambda (path content)
+            (declare (ignore content))
+            (ignore-errors
+              (let* ((r (call "bridge/engine-load"
+                              :|win-id| "w1" :|engine| "text"
+                              :|path| (or path "")))
+                     (ok (eq (getf r :|ok|) t))
+                     (tid (and ok (getf (getf r :|data|) :|buffer-id|))))
+                (when (and tid (stringp path) (plusp (length path)))
+                  ;; buffer/load-file fails on non-existent files; B8
+                  ;; lets find-file proceed for new files, so swallow.
+                  (ignore-errors
+                    (call "buffer/load-file"
+                          :|buffer-id| tid :|path| path)))
+                (when tid
+                  ;; Sync limn/text cache up-front; the async
+                  ;; event/buffer-opened hook does the same but the
+                  ;; pump thread may not have processed it yet by the
+                  ;; time the driver fires its first xdotool key.
+                  (let* ((tpkg (find-package '#:limn/text))
+                         (sym  (and tpkg (find-symbol "*CURRENT-TEXT-BUFFER*"
+                                                       tpkg))))
+                    (when (and sym (boundp sym))
+                      (set sym tid)))
+                  ;; Activate text-mode on w1's mode-buffer.
+                  (let* ((rt (find-package '#:limn/runtime))
+                         (mb-fn (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW"
+                                                      rt))))
+                    (when (and mb-fn (fboundp mb-fn))
+                      (let ((mb (funcall (symbol-function mb-fn) "w1"))
+                            (sym-tm (find-symbol "TEXT-MODE" :cl-user)))
+                        (when (and mb sym-tm)
+                          (ignore-errors
+                            (limn/mode:activate mb sym-tm)))))))
+                tid))))
+        (fetch-fn
+          (lambda (wire-id)
+            (ignore-errors
+              (let* ((r (call "buffer/text" :|buffer-id| wire-id))
+                     (ok (eq (getf r :|ok|) t)))
+                (and ok (getf (getf r :|data|) :|text|)))))))
+    (setf limn/file:*open-text-engine-fn*   open-fn
+          limn/file:*fetch-wire-content-fn* fetch-fn)))
 
 (defun stop ()
   (when *session*

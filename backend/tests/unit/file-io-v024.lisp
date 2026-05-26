@@ -491,3 +491,139 @@
       (handler-case (limn/file:find-file "/tmp/v038-b8-new.pdf")
         (error () (setf errored-p t)))
       (assert-true errored-p "PDF path should still error when missing"))))
+
+;;; ── v0.39 B10 — text-engine bridge ────────────────────────────────────────
+;;;
+;;; Pre-v0.39, opening a .txt via find-file created the Lisp-side fbuf but
+;;; never told C++ a text buffer existed; xdotool keys routed to the wrong
+;;; widget and self-insert vanished.  The fix wires two vtables:
+;;;   *open-text-engine-fn*    — called for non-PDF kinds, returns wire-id
+;;;   *fetch-wire-content-fn*  — called by save-buffer to pull live content
+;;;
+;;; Real impls live in limn:%install-file-text-bridge (limn.lisp); tests
+;;; rebind them via with-file-env analogs to mock the wire.
+
+(deftest v039-b10-find-file-text-calls-open-text-engine-fn
+  "find-file 對 .txt 應該呼叫 *open-text-engine-fn*，並把回傳 wire-id
+   存進 fbuf（exposed via limn/file:buffer-wire-id）。"
+  (with-file-env ()
+    (fio-write "/tmp/v039-b10-call.txt" "hello")
+    (let* ((called-with-path nil)
+           (called-with-content nil)
+           (limn/file:*open-text-engine-fn*
+             (lambda (path content)
+               (setf called-with-path path
+                     called-with-content content)
+               "t1")))
+      (let ((bid (limn/file:find-file "/tmp/v039-b10-call.txt")))
+        (assert-equal "/tmp/v039-b10-call.txt" called-with-path
+                      "hook receives the absolute path")
+        (assert-equal "hello" called-with-content
+                      "hook receives the decoded content")
+        (assert-equal "t1" (limn/file:buffer-wire-id bid)
+                      "wire-id stored on fbuf")))))
+
+(deftest v039-b10-find-file-pdf-does-not-call-text-engine-hook
+  "PDF kind 不應該呼叫 *open-text-engine-fn* — text-engine 只是 text 路徑。"
+  (with-file-env ()
+    ;; PDF needs to exist for find-file not to error (B8 contract).
+    (fio-write "/tmp/v039-b10.pdf" "")
+    (let* ((called-p nil)
+           (limn/file:*open-text-engine-fn*
+             (lambda (path content)
+               (declare (ignore path content))
+               (setf called-p t)
+               "t-should-not-happen")))
+      (limn/file:find-file "/tmp/v039-b10.pdf")
+      (assert-false called-p
+                    "PDF path must not invoke the text-engine hook"))))
+
+(deftest v039-b10-find-file-new-text-file-still-calls-hook
+  "新檔（不存在的 .txt）也應該呼叫 hook — engine-load 創 buffer，
+   buffer/load-file 雖然會 fail 但 hook 還是要拿到 wire-id 回傳。"
+  (with-file-env ()
+    (let* ((called-p nil)
+           (limn/file:*open-text-engine-fn*
+             (lambda (path content)
+               (declare (ignore path))
+               (setf called-p t)
+               (assert-equal "" content "new file → empty initial content")
+               "t-new")))
+      (let ((bid (limn/file:find-file "/tmp/v039-b10-newfile.txt")))
+        (assert-true called-p "hook fired for new file")
+        (assert-equal "t-new" (limn/file:buffer-wire-id bid)
+                      "wire-id stored even for new file")))))
+
+(deftest v039-b10-find-file-hook-error-does-not-break-find-file
+  "*open-text-engine-fn* 拋錯不該中斷 find-file — fbuf 仍應建立，
+   wire-id 退化為 NIL（fallback to cached content path)。"
+  (with-file-env ()
+    (fio-write "/tmp/v039-b10-err.txt" "data")
+    (let ((limn/file:*open-text-engine-fn*
+            (lambda (path content)
+              (declare (ignore path content))
+              (error "wire down"))))
+      (let ((bid (limn/file:find-file "/tmp/v039-b10-err.txt")))
+        (assert-true bid "find-file returns a bid despite hook error")
+        (assert-equal nil (limn/file:buffer-wire-id bid)
+                      "wire-id NIL on hook failure")))))
+
+(deftest v039-b10-save-buffer-fetches-wire-content-when-wire-id-present
+  "fbuf 有 wire-id → save-buffer 應該先呼 *fetch-wire-content-fn*，
+   用 live content 蓋過 fbuf-content（user 已經 type 過東西）後再寫盤。"
+  (with-file-env ()
+    (fio-write "/tmp/v039-b10-save.txt" "open-time")
+    (let* ((written nil)
+           (limn/file:*open-text-engine-fn*
+             (lambda (path content)
+               (declare (ignore path content))
+               "t-save"))
+           (limn/file:*fetch-wire-content-fn*
+             (lambda (wire-id)
+               (assert-equal "t-save" wire-id "fetch called with stored wire-id")
+               "edited-by-user"))
+           (limn/file:*write-file-fn*
+             (lambda (path content)
+               (declare (ignore path))
+               (setf written content))))
+      (let ((bid (limn/file:find-file "/tmp/v039-b10-save.txt")))
+        (limn/file:save-buffer bid)
+        (assert-equal "edited-by-user" written
+                      "save-buffer writes live wire content, not cached snapshot")))))
+
+(deftest v039-b10-save-buffer-falls-back-when-fetch-returns-nil
+  "*fetch-wire-content-fn* 回 NIL 時，save-buffer 應該退回 fbuf-content
+   — 保留 v0.38 unit-tier 行為（沒 wire 時走 Lisp cache）。"
+  (with-file-env ()
+    (fio-write "/tmp/v039-b10-fallback.txt" "cached")
+    (let* ((written nil)
+           (limn/file:*open-text-engine-fn*
+             (lambda (path content)
+               (declare (ignore path content))
+               "t-fb"))
+           (limn/file:*fetch-wire-content-fn*
+             (lambda (wire-id) (declare (ignore wire-id)) nil))
+           (limn/file:*write-file-fn*
+             (lambda (path content)
+               (declare (ignore path))
+               (setf written content))))
+      (let ((bid (limn/file:find-file "/tmp/v039-b10-fallback.txt")))
+        (limn/file:save-buffer bid)
+        (assert-equal "cached" written
+                      "fallback to cached fbuf-content when wire returns NIL")))))
+
+(deftest v039-b10-save-buffer-skips-fetch-for-pdf
+  "PDF fbuf 沒有 wire-id，save-buffer 不該呼 *fetch-wire-content-fn*。
+   防止 PDF save 誤觸 text-engine 拉內容。"
+  (with-file-env ()
+    (fio-write "/tmp/v039-b10-pdf.pdf" "pdfdata")
+    (let* ((fetch-called nil)
+           (limn/file:*fetch-wire-content-fn*
+             (lambda (wire-id)
+               (declare (ignore wire-id))
+               (setf fetch-called t)
+               "wrong")))
+      (let ((bid (limn/file:find-file "/tmp/v039-b10-pdf.pdf")))
+        (limn/file:save-buffer bid)
+        (assert-false fetch-called
+                      "fetch hook must not fire for PDF buffers")))))
