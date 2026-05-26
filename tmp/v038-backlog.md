@@ -168,16 +168,32 @@ file」這個 user-facing action 來說是嚴重 design split。
 text-mode 應該 self-insert "hello" 進 buffer，save-buffer 後 disk 內
 容應該是 "hello"。實際 disk 內容是空 string。
 
-**可能原因**（跟 W22 B7 同源？）：
-- text-mode 沒在這個 buffer 上 activate（limn/file:find-file 不裝 mode？）
-- self-insert 沒綁，或綁了但 dispatch 不上
-- buffer 不是 focused window 的 buffer（xdotool 送到某個 dummy buffer）
+**Drill-down (v0.38 修復階段中)**：
+- text-mode-map 已綁所有 printable ASCII → self-insert-command（驗證過）
+- self-insert-command 透過 *current-text-buffer*（由 buffer-opened event
+  寫進去）+ *last-key* 來 insert（程式碼正確）
+- 但 W14/15/17 driver 從 SBCL 直接呼 `(limn/file:find-file "/x.txt")`，
+  創造的 buffer **只存在 limn/file 的 hash 表內**，沒有透過 wire 通知
+  C++「這個 buffer 在 window 上顯示」
 
-**Block 哪些 workflow**：W14 (打 TODO), W16 (CJK 編輯), W17 (kill/yank),
-W19 (query-replace 替換的字), W18 同。**很多文字編輯 workflow 都會撞**。
+**真正的問題**：
+- (a) Qt focused widget 還是 PDF / chrome，不是 text widget
+- (b) `view/get :|win-id| "w1"` 回的 buffer-id 是 PDF 的，不是 text buffer
+- (c) `*current-text-buffer*` cache 永遠是 NIL（buffer-opened 從 wire emit，
+  但這條路根本沒走過）
+- 結果 xdotool keystroke 送到 Qt focused widget = PDF widget
+- PDF widget 沒有 'a' 的 binding → 整個 keystroke 落空
 
-**處理時機**：撞到 W14 / W16 再決定。如果是 limn/file 不 activate 
-mode 的問題，那可能跟 B9 同根。
+**結構性 fix（規模偏大）**：
+- limn/file:find-file 該額外發 wire 把新 buffer 接到 focused window
+- 需要新 wire cmd（或 view/set 帶 :|buffer-id|）使 C++ 端 swap 到 text widget
+- 需要 C++ 在 swap 後 emit event/buffer-opened 帶 engine="text"，
+  Lisp 端的 hook 才會 cache *current-text-buffer*
+
+**Block 哪些 workflow**：W14, W15, W16, W17, W18, W19, W20 全部 text-editing。
+
+**處理時機**：deferred — v0.39 或 v0.38 結尾整批處理。動 Lisp + C++ 兩端，
+跟 v0.38 的 quick-fix 規模不同。
 
 ---
 
@@ -288,6 +304,15 @@ W11/W12 真持久化測試也撞。
 
 **處理時機**：sprint 結尾；要從 buffer-opened event 把 path 傳對。
 
+**v0.38 drill-down**：
+- `%add-annotation` 走 `pdf-annotations-save path all`，save-fn 是 `%atomic-write-file`
+- save 用 handler-case 把 error 吞掉只 message/echo
+- ensure-directories-exist + write-string 該都 OK
+- 真正可能：`%current-pdf-path` 回 NIL → fallback "/tmp/unknown.pdf"，但 W12 在
+  `/root/.limn/annotations/` 完全沒檔。所以可能 save 拋了 error 被吞，或更早地
+  %add-annotation 整個 path 沒進入（rects 空 / sel 為 nil）
+- 需要在 docker 內加 trace print 才能定位
+
 ---
 
 ## B17 — `auto-revert-mode` 啟用後，外部檔案 change 不會觸發 revert
@@ -306,6 +331,24 @@ W11/W12 真持久化測試也撞。
 所以 unit/integration tier 該有測 — 估計是 dogfood-only gap。
 
 **處理時機**：sprint 結尾；查 v0.35 file-notify integration。
+
+**v0.38 drill-down**：
+- auto-revert-mode 啟用 → %install-watch → file-notify-add-watch
+  → %ensure-helper 啟 inotifywait 子程序（docker 有 inotify-tools）
+- inotifywait stdout 走 limn/process callback → %dispatch-chunk → 找 watch callback
+  → %handle-event in auto-revert → revert
+- 但**子程序 stdout callback 需要 main event loop 來 pump**，
+  limn:pump 不 pump limn/process stdout
+- auto-revert 也有 polling fallback (tick) 但**limn/timer:dispatch-due 也沒人呼**
+- 兩個 pump 點都缺：file-notify event 不會到、timer tick 不會跑
+
+**結構性 fix**：
+- limn:pump 該加上 (limn/timer:dispatch-due) 跟 limn/process pump
+- 或 file-notify 自己起 background thread
+- 或 auto-revert 在 add-watch 時裝個 repeating timer (但 timer 也要 pump)
+
+整段「main loop 怎麼 pump 各種非同步 event source」的設計沒收尾。
+v0.38 quick fix scope 外。
 
 ---
 
