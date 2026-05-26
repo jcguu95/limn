@@ -2997,3 +2997,68 @@
                      "*limn-call-fn* bound")
         (assert-true (and now-var (boundp now-var))
                      "*now-fn* bound")))))
+
+;;; ── v0.39 W04 — pdf-toc unwraps response correctly ───────────────────
+;;;
+;;; The C++ side of buffer/toc emits the TOC items as the response data
+;;; directly (an array of plists), NOT wrapped as {items: [...]}.  Pre-
+;;; v0.39 pdf-toc tried `(getf data :items)` which on a malformed plist
+;;; (the items array iterated as a property list) either signalled
+;;; SIMPLE-TYPE-ERROR or silently returned NIL — depending on parity.
+;;; Either way `items` was nil, completing-read never opened, and `t`
+;;; in pdf-mode appeared to do nothing.  This was the actual cause of
+;;; W04 A.1 failing — the "deadlock" diagnosis from v0.38 was a
+;;; misread; there was never any contention.
+
+(deftest v039-w04-pdf-toc-uses-data-as-items-array
+  "pdf-toc should consume the response data as the items array itself
+   — verify completing-read sees a non-empty `collection` argument
+   when the mock returns the canonical array-of-plists shape."
+  (%ensure-pdf-mode-installed)
+  (let* ((sample-toc (list (list :|children| nil :|page| 0
+                                  :|title| "1. Intro")
+                            (list :|children| nil :|page| 2
+                                  :|title| "2. Body")
+                            (list :|children| nil :|page| 5
+                                  :|title| "3. Outro")))
+         (collection-seen nil)
+         (orig-completing
+           (and (find-package '#:limn/completion)
+                (find-symbol "COMPLETING-READ" '#:limn/completion))))
+    (when orig-completing
+      ;; Stub completing-read so it captures `collection` without
+      ;; actually blocking on minibuffer-read.
+      (let ((orig-fn (and (fboundp orig-completing)
+                          (symbol-function orig-completing))))
+        (unwind-protect
+             (progn
+               (setf (fdefinition orig-completing)
+                     (lambda (prompt collection &rest opts)
+                       (declare (ignore prompt opts))
+                       (setf collection-seen collection)
+                       nil))
+               (with-mock-bridge
+                   (:responses
+                    (list (cons "buffer/toc" (%make-ok sample-toc))
+                          (cons "view/get"  (%make-ok
+                                              (list :|buffer-id| "b1"
+                                                    :|page| 0)))))
+                 (%call-cmd "PDF-TOC"))
+               (assert-true collection-seen
+                            "completing-read received a non-empty collection")
+               (when collection-seen
+                 (assert-eql 3 (length collection-seen)
+                             "3 TOC lines forwarded to completing-read")))
+          (when orig-fn
+            (setf (fdefinition orig-completing) orig-fn)))))))
+
+(deftest v039-w04-pdf-toc-no-items-is-safe-noop
+  "pdf-toc with empty TOC: should not crash; completing-read not invoked
+   (since (listp NIL) is t, %toc-flatten on NIL produces an empty list
+   and completing-read gets an empty collection — which is fine)."
+  (%ensure-pdf-mode-installed)
+  (with-mock-bridge (:responses (list (cons "buffer/toc"  (%make-ok nil))
+                                       (cons "view/get"   (%make-ok
+                                                            (list :|buffer-id| "b1")))))
+    (assert-no-error (%call-cmd "PDF-TOC")
+                     "pdf-toc with empty TOC is a no-op, not an error")))

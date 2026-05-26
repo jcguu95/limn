@@ -1084,11 +1084,19 @@
     ;; nothing interactive.  This new impl flattens the tree, shows
     ;; each entry "  P | Title" via completing-read, then parses out
     ;; the page and jumps.
+    ;;
+    ;; v0.39 W04 fix: `buffer/toc` returns the items array directly
+    ;; as `data` (see cmd_buffer_toc / send_ok_array), not wrapped
+    ;; as `{items: [...]}`.  Pre-fix used `(getf d :|items|)` which
+    ;; on the actual response (a list of TOC plists) either errored
+    ;; with malformed-property-list or silently returned NIL — either
+    ;; way `items` was nil, `(when (listp items) ...)` skipped, and
+    ;; the user pressing `t` saw nothing happen because completing-
+    ;; read never opened.  Was the entire reason W04 A.1 failed.
     (let* ((bid (limn/pdf-mode::%focused-buffer-id))
            (r (and bid (limn/pdf-mode::%limn-call "buffer/toc"
                                                     :|buffer-id| bid)))
-           (d (limn/pdf-mode::%response-data r))
-           (items (and d (getf d :|items|))))
+           (items (limn/pdf-mode::%response-data r)))
       (when (listp items)
         (let* ((flat (limn/pdf-mode::%toc-flatten items 0))
                (lines (mapcar #'limn/pdf-mode::%toc-line flat))

@@ -93,11 +93,13 @@
              (and cmd t)
              (format nil "cmd=~a" (and cmd t))))
 
-    ;; C: %toc-flatten returns at least 1 entry for tutorial.pdf
+    ;; C: %toc-flatten returns at least 1 entry for tutorial.pdf.
+    ;; v0.39 W04: buffer/toc returns the items array DIRECTLY as data,
+    ;; not wrapped {items: [...]} — so safe-call's (cdr r) is the list.
     (let* ((r (safe-call "buffer/toc" :|buffer-id|
                           (getf (let ((rr (safe-call "view/get" :|win-id| "w1")))
                                   (and (eq (car rr) :ok) (cdr rr))) :|buffer-id|)))
-           (items (and (eq (car r) :ok) (getf (cdr r) :|items|))))
+           (items (and (eq (car r) :ok) (listp (cdr r)) (cdr r))))
       (check "A.3 TOC has at least 1 entry"
              (and items (consp items))
              (format nil "items count=~a" (length items)))))
