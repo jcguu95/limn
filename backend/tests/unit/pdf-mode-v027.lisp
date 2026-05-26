@@ -399,6 +399,33 @@
                   (assert-equal 5 (getf args :|page|)
                                 "prefix 5 → page 5"))))))))))
 
+;; v0.38 B11: pdf-goto-page without prefix → last page (vim G semantics)
+(deftest v038-b11-goto-page-no-prefix-goes-to-last
+  "pdf-goto-page with prefix=NIL should land on last page (page-count - 1)."
+  (with-mock-bridge (:responses (list (%fake-view-get :page 0 :page-count 6)))
+    (let* ((cmd-pkg (find-package '#:limn/cmd))
+           (pa-var (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+      (when pa-var
+        (progv (list pa-var) (list nil)
+          (let ((r (%call-cmd "PDF-GOTO-PAGE")))
+            (unless (eq r :missing)
+              (let ((args (%mock-call-of "view/set")))
+                (assert-true args "view/set wire call should fire")
+                (when args
+                  (assert-equal 5 (getf args :|page|)
+                                "no prefix on a 6-page doc → page 5 (last)"))))))))))
+
+(deftest v038-b11-G-binding-points-to-pdf-goto-page
+  "Key 'G' in pdf-mode-map should resolve to pdf-goto-page (not pdf-last-page)."
+  (let ((b (%lookup-binding "G")))
+    (assert-true b "G should have a binding")
+    (when b
+      ;; binding is either a symbol command or a function — check it's
+      ;; the goto-page command (interned name) not last-page
+      (let ((name (and (symbolp b) (symbol-name b))))
+        (when name
+          (assert-equal "PDF-GOTO-PAGE" name "G → PDF-GOTO-PAGE"))))))
+
 (deftest v027-a-zoom-in-multiplies-by-factor
   (with-mock-bridge (:responses (list (%fake-view-get :zoom 1.0)))
     (let ((r (%call-cmd "PDF-ZOOM-IN")))

@@ -629,9 +629,13 @@
 
 (limn/pdf-mode::%defcmd pdf-goto-page "p"
   (lambda (prefix)
+    ;; v0.38 B11: with prefix N → page N; without prefix → last page.
+    ;; This matches vim convention: `5G` jumps to page 5, plain `G`
+    ;; jumps to end.  Old behavior (no prefix → page 0) was unused.
     (let* ((v (limn/pdf-mode::%focused-view))
            (pc (or (getf v :|page-count|) 1))
-           (target (limn/pdf-mode::%clamp-page (or prefix 0) pc)))
+           (default-target (max 0 (1- pc)))
+           (target (limn/pdf-mode::%clamp-page (or prefix default-target) pc)))
       (limn/pdf-mode::%page-set target))))
 
 (limn/pdf-mode::%defcmd pdf-scroll-down nil
@@ -1392,7 +1396,10 @@
       (%def km "p"        (intern "PDF-PREV-PAGE"   :cl-user))
       (%def km "J"        (intern "PDF-NEXT-PAGE"   :cl-user))
       (%def km "K"        (intern "PDF-PREV-PAGE"   :cl-user))
-      (%def km "G"        (intern "PDF-LAST-PAGE"   :cl-user))
+      ;; v0.38 B11: vim convention — G alone → last page; NG → page N.
+      ;; pdf-goto-page now defaults to last page when prefix is nil, so
+      ;; binding it on G gives both behaviors via one command.
+      (%def km "G"        (intern "PDF-GOTO-PAGE"   :cl-user))
       (%def km "g g"      (intern "PDF-FIRST-PAGE"  :cl-user))
       ;; zoom
       (%def km "+"        (intern "PDF-ZOOM-IN"     :cl-user))
@@ -1444,7 +1451,7 @@
                                 ("<up>" pdf-scroll-up)
                                 ("n" pdf-next-page) ("p" pdf-prev-page)
                                 ("J" pdf-next-page) ("K" pdf-prev-page)
-                                ("G" pdf-last-page) ("g g" pdf-first-page)
+                                ("G" pdf-goto-page) ("g g" pdf-first-page)
                                 ("+" pdf-zoom-in)   ("=" pdf-zoom-in)
                                 ("-" pdf-zoom-out)  ("0" pdf-zoom-reset)
                                 ("W" pdf-fit-width)
