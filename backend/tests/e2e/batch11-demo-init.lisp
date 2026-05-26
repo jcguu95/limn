@@ -25,7 +25,7 @@
 ;; so the test is hermetic regardless of dev state.
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash11"))
-(sb-posix:setenv "LIMN_INIT" (b/ "init.lisp.example") 1)
+(sb-posix:setenv "LIMN_INIT" (b/ "tests/e2e/demo-init.lisp") 1)
 
 (dolist (f '("limn-hooks.lisp" "limn-buffer.lisp" "limn-bridge.lisp"
              "limn-keys.lisp"  "limn-undo.lisp"   "limn-search.lisp"

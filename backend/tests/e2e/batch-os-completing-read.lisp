@@ -13,12 +13,7 @@
   (or (sb-posix:getenv "LIMN_BACKEND_DIR") "/limn/backend/"))
 (defun b/ (f) (concatenate 'string *bdir* f))
 
-(dolist (f '("limn-hooks.lisp" "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp"  "limn-undo.lisp"   "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp"  "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -31,15 +26,38 @@
 (defun ok? (r) (eq (getf r :|ok|) t))
 (defun data (r) (getf r :|data|))
 
+;;; v0.37 Phase F (driver-D5): drain-events originally tried to read
+;;; events out of (limn:pump), but pump returns a COUNT (number of
+;;; messages processed) — so (append events COUNT) raised TYPE-ERROR.
+;;; The pump thread already dispatches events to hooks; the right
+;;; pattern is to install a hook BEFORE the trigger and harvest from a
+;;; shared list afterwards.  capture-events / drain-events hides the
+;;; bookkeeping; arm-events resets the buffer between checks.
+
+(defparameter *captured-events* nil)
+(defparameter *captured-types*  nil)
+
+(defun arm-events (&rest event-types)
+  "Reset *captured-events* and install hooks that record events of the
+   given EVENT-TYPES (strings without the \"event/\" prefix).  Each
+   recorded event is the wire plist with :|type| TYPE prepended so the
+   caller can dispatch by type without re-reading the hook name."
+  (setf *captured-events* nil)
+  (dolist (ty event-types)
+    (unless (member ty *captured-types* :test #'string=)
+      (push ty *captured-types*)
+      (let ((tag ty))
+        (limn/hooks:add-hook
+         (concatenate 'string "event/" tag)
+         (lambda (ev)
+           (push (append (list :|type| tag) ev) *captured-events*)))))))
+
 (defun drain-events (&optional (timeout 0.5))
-  "Collect events from the bus for TIMEOUT seconds."
-  (let ((deadline (+ (get-universal-time) timeout))
-        (events '()))
-    (loop while (< (get-universal-time) deadline) do
-      (let ((evs (limn:pump)))
-        (when evs (setf events (append events evs))))
-      (sleep 0.02))
-    events))
+  "Let the pump thread run for TIMEOUT seconds, then return the
+   snapshot of *captured-events* in chronological order."
+  (let ((deadline (+ (get-universal-time) timeout)))
+    (loop while (< (get-universal-time) deadline) do (sleep 0.02)))
+  (reverse *captured-events*))
 
 ;;; ── session ───────────────────────────────────────────────────────────
 
@@ -74,9 +92,10 @@
 
   ;; ── Ω2: RET injection → minibuffer-submit event ──────────────
   (format t "~%── Ω2: RET fires minibuffer-submit ──~%")
+  (arm-events "minibuffer-submit" "minibuffer-cancel")
   (limn:call "minibuffer/open")
   (limn:call "minibuffer/set-text" :|text| "query")
-  (limn:call "test/inject-key" :|key| "RET" :|mods| nil)
+  (limn:call "test/inject-qt-key" :|key| "RET" :|mods| nil)
   (let* ((evs    (drain-events 0.4))
          (submit (find-if (lambda (e)
                             (string= (getf e :|type|) "minibuffer-submit"))
@@ -87,9 +106,10 @@
 
   ;; ── Ω3: ESC injection → minibuffer-cancel event ──────────────
   (format t "~%── Ω3: ESC fires minibuffer-cancel ──~%")
+  (arm-events "minibuffer-submit" "minibuffer-cancel")
   (limn:call "minibuffer/open")
   (limn:call "minibuffer/set-text" :|text| "abandoned")
-  (limn:call "test/inject-key" :|key| "ESC" :|mods| nil)
+  (limn:call "test/inject-qt-key" :|key| "ESC" :|mods| nil)
   (let* ((evs    (drain-events 0.4))
          (cancel (find-if (lambda (e)
                             (string= (getf e :|type|) "minibuffer-cancel"))
@@ -100,11 +120,15 @@
   ;; ── Ω4: minibuffer closed after cancel ───────────────────────
   (format t "~%── Ω4: minibuffer closed after cancel ──~%")
   ;; After ESC the minibuffer should be closed.
-  ;; We verify: minibuffer/get returns open=false.
+  ;; We verify: minibuffer/get returns :|open| ≠ T.
+  ;; v0.37 Phase F: the bridge's JSON decoder maps `false` to the
+  ;; keyword :FALSE — which is NON-NIL in CL.  A plain `(not :|open|)`
+  ;; check treats closed as still-open.  Check explicitly: "open" means
+  ;; the value is EQ to T; anything else (NIL, :false) means closed.
   (let* ((r (limn:call "minibuffer/get"))
          (d (data r)))
     (check (format nil "Ω4a — open is false after cancel (got ~s)" (getf d :|open|))
-           (and (ok? r) (not (getf d :|open|)))))
+           (and (ok? r) (not (eq (getf d :|open|) t)))))
 
   ;; ── summary ─────────────────────────────────────────────────────
   (format t "~%~%── completing-read OS e2e results ──~%")

@@ -15,13 +15,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-ir"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp" "limn-undo.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -68,7 +62,26 @@
                 :wait nil :search nil
                 :output log :if-output-exists :supersede :error :output)))
     (loop repeat 100 until (probe-file sock) do (sleep 0.05))
-    (limn:start sock) (sleep 0.3) (wait-for-window) proc))
+    ;; v0.37 Phase F: Ω2 deliberately writes a broken init.lisp.  Per
+    ;; SPEC §9.3 limn:start propagates init-file errors (so users see
+    ;; the misconfiguration loudly, not silently) — but THIS driver
+    ;; specifically tests "broken init doesn't permanently break
+    ;; pdf-mode": after the error, the session should still be reachable
+    ;; on the same socket (limn-bridge listens regardless of Lisp init
+    ;; outcome).  Catch the propagated error here, then connect again
+    ;; without re-running load-init-file.
+    (handler-case (limn:start sock)
+      (error (e)
+        (format t "~&  (start-session: tolerated init error: ~a)~%" e)
+        ;; Re-create the session without re-running limn:start (which
+        ;; would re-trigger init).  We need *session* set so subsequent
+        ;; limn:call works.  Use limn/client + limn/dispatch directly,
+        ;; mirroring limn:start's plumbing minus init.
+        (let* ((c (funcall (find-symbol "CONNECT" :limn/client) sock))
+               (s (funcall (find-symbol "MAKE-SESSION-FOR" :limn/dispatch) c)))
+          (setf (symbol-value (find-symbol "*SESSION*" :limn)) s)
+          (funcall (find-symbol "START-PUMP-THREAD" :limn/dispatch) s))))
+    (sleep 0.3) (wait-for-window) proc))
 
 (defun stop-session (proc)
   (ignore-errors (limn:stop))
@@ -89,8 +102,9 @@
        (proc (start-session sock "/tmp/limn-os-v027ir1.log")))
   (let ((b (engine-load *fixture*)))
     (when b
-      (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                  :|rects| (list (list 0.1 0.2 0.5 0.25)))
+      (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.25))
       (sleep 0.1)
       (key "h") (sleep 0.3)
       ;; Read back the sidecar; color should be #ff00ff
@@ -156,7 +170,11 @@
       ;; before override-aware: page is 0, off is 0.
       (let ((p-before (page-of)))
         (key "j") (sleep 0.3)
-        (let* ((mr (data (limn:call "message/get")))
+        ;; v0.37 Phase F: there is no message/get wire command — read
+        ;; the *messages* buffer text directly to see what message/echo
+        ;; wrote there.
+        (let* ((mr (data (limn:call "buffer/text"
+                                     :|buffer-id| "*messages*")))
                (msg (and mr (or (getf mr :|text|) ""))))
           ;; user-fn should have echoed "user-j-fired"; AND because user
           ;; override replaces pdf-scroll-down, page should NOT advance

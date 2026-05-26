@@ -666,6 +666,38 @@
       (limn/indent:indent-for-tab-command)
       (assert-true (car called) "line-fn invoked"))))
 
+(deftest indent-b-indent-for-tab-command-falls-back-when-noop
+  "v0.37 Phase F regression: when *indent-line-function* leaves the
+   buffer unchanged (e.g. indent-relative on a first line with no
+   prior indent to copy), indent-for-tab-command falls back to
+   inserting one tab-stop worth of indent at point.  Without the
+   fallback, Tab on a brand-new empty file did nothing, breaking
+   v036-tab-key-text-mode."
+  (with-i36-ctx ((b :id "ift-fb" :text "foo" :point 0))
+    (setq-local-via-local (intern "*INDENT-LINE-FUNCTION*" :cl-user)
+                          (lambda () nil)   ; explicit no-op
+                          "ift-fb")
+    (setq-local-via-local (intern "*INDENT-TABS-MODE*" :cl-user)
+                          t "ift-fb")
+    (limn/indent:indent-for-tab-command)
+    (assert-equal (concatenate 'string (string #\Tab) "foo")
+                  (mbuf36-text b)
+                  "literal tab inserted when indent-tabs-mode = t")))
+
+(deftest indent-b-indent-for-tab-command-fallback-uses-spaces
+  "Same fallback path, indent-tabs-mode nil → spaces of width
+   *tab-width*."
+  (with-i36-ctx ((b :id "ift-fb2" :text "bar" :point 0))
+    (setq-local-via-local (intern "*INDENT-LINE-FUNCTION*" :cl-user)
+                          (lambda () nil) "ift-fb2")
+    (setq-local-via-local (intern "*INDENT-TABS-MODE*" :cl-user)
+                          nil "ift-fb2")
+    (setq-local-via-local (intern "*TAB-WIDTH*" :cl-user)
+                          4 "ift-fb2")
+    (limn/indent:indent-for-tab-command)
+    (assert-equal "    bar" (mbuf36-text b)
+                  "tab-width spaces inserted when indent-tabs-mode = nil")))
+
 (deftest indent-b-newline-and-indent-inserts-and-indents
   "newline-and-indent: insert \\n then call indent-line-function"
   (with-i36-ctx ((b :id "nai-1" :text "foo" :point 3))

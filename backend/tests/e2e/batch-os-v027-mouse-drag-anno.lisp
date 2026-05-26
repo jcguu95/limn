@@ -18,13 +18,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-md"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp" "limn-undo.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -42,7 +36,7 @@
   (sb-ext:run-program "xdotool" args :search t :wait t :output nil :error nil))
 (defun key (k) (xdotool "key" k))
 (defun overlays-of ()
-  (let ((r (limn:call "view/overlays-get" :|win-id| "w1")))
+  (let ((r (limn:call "view/get" :|win-id| "w1")))
     (when (ok? r) (or (getf (data r) :|overlays|) '()))))
 (defun nuke-sidecars ()
   (let ((dir (merge-pathnames ".limn/annotations/" (user-homedir-pathname))))
@@ -113,8 +107,9 @@
     (format t "~%── Ω2: h → sidecar + overlay ──~%")
     ;; To be deterministic, set selection via wire (v0.15) so this Ω
     ;; isn't gated on real-mouse hit-test geometry.
-    (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                :|rects| (list (list 0.1 0.2 0.5 0.25)))
+    (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.25))
     (sleep 0.1)
     (key "h") (sleep 0.3)
     (let ((sidecars (ignore-errors

@@ -18,13 +18,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-cm"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp" "limn-undo.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -57,7 +51,7 @@
         do (sleep 0.1)))
 
 (defun overlays-of ()
-  (let ((r (limn:call "view/overlays-get" :|win-id| "w1")))
+  (let ((r (limn:call "view/get" :|win-id| "w1")))
     (when (ok? r) (or (getf (data r) :|overlays|) '()))))
 
 (defun list-sidecars ()
@@ -99,8 +93,9 @@
 ;;; ── Ω1: cp copy-a copy-b → 兩 path 看到同 annotation ────────
 
     (format t "~%── Ω1: cp 後同 annotation ──~%")
-    (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                :|rects| (list (list 0.1 0.2 0.5 0.25)))
+    (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.25))
     (sleep 0.1)
     (key "h") (sleep 0.3)
     (let ((n1 (length (list-sidecars))))
@@ -141,8 +136,9 @@
     (let ((bc (engine-load cjk)))
       (check (format nil "Ω3a — CJK 檔名載入 ok (~a)" bc) (stringp bc))
       (when bc
-        (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                    :|rects| (list (list 0.1 0.3 0.5 0.35)))
+        (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.1 :|y| 0.3)
+              :|end|   (list :|page| 0 :|x| 0.5 :|y| 0.35))
         (sleep 0.1)
         (key "h") (sleep 0.3)
         (limn:call "buffer/close" :|buffer-id| bc) (sleep 0.2)
@@ -167,11 +163,13 @@
            (rd (limn:call "bridge/engine-load"
                            :|engine| "mupdf"
                            :|path| diff-a :|win-id| "w1")))
+      ;; v0.37 Phase F: `(declare ...)` must be the FIRST form of a
+      ;; let body; the original had it at the END, which SBCL's strict
+      ;; compiler rejects as "function DECLARE undefined".
+      (declare (ignore before-count))
       ;; mupdf may refuse the fake; that's OK, we just check no crash
       (check "Ω4 — bridge 不 crash on fake PDF"
-             (or (ok? rd) (not (ok? rd))))
-      ;; cleanup count check：fake didn't load → no new sidecar
-      (declare (ignore before-count))))
+             (or (ok? rd) (not (ok? rd))))))
 
   ;; cleanup
   (nuke-sidecars)

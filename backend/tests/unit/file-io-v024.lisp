@@ -392,3 +392,73 @@
       (assert-true  (limn/file:buffer-modified-p buf-id) "set to true")
       (limn/file:set-buffer-modified-p buf-id nil)
       (assert-false (limn/file:buffer-modified-p buf-id) "set to false"))))
+
+;;; ── E7. v0.37 Phase F: bytes-fallback always returns string ───────────────
+;;;
+;;; Regression for Root Cause A: when *read-file-fn* returns bytes and
+;;; limn/coding is NOT loaded (e.g. minimal smoke driver), the fallback
+;;; used to return the raw byte vector — which then exploded inside the
+;;; bridge JSON encoder ("Cannot encode JSON value: #(72 101 ...)").
+;;; The fix coerces bytes → string via sb-ext:octets-to-string so the
+;;; rest of the pipeline (buffer-set-content-fn, JSON encoder, callers
+;;; expecting (stringp content)) never sees raw octets.
+
+(deftest file-e7-bytes-fallback-returns-string
+  "when read-file returns bytes and limn/coding unloaded, find-file
+   still hands the buffer a string (no byte vector leaks downstream)."
+  (with-file-env ()
+    (fio-write "/tmp/bytes.txt" "ignored")
+    ;; Pretend limn/coding is unloaded by hiding the package while
+    ;; we run find-file.  When find-package returns NIL, the byte-vector
+    ;; branch of %decode-file-content must coerce, not pass through.
+    (let* ((coding-pkg (find-package '#:limn/coding))
+           (saved-name (and coding-pkg (package-name coding-pkg))))
+      (when coding-pkg (rename-package coding-pkg "LIMN/CODING-HIDDEN-FOR-TEST"))
+      (unwind-protect
+           (let* ((bytes #.(coerce #(72 101 108 108 111) '(simple-array (unsigned-byte 8) (*))))
+                  (got-content nil))
+             (let ((limn/file:*read-file-fn*
+                     (lambda (path) (declare (ignore path)) bytes))
+                   (limn/file:*buffer-set-content-fn*
+                     (lambda (bid content)
+                       (declare (ignore bid))
+                       (setf got-content content))))
+               (limn/file:find-file "/tmp/bytes.txt")
+               (assert-true (stringp got-content)
+                            "buffer received a string, not raw bytes")
+               (assert-equal "Hello" got-content
+                             "bytes decoded as UTF-8 → \"Hello\"")))
+        (when (and coding-pkg saved-name)
+          (rename-package "LIMN/CODING-HIDDEN-FOR-TEST" saved-name))))))
+
+(deftest file-e7-bytes-fallback-revert-returns-string
+  "same guarantee for revert-buffer: bytes → string at the boundary."
+  (with-file-env ()
+    (fio-write "/tmp/revbytes.txt" "ignored")
+    (let* ((coding-pkg (find-package '#:limn/coding))
+           (saved-name (and coding-pkg (package-name coding-pkg))))
+      (when coding-pkg (rename-package coding-pkg "LIMN/CODING-HIDDEN-FOR-TEST-2"))
+      (unwind-protect
+           (let* ((string-bytes
+                    (coerce #(82 101 118) '(simple-array (unsigned-byte 8) (*))))
+                  (initial-reads 0)
+                  (got-content nil)
+                  (buf-id nil))
+             (let ((limn/file:*read-file-fn*
+                     (lambda (path)
+                       (declare (ignore path))
+                       (incf initial-reads)
+                       (if (= initial-reads 1) "stub" string-bytes)))
+                   (limn/file:*buffer-set-content-fn*
+                     (lambda (bid content)
+                       (declare (ignore bid))
+                       (setf got-content content)))
+                   (limn/file:*minibuffer-yes-no-fn*
+                     (lambda (prompt) (declare (ignore prompt)) t)))
+               (setf buf-id (limn/file:find-file "/tmp/revbytes.txt"))
+               (limn/file:revert-buffer buf-id)
+               (assert-true (stringp got-content)
+                            "revert handed buffer a string, not raw bytes")
+               (assert-equal "Rev" got-content "bytes decoded → \"Rev\"")))
+        (when (and coding-pkg saved-name)
+          (rename-package "LIMN/CODING-HIDDEN-FOR-TEST-2" saved-name))))))

@@ -22,6 +22,27 @@
 (defun rel (relpath)
   (namestring (merge-pathnames relpath *test-dir*)))
 
+;;; v0.37 Phase F: load the whole backend via ASDF before any suite —
+;;; every suite that exercises a v0.27+ module (pdf-mode, regex,
+;;; query-replace, ...) needs the package present at READ time, and
+;;; the per-suite dolist loaders rotted (e.g. regex-v034.lisp depends
+;;; on vendor/cl-ppcre-load.lisp which v0.37 A1a removed).  Same
+;;; ASDF bring-up as repl.lisp / load-limn-system.lisp.
+(require :asdf)
+(require :sb-bsd-sockets)
+(require :sb-posix)
+(defvar *muffle-asd-dup*
+  (lambda (w)
+    (let ((msg (princ-to-string w)))
+      (when (and (search "found several entries" msg)
+                 (search "lib/sbcl" msg))
+        (muffle-warning w)))))
+(handler-bind ((warning *muffle-asd-dup*))
+  (let ((backend-dir (namestring (merge-pathnames "../" *test-dir*))))
+    (push backend-dir asdf:*central-registry*)
+    (asdf:initialize-source-registry)
+    (asdf:load-system :limn)))
+
 ;;; Load framework first
 (load (rel "framework.lisp"))
 

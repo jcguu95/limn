@@ -176,7 +176,10 @@
 
 (defun %decode-file-content (raw abs buf-id)
   "If limn/coding is available and RAW is a byte vector, detect coding
-   and decode to string.  Otherwise return raw as-is (string fallback)."
+   and decode to string.  Otherwise fall back to a guaranteed-string
+   result: bytes are coerced via octets-to-string (UTF-8, lax), strings
+   pass through, NIL becomes \"\".  Always returns a string so downstream
+   code (bridge JSON encoder, buffer-set-content-fn) never sees raw bytes."
   (let ((cod-pkg (find-package '#:limn/coding)))
     (cond
       ;; Byte vector + coding available → full detection path
@@ -189,6 +192,13 @@
               (text      (funcall decode-fn raw cs)))
          (funcall set-fn buf-id cs)
          text))
+      ;; Byte vector without limn/coding loaded — defense-in-depth UTF-8
+      ;; decode so the bridge JSON encoder never sees raw bytes.  Lax
+      ;; replacement avoids decoder errors on non-UTF-8 input.
+      ((typep raw '(vector (unsigned-byte 8)))
+       (handler-case
+           (sb-ext:octets-to-string raw :external-format '(:utf-8 :replacement #\?))
+         (error () (map 'string #'code-char raw))))
       ;; String (old path, no coding needed)
       (t (or raw "")))))
 

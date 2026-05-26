@@ -14,13 +14,7 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-di"))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp" "limn-undo.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -38,7 +32,7 @@
   (sb-ext:run-program "xdotool" args :search t :wait t :output nil :error nil))
 (defun key (k) (xdotool "key" k))
 (defun overlays-of ()
-  (let ((r (limn:call "view/overlays-get" :|win-id| "w1")))
+  (let ((r (limn:call "view/get" :|win-id| "w1")))
     (when (ok? r) (or (getf (data r) :|overlays|) '()))))
 (defun nuke-sidecars ()
   (let ((dir (merge-pathnames ".limn/annotations/" (user-homedir-pathname))))
@@ -73,8 +67,9 @@
   (let ((b (engine-load fixture)))
     (declare (ignore b))
     ;; Lay down one annotation at deterministic position
-    (limn:call "view/selection-set" :|win-id| "w1" :|page| 0
-                :|rects| (list (list 0.2 0.3 0.6 0.4)))
+    (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| 0 :|x| 0.2 :|y| 0.3)
+              :|end|   (list :|page| 0 :|x| 0.6 :|y| 0.4))
     (sleep 0.1)
     (key "h") (sleep 0.3)
     (let ((before-rects

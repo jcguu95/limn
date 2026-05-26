@@ -628,6 +628,24 @@
         (assert-true (%mock-call-of "view/overlays")
                      "isearch-quit 應送 view/overlays 清空")))))
 
+(deftest v027-b-view-overlays-uses-layers-arg
+  "v0.37 Phase F regression: view/overlays wire call MUST send the
+   layers array under the :|layers| key, not :|overlays|.  The C++
+   side reads msg.value(\"layers\") and silently treats a missing key
+   as 'clear all overlays' — which is exactly what happened before
+   this fix: sidecars saved correctly but no rect appeared on screen,
+   and any subsequent view/get returned overlays=[]."
+  (with-mock-bridge ()
+    (let ((r (%call-cmd "PDF-ISEARCH-QUIT")))
+      (unless (eq r :missing)
+        (let* ((args (%mock-call-of "view/overlays"))
+               (layers-pos (position :|layers| args))
+               (overlays-pos (position :|overlays| args)))
+          (assert-true layers-pos
+                       "view/overlays kwargs must include :|layers|")
+          (assert-true (null overlays-pos)
+                       "view/overlays kwargs must NOT use :|overlays|"))))))
+
 (deftest v027-b-current-hit-higher-opacity
   "overlay 中 current hit 的 opacity > others。"
   (let* ((pkg (find-package '#:limn/pdf-mode))
@@ -787,22 +805,33 @@
                          "overlay 應該帶 #ABCDEF 顏色")))))))
 
 (deftest v027-c-highlight-selection-no-selection-no-op
-  "h 在沒 selection 時應該無聲（不該 crash、不該寫 sidecar）。"
+  "h 在沒 selection 時應該無聲（不該 crash、不該寫 sidecar）。
+   v0.37 Phase F: selection-get's wire response uses :|active| nil for
+   no-selection (NOT :|rects| nil as the old mock claimed)."
   (with-mock-bridge (:responses
                      (list (cons "view/selection-get"
-                                 (%make-ok (list :|rects| nil)))))
+                                 (%make-ok (list :|active| nil)))))
     (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
       (unless (eq r :missing)
         (assert-true (zerop (%mock-call-count "view/overlays"))
                      "沒 selection 不送 overlays")))))
 
 (deftest v027-c-highlight-selection-creates-annotation
-  "有 selection 時 h 應該創 annotation 並送 view/overlays。"
+  "有 selection 時 h 應該創 annotation 並送 view/overlays。
+   v0.37 Phase F: wire schema is :|active|/:|begin|{:|page|,:|x|,:|y|}/
+   :|end|{...} — %selection translates this into :|page|/:|rects| for
+   the downstream %add-annotation contract."
   (with-mock-bridge (:responses
                      (list (%fake-view-get :buffer-id "b1" :page 3)
                            (cons "view/selection-get"
-                                 (%make-ok (list :|page| 3
-                                                 :|rects| '((0.1 0.2 0.3 0.4)))))))
+                                 (%make-ok
+                                  (list :|active| t
+                                        :|begin| (list :|page| 3
+                                                       :|x| 0.1 :|y| 0.2)
+                                        :|end|   (list :|page| 3
+                                                       :|x| 0.3 :|y| 0.4)
+                                        :|mode|  "char"
+                                        :|text|  "selected text")))))
     (let* ((pkg (find-package '#:limn/pdf-mode))
            (write-var (and pkg (find-symbol "*ANNOTATIONS-WRITE-FN*" pkg)))
            (writes nil))
@@ -814,6 +843,48 @@
               (assert-true (or (%mock-call-of "view/overlays")
                                writes)
                            "h 應該畫 overlay 或寫 sidecar"))))))))
+
+(deftest v027-c-selection-translates-begin-end-to-rects
+  "v0.37 Phase F regression: %selection must translate the wire's
+   :|active|/:|begin|/:|end| response into the :|page|/:|rects|
+   plist that %add-annotation consumes.  Single-rect bounding box
+   covers begin→end, normalised so x1<x2 / y1<y2."
+  (with-mock-bridge (:responses
+                     (list (cons "view/selection-get"
+                                 (%make-ok
+                                  (list :|active| t
+                                        :|begin| (list :|page| 2
+                                                       :|x| 0.4 :|y| 0.7)
+                                        :|end|   (list :|page| 2
+                                                       :|x| 0.1 :|y| 0.2)
+                                        :|mode|  "char"
+                                        :|text|  "swapped")))))
+    (let* ((pkg (find-package '#:limn/pdf-mode))
+           (sel-fn (and pkg (find-symbol "%SELECTION" pkg))))
+      (when (and sel-fn (fboundp sel-fn))
+        (let* ((s (funcall (symbol-function sel-fn)))
+               (rects (and s (getf s :|rects|)))
+               (rect (first rects)))
+          (assert-equal 2 (getf s :|page|) "page passed through")
+          (assert-true (and (listp rect) (= (length rect) 4))
+                       "single 4-tuple rect synthesized")
+          (assert-equal 0.1 (first rect)  "x1 = min(begin.x, end.x)")
+          (assert-equal 0.2 (second rect) "y1 = min(begin.y, end.y)")
+          (assert-equal 0.4 (third rect)  "x2 = max")
+          (assert-equal 0.7 (fourth rect) "y2 = max"))))))
+
+(deftest v027-c-selection-returns-nil-when-inactive
+  "v0.37 Phase F regression: %selection returns NIL when :|active| is
+   false, so %add-annotation can treat that as a no-op without
+   touching begin/end (which the wire omits in that case)."
+  (with-mock-bridge (:responses
+                     (list (cons "view/selection-get"
+                                 (%make-ok (list :|active| nil)))))
+    (let* ((pkg (find-package '#:limn/pdf-mode))
+           (sel-fn (and pkg (find-symbol "%SELECTION" pkg))))
+      (when (and sel-fn (fboundp sel-fn))
+        (assert-true (null (funcall (symbol-function sel-fn)))
+                     "no selection → NIL")))))
 
 
 ;;; ══════════════════════════════════════════════════════════════════════
@@ -1812,39 +1883,51 @@
 ;;; ══════════════════════════════════════════════════════════════════════
 
 (deftest v027-j-re-annotate-same-selection-replaces
-  "h 在同 page 同 rect 重按一次：annotation 列表仍是 1 個，不是 2 個重複的。"
+  "h 在同 page 同 rect 重按一次：annotation 列表仍是 1 個，不是 2 個重複的。
+   v0.37 Phase F: selection-get returns :|active|/:|begin|/:|end| on the
+   wire; %selection synthesizes :|page|/:|rects| from that.  Also:
+   %current-pdf-path now reads from *buffer-id-to-path* (populated by
+   pdf-mode-on-buffer-opened) instead of a non-existent buffer/state
+   wire — pre-populate the cache so the mock test exercises the real
+   sidecar key (rather than the /tmp/unknown.pdf fallback)."
   (with-mock-bridge (:responses
                      (list (%fake-view-get :buffer-id "b1" :page 3)
-                           (cons "buffer/state"
-                                 (%make-ok (list :|path| "/tmp/p.pdf"
-                                                 :|major| "pdf-mode")))
                            (cons "view/selection-get"
-                                 (%make-ok (list :|page| 3
-                                                 :|rects|
-                                                 '((0.1 0.2 0.3 0.4)))))))
+                                 (%make-ok
+                                  (list :|active| t
+                                        :|begin| (list :|page| 3
+                                                       :|x| 0.1 :|y| 0.2)
+                                        :|end|   (list :|page| 3
+                                                       :|x| 0.3 :|y| 0.4)
+                                        :|mode|  "char"
+                                        :|text|  "hi")))))
     (let* ((pkg (find-package '#:limn/pdf-mode))
            (write-var (and pkg (find-symbol "*ANNOTATIONS-WRITE-FN*" pkg)))
            (read-var  (and pkg (find-symbol "*ANNOTATIONS-READ-FN*" pkg)))
+           (cache-var (and pkg (find-symbol "*BUFFER-ID-TO-PATH*" pkg)))
            (ser (and pkg (find-symbol "PDF-ANNOTATIONS-SERIALIZE" pkg))))
-      (when (and write-var read-var (boundp write-var) (boundp read-var) ser)
-        (let ((store (make-hash-table :test #'equal)))
-          (progv (list write-var read-var)
-                 (list (lambda (p d) (setf (gethash p store) d))
-                       (lambda (p) (gethash p store)))
-            ;; 第一次 h
-            (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
-              (declare (ignore r)))
-            ;; 第二次 h（同 selection）
-            (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
-              (declare (ignore r)))
-            (let* ((load-fn (find-symbol "PDF-ANNOTATIONS-LOAD" pkg))
-                   (back (and load-fn (fboundp load-fn)
-                              (funcall (symbol-function load-fn)
-                                       "/tmp/p.pdf"))))
-              (when (listp back)
-                ;; 行為釘住：replace（=1）；若實作選 stack（>1）此 test 紅
-                (assert-equal 1 (length back)
-                              "同 rect 重按 h → 不重複（1 個）")))))))))
+      (when (and write-var read-var cache-var ser)
+        (setf (gethash "b1" (symbol-value cache-var)) "/tmp/p.pdf")
+        (unwind-protect
+             (let ((store (make-hash-table :test #'equal)))
+               (progv (list write-var read-var)
+                      (list (lambda (p d) (setf (gethash p store) d))
+                            (lambda (p) (gethash p store)))
+                 ;; 第一次 h
+                 (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
+                   (declare (ignore r)))
+                 ;; 第二次 h（同 selection）
+                 (let ((r (%call-cmd "PDF-HIGHLIGHT-SELECTION")))
+                   (declare (ignore r)))
+                 (let* ((load-fn (find-symbol "PDF-ANNOTATIONS-LOAD" pkg))
+                        (back (and load-fn (fboundp load-fn)
+                                   (funcall (symbol-function load-fn)
+                                            "/tmp/p.pdf"))))
+                   (when (listp back)
+                     ;; 行為釘住：replace（=1）；若實作選 stack（>1）此 test 紅
+                     (assert-equal 1 (length back)
+                                   "同 rect 重按 h → 不重複（1 個）")))))
+          (remhash "b1" (symbol-value cache-var)))))))
 
 (deftest v027-j-delete-last-annotation-leaves-empty-list
   "刪掉唯一一個 annotation → sidecar 變空 list（不是 unlink、不是 crash）。"

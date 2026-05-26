@@ -28,18 +28,14 @@
 (when (probe-file "/tmp/.limn/init.lisp")
   (rename-file "/tmp/.limn/init.lisp" "/tmp/.limn/init.lisp.stash-v027wf"))
 
-;; 確保 sidecar 乾淨開始
-(let ((dir (merge-pathnames ".limn/annotations/" (user-homedir-pathname))))
-  (when (probe-file dir)
-    (dolist (f (ignore-errors (directory (merge-pathnames "*.lisp" dir))))
-      (ignore-errors (delete-file f)))))
+;; 確保 sidecar 乾淨開始 (annotations + bookmarks)
+(dolist (sub '(".limn/annotations/" ".limn/bookmarks/"))
+  (let ((dir (merge-pathnames sub (user-homedir-pathname))))
+    (when (probe-file dir)
+      (dolist (f (ignore-errors (directory (merge-pathnames "*.lisp" dir))))
+        (ignore-errors (delete-file f))))))
 
-(dolist (f '("limn-hooks.lisp" "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-keys.lisp"  "limn-undo.lisp"   "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp"  "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp" "limn.lisp"))
-  (load (b/ f)))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -62,7 +58,7 @@
     (and (ok? r) (getf (data r) :|buffer-id|))))
 
 (defun overlays-of ()
-  (let ((r (limn:call "view/overlays-get" :|win-id| "w1")))
+  (let ((r (limn:call "view/get" :|win-id| "w1")))
     (when (ok? r) (or (getf (data r) :|overlays|) '()))))
 
 (defun page-of () (getf (data (limn:call "view/get" :|win-id| "w1")) :|page|))
@@ -141,9 +137,9 @@
 ;;; ── Ω5: selection + h ────────────────────────────────────
 
     (format t "~%── Ω5: 高亮 ──~%")
-    (limn:call "view/selection-set"
-                :|win-id| "w1" :|page| (page-of)
-                :|rects| (list (list 0.1 0.2 0.5 0.25)))
+    (limn:call "view/selection-set" :|win-id| "w1"
+              :|begin| (list :|page| (page-of) :|x| 0.1 :|y| 0.2)
+              :|end|   (list :|page| (page-of) :|x| 0.5 :|y| 0.25))
     (sleep 0.1)
     (key "h") (sleep 0.3)
     (let ((sidecars (ignore-errors
@@ -154,13 +150,14 @@
              (>= (length sidecars) 1)))
 
 ;;; ── Ω6: m a 設書籤 ────────────────────────────────────────
+;;; v0.37 Phase F batch 18: use pdf-set-bookmark-name (Lisp wrapper
+;;; that mirrors the wire call to a path-keyed sidecar) so Ω9
+;;; close+reopen actually finds the mark.  Raw `bookmark/set` is
+;;; in-memory only by spec.
 
     (format t "~%── Ω6: m a 設書籤 ──~%")
     (let* ((bookmark-page (page-of))
-           (r (limn:call "bookmark/set"
-                          :|buffer-id| b1 :|name| "a"
-                          :|page| bookmark-page :|x| 0.0 :|y| 0.0
-                          :|note| "")))
+           (r (limn/pdf-mode:pdf-set-bookmark-name b1 "a" bookmark-page)))
       (check (format nil "Ω6 — bookmark 設在 page ~a" bookmark-page)
              (ok? r)))
 
@@ -202,11 +199,12 @@
       ;; cleanup
       (ignore-errors (limn:call "bookmark/delete" :|buffer-id| b2 :|name| "a"))))
 
-  ;; cleanup sidecar
-  (dolist (f (ignore-errors
-               (directory (merge-pathnames ".limn/annotations/*.lisp"
-                                            (user-homedir-pathname)))))
-    (ignore-errors (delete-file f)))
+  ;; cleanup sidecars (annotations + bookmarks)
+  (dolist (glob '(".limn/annotations/*.lisp" ".limn/bookmarks/*.lisp"))
+    (dolist (f (ignore-errors
+                 (directory (merge-pathnames glob
+                                              (user-homedir-pathname)))))
+      (ignore-errors (delete-file f))))
 
   (format t "~%── v027-workflow e2e results ──~%")
   (if (null *failures*)

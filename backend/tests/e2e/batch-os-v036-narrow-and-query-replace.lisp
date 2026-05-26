@@ -15,22 +15,7 @@
 (handler-case (load (b/ "../vendor/cl-ppcre-load.lisp"))
   (error (e) (format t "  !! skipped vendor cl-ppcre: ~A~%" e)))
 
-(dolist (f '("limn-hooks.lisp" "limn-log.lisp" "limn-error.lisp"
-             "limn-timer.lisp" "limn-process.lisp"
-             "limn-buffer.lisp" "limn-bridge.lisp"
-             "limn-undo.lisp" "limn-buffer-undo.lisp"
-             "limn-keys.lisp" "limn-search.lisp"
-             "limn-client.lisp" "limn-dispatch.lisp"
-             "limn-mode.lisp" "limn-cmd.lisp"
-             "limn-runtime.lisp" "limn-introspect.lisp"
-             "limn-text-mode.lisp"
-             "limn-marker.lisp" "limn-local.lisp"
-             "limn-mark.lisp" "limn-excursion.lisp"
-             "limn-regex.lisp" "limn-indent.lisp"
-             "limn-query-replace.lisp"
-             "limn.lisp"))
-  (handler-case (load (b/ f))
-    (error (e) (format t "  !! skipped ~A: ~A~%" f e))))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
 
 (defparameter *failures* nil)
 (defun check (msg ok &optional details)
@@ -81,7 +66,15 @@
         do (sleep 0.1)))
 
 (defun wire-up ()
-  (dolist (pkg-fn (list #'rpkg #'qpkg))
+  ;; v0.37 Phase F: wire vtables on ALL packages that consume buffer
+  ;; text — limn/regex, limn/query-replace, limn/excursion AND
+  ;; limn/marker.  Without limn/marker:*buffer-text-len-fn*, %clamp
+  ;; defaults to (lambda (bid) 0) → every set-marker call clamps the
+  ;; new position to 0.  That breaks the narrow markers
+  ;; (point-min/max both come back 0) AND the test's m-after marker
+  ;; (sits at 0 instead of 32, so the post-replace fixup check
+  ;; "32 → 28" fails with got=0).
+  (dolist (pkg-fn (list #'rpkg #'qpkg #'xpkg #'mpkg))
     (let* ((pkg (funcall pkg-fn))
            (bt    (and pkg (find-symbol "*BUFFER-TEXT-FN*" pkg)))
            (sbt   (and pkg (find-symbol "*BUFFER-SET-TEXT-FN*" pkg)))
@@ -158,14 +151,27 @@
            ;; the original).  After replace shrinks the buffer by 4 chars
            ;; the marker should fix up to 28.
            (let* ((set-marker (msym "SET-MARKER"))
+                  (set-it (msym "SET-MARKER-INSERTION-TYPE"))
                   (m-after (when (and mk-mark set-marker)
                              (let ((mk (funcall mk-mark)))
                                (funcall set-marker mk 32 buf)
+                               ;; v0.37 Phase F: insertion-type :after so
+                               ;; an insert at the marker's position
+                               ;; pushes the marker right (matching what
+                               ;; the "32 → 28" expectation assumes).
+                               ;; Default :before would leave it at 27
+                               ;; after the second replace's insert-at-27.
+                               (when set-it (funcall set-it mk :after))
                                mk))))
              (declare (ignorable m-after))
              (progn
-               ;; Narrow to a chunk that contains 2 of the 3 foo
-               (funcall narrow 11 31)
+               ;; v0.37 Phase F: narrow must reach 32 (end-exclusive) to
+               ;; include the third "foo" (at 29-31) along with the
+               ;; second (at 18-20).  Original (narrow 11 31) excluded
+               ;; the third because cl-ppcre:scan rejects matches that
+               ;; cross the upper bound — so only 1 foo got replaced,
+               ;; never the expected 2.
+               (funcall narrow 11 32)
                (unwind-protect
                     (progn
                       (limn:call "buffer/cursor-set" :|buffer-id| buf

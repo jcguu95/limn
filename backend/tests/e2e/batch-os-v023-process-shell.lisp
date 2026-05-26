@@ -30,10 +30,41 @@
 
 (defun %first-exists (paths)
   (loop for p in paths when (probe-file p) return p))
-(defparameter *true* (%first-exists '("/usr/bin/true" "/bin/true")))
-(defparameter *sh*   (%first-exists '("/bin/sh" "/usr/bin/sh")))
-(defparameter *echo* (%first-exists '("/bin/echo" "/usr/bin/echo")))
-(defparameter *cat*  (%first-exists '("/bin/cat" "/usr/bin/cat")))
+
+;;; v0.37 Phase F (driver-C1): the docker container is nix-based, so
+;;; coreutils live at /nix/store/.../bin and are reachable via $PATH or
+;;; /root/.nix-profile/bin — they are NOT under /bin or /usr/bin.  The
+;;; original hardcoded list returns NIL for true/echo/cat in the
+;;; container, and make-process then chokes on `(list nil ...)`.  Walk
+;;; PATH if the canonical UNIX paths are missing.
+(defun %split-path (s)
+  (loop with start = 0
+        for i from 0 below (length s)
+        when (char= (char s i) #\:)
+          collect (subseq s start i) into dirs
+          and do (setf start (1+ i))
+        finally (return (append dirs (list (subseq s start))))))
+
+(defun %find-on-path (name)
+  (let ((path (or (sb-posix:getenv "PATH") "")))
+    (loop for dir in (%split-path path)
+          for full = (and (plusp (length dir))
+                          (concatenate 'string dir "/" name))
+          when (and full (probe-file full)) return full)))
+
+(defun %bin (name canonical-paths)
+  (or (%first-exists canonical-paths)
+      (%find-on-path name)))
+
+(defparameter *true* (%bin "true" '("/usr/bin/true" "/bin/true")))
+(defparameter *sh*   (%bin "sh"   '("/bin/sh" "/usr/bin/sh")))
+(defparameter *echo* (%bin "echo" '("/bin/echo" "/usr/bin/echo")))
+(defparameter *cat*  (%bin "cat"  '("/bin/cat" "/usr/bin/cat")))
+
+(unless (and *true* *sh* *echo* *cat*)
+  (format t "  SKIP: required binaries missing (true=~a sh=~a echo=~a cat=~a)~%"
+          *true* *sh* *echo* *cat*)
+  (sb-ext:exit :code 77))
 
 (format t "~%=== batch-os-v023-process-shell ===~%")
 (format t "shell=~a echo=~a cat=~a~%" *sh* *echo* *cat*)
