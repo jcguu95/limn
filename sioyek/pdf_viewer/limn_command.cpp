@@ -143,6 +143,8 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     // buffer/*
     if (cmd == "buffer/open")          { cmd_buffer_open         (id, msg); return; }
     if (cmd == "buffer/close")         { cmd_buffer_close        (id, msg); return; }
+    if (cmd == "buffer/list")          { cmd_buffer_list         (id, msg); return; }
+
     if (cmd == "buffer/toc")           { cmd_buffer_toc          (id, msg); return; }
     if (cmd == "buffer/text")          { cmd_buffer_text         (id, msg); return; }
     if (cmd == "buffer/search")        { cmd_buffer_search       (id, msg); return; }
@@ -1604,6 +1606,50 @@ void LimnCommand::cmd_buffer_close(const QString& id, const QJsonObject& msg) {
     bookmarks.remove(buffer_id);
     bridge->send_ok(id);
     emit_buffer_closed(buffer_id);
+}
+
+// ─── buffer/list ──────────────────────────────────────────────────────
+//
+// v0.39 W20 — enumerate every buffer the C++ side knows about:
+//   - PDF (mupdf) buffers from `registry` (id → Document)
+//   - text-engine buffers from `text_buffers` (id → GapBuffer),
+//     with their disk path from `buffer_paths` if buffer/load-file
+//     was called.  Reserved chrome buffers (*minibuffer*, *echo-area*,
+//     *messages*) are included so callers can introspect them; the
+//     `kind` field lets clients filter.
+//
+// Response shape (send_ok_array):
+//   [ { buffer-id, path, engine, kind }, ... ]
+// where engine ∈ {"mupdf","text"} and kind ∈ {"file","chrome"}.
+// path is "" for chrome buffers or text buffers without a visited file.
+
+void LimnCommand::cmd_buffer_list(const QString& id, const QJsonObject&) {
+    QJsonArray out;
+
+    // mupdf buffers
+    for (const QString& bid : registry->all_ids()) {
+        QJsonObject ent;
+        ent.insert("buffer-id", bid);
+        ent.insert("engine",    "mupdf");
+        ent.insert("kind",      "file");
+        Document* doc = registry->lookup(bid);
+        ent.insert("path",
+                   doc ? QString::fromStdWString(doc->get_path()) : QString());
+        out.append(ent);
+    }
+
+    // text-engine buffers (file + chrome)
+    for (auto it = text_buffers.constBegin(); it != text_buffers.constEnd(); ++it) {
+        const QString& bid = it.key();
+        QJsonObject ent;
+        ent.insert("buffer-id", bid);
+        ent.insert("engine",    "text");
+        ent.insert("kind",      bid.startsWith('*') ? "chrome" : "file");
+        ent.insert("path",      buffer_paths.value(bid, QString()));
+        out.append(ent);
+    }
+
+    bridge->send_ok_array(id, out);
 }
 
 // ─── SPEC v0.5 §5.3 後段 — text-engine 編輯 primitives ─────────────────
