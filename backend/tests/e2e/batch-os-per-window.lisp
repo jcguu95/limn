@@ -191,18 +191,28 @@
              (x0 (getf pr :|x|)) (y0 (getf pr :|y|))
              (x1 (+ x0 (getf pr :|w|))) (y1 (+ y0 (getf pr :|h|)))
              hashes-w1 hashes-w2)
-        (dotimes (i 3)
-          (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
-          (push (getf (region-hash x0 y0 x1 y1) :|sha256|) hashes-w1)
-          (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.2)
-          (push (getf (region-hash x0 y0 x1 y1) :|sha256|) hashes-w2))
-        (check (format nil "Ω3a — every w1-focused hash equal (~a)" hashes-w1)
-               (every (lambda (h) (string= h (first hashes-w1))) hashes-w1))
-        (check (format nil "Ω3b — every w2-focused hash equal (~a)" hashes-w2)
-               (every (lambda (h) (string= h (first hashes-w2))) hashes-w2))
-        (check (format nil "Ω3c — w1 hash ≠ w2 hash (~a vs ~a)"
-                       (first hashes-w1) (first hashes-w2))
-               (not (string= (first hashes-w1) (first hashes-w2)))))
+        (multiple-value-bind (cx cy) (norm-to-px-xy 0.5 0.5 pr)
+          (dotimes (i 3)
+            (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
+            (push (getf (region-hash x0 y0 x1 y1) :|sha256|) hashes-w1)
+            ;; v0.37 strict: verify content too — w1 has red overlay from
+            ;; Ω2 (set-overlay "w1" "#FF0000"), red should be visible at
+            ;; the center coord on every w1-focused snapshot.
+            (let ((p (sample-pixel cx cy)))
+              (check (format nil "Ω3a-content[~a] — w1 center pixel red (got ~a)" i p)
+                     (pixel-equals p 255 0 0)))
+            (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.2)
+            (push (getf (region-hash x0 y0 x1 y1) :|sha256|) hashes-w2)
+            (let ((p (sample-pixel cx cy)))
+              (check (format nil "Ω3b-content[~a] — w2 center pixel green (got ~a)" i p)
+                     (pixel-equals p 0 255 0))))
+          (check (format nil "Ω3a — every w1-focused hash equal (~a)" hashes-w1)
+                 (every (lambda (h) (string= h (first hashes-w1))) hashes-w1))
+          (check (format nil "Ω3b — every w2-focused hash equal (~a)" hashes-w2)
+                 (every (lambda (h) (string= h (first hashes-w2))) hashes-w2))
+          (check (format nil "Ω3c — w1 hash ≠ w2 hash (~a vs ~a)"
+                         (first hashes-w1) (first hashes-w2))
+                 (not (string= (first hashes-w1) (first hashes-w2))))))
 
 ;;; ── Ω4: page change on non-focused window invisible in raster ───
 
@@ -385,48 +395,165 @@
                                   (+ (getf pr :|x|) (getf pr :|w|))
                                   (+ (getf pr :|y|) (getf pr :|h|))
                                   "#FF00FF")))
-            (check (format nil "Ω12 — rotated bbox aspect inverted (w1 w/h=~a vs w2 w/h=~a)"
-                           (and b1 (and (getf b1 :|h|) (not (zerop (getf b1 :|h|))))
-                                       (/ (float (getf b1 :|w|))
-                                          (float (getf b1 :|h|))))
-                           (and b2 (and (getf b2 :|h|) (not (zerop (getf b2 :|h|))))
-                                       (/ (float (getf b2 :|w|))
-                                          (float (getf b2 :|h|)))))
-                   (and b1 b2
-                        (not (zerop (getf b1 :|h|)))
-                        (not (zerop (getf b2 :|h|)))
-                        ;; w1: wide-and-short (w/h > 1). w2 rotated 90°:
-                        ;; should be tall-and-narrow (w/h < 1).
-                        (let ((r1 (/ (float (getf b1 :|w|)) (float (getf b1 :|h|))))
-                              (r2 (/ (float (getf b2 :|w|)) (float (getf b2 :|h|)))))
-                          (and (> r1 1.5) (< r2 0.7)))))))
+            ;; v0.37 strict: was a loose aspect-ratio check (r1 > 1.5,
+            ;; r2 < 0.7).  Strengthen to expected pixel dimensions.
+            ;; Overlay rect page-norm (0.2, 0.4, 0.8, 0.5) on a pr-sized
+            ;; page: width = (0.8 - 0.2) * pr.w = 0.6 * pr.w, height =
+            ;; (0.5 - 0.4) * pr.h = 0.1 * pr.h.
+            ;; w1 rotation=0 → bbox ≈ (0.6*pr.w, 0.1*pr.h)
+            ;; w2 rotation=90 → bbox swaps → (0.1*pr.h, 0.6*pr.w)
+            ;; Tolerance ±15% absorbs anti-aliasing / sub-pixel rounding;
+            ;; tighter than the old "1.5/0.7" ratio.
+            (let ((exp-w1-w (round (* 0.6 (getf pr :|w|))))
+                  (exp-w1-h (round (* 0.1 (getf pr :|h|))))
+                  (exp-w2-w (round (* 0.1 (getf pr :|h|))))
+                  (exp-w2-h (round (* 0.6 (getf pr :|w|))))
+                  (tol 0.15))
+              (check (format nil "Ω12 — w1 bbox dims (~ax~a, expect ≈ ~ax~a ±~a%)"
+                             (and b1 (getf b1 :|w|)) (and b1 (getf b1 :|h|))
+                             exp-w1-w exp-w1-h (round (* 100 tol)))
+                     (and b1 (getf b1 :|w|) (getf b1 :|h|)
+                          (< (abs (- (getf b1 :|w|) exp-w1-w))
+                             (* tol exp-w1-w))
+                          (< (abs (- (getf b1 :|h|) exp-w1-h))
+                             (* tol exp-w1-h))))
+              (check (format nil "Ω12 — w2 bbox dims (~ax~a, expect ≈ ~ax~a ±~a%)"
+                             (and b2 (getf b2 :|w|)) (and b2 (getf b2 :|h|))
+                             exp-w2-w exp-w2-h (round (* 100 tol)))
+                     (and b2 (getf b2 :|w|) (getf b2 :|h|)
+                          (< (abs (- (getf b2 :|w|) exp-w2-w))
+                             (* tol exp-w2-w))
+                          (< (abs (- (getf b2 :|h|) exp-w2-h))
+                             (* tol exp-w2-h)))))))
 
-;;; ── Ω13: visual selection drawn into raster, per-window ─────────
+;;; ── Ω13: selection per-window — state + raster ──────────────────
 ;;;
-;;; v0.15.1 wires view/selection-set. Selection visually paints over
-;;; the document. Test: set selection on w1 (focused), sample a pixel
-;;; in the selected region — should be a non-white color (selection
-;;; highlight). Then focus to w2 (no selection) — same coords should
-;;; be white again.
+;;; v0.37 fixup: was originally a fixed-coord pixel-sample test
+;;; ("selection paints at coord X on w1, not on w2 at same coord").
+;;; Failed reliably on Docker Desktop macOS because selection paint
+;;; goes through DocumentView::absolute_to_window_pos_in_pixels,
+;;; which depends on Qt widget sizing that's unreliable when the
+;;; QOpenGLWidget can't materialise a real GL context.  The
+;;; selection rect collapses to zero area in that environment, so
+;;; sample-pixel at the *supposed* selection coord sees the same
+;;; background color on both windows even when state is correctly
+;;; isolated.
+;;;
+;;; Replaced with assertions that test the same contract via
+;;; primitives that don't depend on DV transforms:
+;;;   (a) wire state: view/selection-get returns :|active| t for w1
+;;;       and (anything-not-t) for w2 — state IS isolated per window
+;;;   (b) raster delta (w1 baseline vs w1 with sel): region-hash
+;;;       must differ — paint pipeline DOES fire when selection set
+;;;   (c) focus isolation: with sel set on w1 only, raster hash
+;;;       differs between w1-focused and w2-focused — focus drives
+;;;       which window's overlays paint into the raster
+;;;
+;;; (b)/(c) use region-hash (per-pixel SHA-256) which is already
+;;; proven deterministic in this driver — see Ω3a/b/c above.
 
-        (format t "~%── Ω13: visual selection appears in raster on focused window only ──~%")
-        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.2)
+        (format t "~%── Ω13: selection per-window (state + raster) ──~%")
+        ;; v0.37 fixup: reset DV-affecting state on both windows before
+        ;; the selection-paint check.  Earlier Ω steps (Ω12 specifically)
+        ;; leave w2 at rotation=90 and the live DV at non-default state;
+        ;; in headless Docker Desktop the win-focus rotation-resync isn't
+        ;; reliable, leaving DV's coord transform in a half-rotated state
+        ;; that returns degenerate rects for selection paint.  Forcing
+        ;; both windows back to rotation=0 + zoom=1 + page=0 + offset 0
+        ;; gives the selection-paint code a clean DV to work with.
+        (limn:call "view/set" :|win-id| "w1"
+                    :|engine-params| (list :|rotation| 0))
+        (limn:call "view/set" :|win-id| w2
+                    :|engine-params| (list :|rotation| 0))
+        (limn:call "view/set" :|win-id| "w1"
+                    :|zoom| 1.0 :|page| 0 :|offset-y| 0.0)
+        (limn:call "view/set" :|win-id| w2
+                    :|zoom| 1.0 :|page| 0 :|offset-y| 0.0)
+        (limn:call "bridge/win-focus" :|win-id| "w1") (sleep 0.3)
         (clear-ov "w1") (clear-ov w2) (sleep 0.2)
         (limn:call "view/selection-clear" :|win-id| "w1")
         (limn:call "view/selection-clear" :|win-id| w2)
-        (limn:call "view/selection-set" :|win-id| "w1"
-                    :|begin| '(:|page| 0 :|x| 0.2 :|y| 0.2)
-                    :|end|   '(:|page| 0 :|x| 0.6 :|y| 0.22))
-        (sleep 0.3)
-        (let ((pr (page-pixel-rect)))
-          (when pr
-            (multiple-value-bind (cx cy) (norm-to-px-xy 0.4 0.21 pr)
-              (let ((p-w1-sel (sample-pixel cx cy)))
-                (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.3)
-                (let ((p-w2-nosel (sample-pixel cx cy)))
-                  (check "Ω13 — selection visible on w1 but absent on w2"
-                         (and p-w1-sel p-w2-nosel
-                              (not (pixels-near p-w1-sel p-w2-nosel 20)))))))))
+        (sleep 0.2)
+        (let* ((pr (page-pixel-rect))
+               (x0 (getf pr :|x|)) (y0 (getf pr :|y|))
+               (x1 (+ x0 (getf pr :|w|))) (y1 (+ y0 (getf pr :|h|)))
+               (h-baseline (getf (region-hash x0 y0 x1 y1) :|sha256|)))
+          (limn:call "view/selection-set" :|win-id| "w1"
+                      :|begin| '(:|page| 0 :|x| 0.2 :|y| 0.2)
+                      :|end|   '(:|page| 0 :|x| 0.6 :|y| 0.22))
+          (sleep 0.3)
+          (let* ((sg-w1 (limn/bridge:response-data
+                          (limn:call "view/selection-get" :|win-id| "w1")))
+                 (sg-w2 (limn/bridge:response-data
+                          (limn:call "view/selection-get" :|win-id| w2)))
+                 (h-w1-sel (getf (region-hash x0 y0 x1 y1) :|sha256|)))
+            ;; (a) wire-level state isolation
+            (check (format nil "Ω13a — w1 selection active (got active=~a)"
+                           (getf sg-w1 :|active|))
+                   (eq (getf sg-w1 :|active|) t))
+            (check (format nil "Ω13b — w2 selection inactive (got active=~a)"
+                           (getf sg-w2 :|active|))
+                   (not (eq (getf sg-w2 :|active|) t)))
+            ;; (c) raster delta on w1 — paint pipeline fired
+            (check (format nil "Ω13c — w1 raster changed after sel set (~a → ~a)"
+                           (and h-baseline (subseq h-baseline 0 8))
+                           (and h-w1-sel  (subseq h-w1-sel 0 8)))
+                   (and h-baseline h-w1-sel
+                        (not (string= h-baseline h-w1-sel))))
+            ;; (e) v0.37 fixup: restore positioning verification.
+            ;; (c) only proves "something painted", not "painted in a
+            ;; sensible location".  Use test/region-bbox to find where
+            ;; yellow (#FFFF00) actually ended up; assert that the
+            ;; bbox is non-null AND its center falls within the page
+            ;; area pr.  This catches "selection painted but in some
+            ;; nonsense rect (e.g. zero-area or way off-page)" without
+            ;; baking in a single coord-system assumption: page-pixel-
+            ;; rect can disagree with overlay_raster.width() across
+            ;; multi-window setups, so a fixed (cx, cy) sample-pixel
+            ;; check is brittle; region-bbox with a containment check
+            ;; is robust.  Same strength contract as the original
+            ;; (paint visible in the expected region), stronger
+            ;; failure messages (bbox printed).
+            (let* ((g (limn/bridge:response-data
+                        (limn:call "test/grab-window" :|win-id| "w1")))
+                   (gw (getf g :|width|))
+                   (gh (getf g :|height|))
+                   (yb (and gw gh
+                            (limn/bridge:response-data
+                              (limn:call "test/region-bbox"
+                                         :|x0| 0 :|y0| 0
+                                         :|x1| gw :|y1| gh
+                                         :|match-color| "#FFFF00")))))
+              (check (format nil "Ω13e — yellow selection bbox exists (~s)" yb)
+                     (and yb (getf yb :|w|) (getf yb :|h|)
+                          (> (getf yb :|w|) 0) (> (getf yb :|h|) 0)))
+              ;; v0.37 strict: bbox must match expected page-norm
+              ;; coords ±15% (selection at (0.2, 0.2) → (0.6, 0.22)
+              ;; on a pr-sized page).  With C++ simplified-math path
+              ;; for default-state windows, this should match exactly
+              ;; modulo rounding.
+              (when (and yb (getf yb :|w|))
+                (let ((exp-x (round (* 0.2 (getf pr :|w|))))
+                      (exp-y (round (* 0.2 (getf pr :|h|))))
+                      (exp-w (round (* (- 0.6 0.2) (getf pr :|w|))))
+                      (exp-h (round (* (- 0.22 0.2) (getf pr :|h|))))
+                      (tol 0.15))
+                  (check (format nil "Ω13f — yellow bbox (~ax~a at ~a,~a) matches expected (~ax~a at ~a,~a) ±~a%"
+                                 (getf yb :|w|) (getf yb :|h|)
+                                 (getf yb :|x|) (getf yb :|y|)
+                                 exp-w exp-h exp-x exp-y (round (* 100 tol)))
+                         (and (< (abs (- (getf yb :|x|) exp-x)) (* tol exp-w))
+                              (< (abs (- (getf yb :|y|) exp-y)) (* tol (max exp-h 10)))
+                              (< (abs (- (getf yb :|w|) exp-w)) (* tol exp-w))
+                              (< (abs (- (getf yb :|h|) exp-h)) (* tol (max exp-h 10))))))))
+            ;; (d) focus to w2 → raster differs from w1-with-sel
+            (limn:call "bridge/win-focus" :|win-id| w2) (sleep 0.3)
+            (let ((h-w2 (getf (region-hash x0 y0 x1 y1) :|sha256|)))
+              (check (format nil "Ω13d — w2 raster ≠ w1-with-sel raster (~a vs ~a)"
+                             (and h-w1-sel (subseq h-w1-sel 0 8))
+                             (and h-w2    (subseq h-w2 0 8)))
+                     (and h-w1-sel h-w2
+                          (not (string= h-w1-sel h-w2)))))))
 
         ;; cleanup w2
         (ignore-errors (limn:call "bridge/win-close" :|win-id| w2)))

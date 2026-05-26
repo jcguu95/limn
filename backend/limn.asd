@@ -86,4 +86,7 @@
     (:file "limn-auto-revert" :depends-on ("limn-file-notify"))
     (:file "limn-indent" :depends-on ("limn-auto-revert"))
     (:file "limn-query-replace" :depends-on ("limn-indent"))
-    (:file "limn" :depends-on ("limn-query-replace"))))
+    ;; v0.37 Phase B: ships sane defaults (M-x, M-r, which-key on).
+    ;; Late in chain so it can use completion + which-key directly.
+    (:file "limn-default-config" :depends-on ("limn-query-replace"))
+    (:file "limn" :depends-on ("limn-default-config"))))

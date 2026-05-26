@@ -69,6 +69,17 @@ fc-cache -f > /tmp/fc-cache.log 2>&1 || true
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
 
+# v0.37 fixup: force Qt's xcb backend to use EGL for GL context creation
+# instead of GLX.  Xvfb's GLX module can't expose RGB visuals (the
+# "couldn't find RGB GLX visual or fbconfig" error from glxinfo), so the
+# default xcb_glx integration fails to materialise QOpenGLWidget contexts
+# → "QOpenGLWidget: Failed to create context".  Mesa's libEGL_mesa.so
+# + EGL surfaceless works fine over Xvfb without needing a real GLX
+# visual.  This unblocks the DV-dependent paint pipeline (selection
+# rect, annotation rect at zoom > 1) that batch-os-per-window Ω13c/d
+# and similar pixel-paint tests rely on.
+export QT_XCB_GL_INTEGRATION=xcb_egl
+
 # v0.16.1: tell Qt to use fcitx5 as IM module. With fcitx5 installed
 # (via nixpkgs.fcitx5 in Dockerfile), Qt's xcb backend will route
 # QInputMethodEvent through fcitx, enabling REAL Chinese / Japanese

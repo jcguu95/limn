@@ -101,7 +101,14 @@
                                        (getf pr :|w|) (getf pr :|h|)
                                        "#3366ff"))))
       (check (format nil "Ω1 — region visible before edit (bbox=~s)" bbox)
-             (not (null bbox))))
+             (not (null bbox)))
+      ;; v0.37 strict: region selects 5 chars (offset 3..8) of
+      ;; "hello world!!!!!", sensible dims for single-line text.
+      (when bbox
+        (check (format nil "Ω1 — region bbox dims sensible (30..150 × 8..40, got ~ax~a)"
+                       (getf bbox :|w|) (getf bbox :|h|))
+               (and (>= (getf bbox :|w|) 30) (<= (getf bbox :|w|) 150)
+                    (>= (getf bbox :|h|) 8)  (<= (getf bbox :|h|) 40)))))
 
     ;; Ω2 — real key press（不手動 note-command），靠 dispatch 自動 fire
     (type-str "X")

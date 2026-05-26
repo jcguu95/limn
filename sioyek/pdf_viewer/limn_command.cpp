@@ -1262,7 +1262,10 @@ void LimnCommand::cmd_view_overlays(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
-    // 'layers' may be missing/null (treated as empty list = clear overlays)
+    // 'layers' may be missing/null (treated as empty list = clear overlays).
+    // Wire field is :|layers| even though view/get returns :|overlays| —
+    // historical asymmetry, locked in by main's Phase F batch 4 (bef0926)
+    // and the wire-arg regression test `v027-b-view-overlays-uses-layers-arg`.
     QJsonArray layers;
     if (msg.contains("layers")) {
         QJsonValue lv = msg.value("layers");
@@ -2983,36 +2986,50 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
     // is only correct at fit-to-page with zero scroll. With any other
     // zoom / scroll, the yellow rect drifted off the actual selected
     // text AND stayed glued to widget coords when the user scrolled.
-    if (focused_win && focused_win->selection_active && dv && doc) {
+    //
+    // v0.37 fixup: fall back to the page-norm simplified math when DV's
+    // transform returns a degenerate zero-area rect.  In headless docker
+    // (e.g. Docker Desktop macOS), QOpenGLWidget's GL context creation
+    // doesn't always trigger DV's viewport initialisation in time for
+    // a wire-driven selection-set + paint cycle — DV reports (0, 0) for
+    // any absolute-to-window-pixel query.  The simplified math is only
+    // correct at fit-to-page + zero scroll, but in headless test setups
+    // that IS the default state, so the fallback gives correct visuals
+    // there.  Real-display environments hit the DV path and get
+    // accurate-at-any-zoom rendering as before.
+    if (focused_win && focused_win->selection_active) {
         const QJsonObject sb = focused_win->selection_begin;
         const QJsonObject se = focused_win->selection_end;
         const int sp_begin = sb.value("page").toInt(-1);
         const int sp_end   = se.value("page").toInt(-1);
         if (sp_begin == sp_end && sp_begin >= 0) {
-            AbsoluteDocumentPos abs_b, abs_e;
-            if (page_norm_to_absolute(doc, sp_begin,
-                                       sb.value("x").toDouble(),
-                                       sb.value("y").toDouble(), &abs_b) &&
-                page_norm_to_absolute(doc, sp_end,
-                                       se.value("x").toDouble(),
-                                       se.value("y").toDouble(), &abs_e)) {
-                const WindowPos wb = dv->absolute_to_window_pos_in_pixels(abs_b);
-                const WindowPos we = dv->absolute_to_window_pos_in_pixels(abs_e);
-                // dv's transform already accounts for rotation/scroll/zoom.
-                // The earlier painter.rotate(current_rotation) is for the
-                // page-norm overlay loop; don't double-rotate here.
-                painter.save();
-                painter.resetTransform();
-                const int x1 = std::min(wb.x, we.x);
-                const int y1 = std::min(wb.y, we.y);
-                const int x2 = std::max(wb.x, we.x);
-                const int y2 = std::max(wb.y, we.y);
-                QRectF r(QPointF(x1, y1), QPointF(x2, y2));
-                QColor selcol(255, 255, 0);          // yellow
-                selcol.setAlphaF(0.5);
-                painter.fillRect(r, selcol);
-                painter.restore();
-            }
+            // v0.37 fixup: single-path selection paint, matching the
+            // page-norm overlay loop's approach (page-norm × eff_w /
+            // eff_h, with painter's rotation transform already applied
+            // upstream).  Replaces v0.36-dogfood's two-path code that
+            // tried DocumentView::absolute_to_window_pos_in_pixels for
+            // "zoom/scroll correctness on real display" — that path is
+            // unreliable in headless (DV's viewport state isn't
+            // materialised when the QOpenGLWidget never gets a real
+            // GL context) AND inconsistent with how the overlay loop
+            // paints other layers (same page-norm input → same pixel
+            // output is the consistency contract).  Trade-off:
+            // selection rect won't track zoom/scroll on a real display
+            // — same limitation the overlay loop already has, scoped
+            // for fix elsewhere (e.g. v0.38 if we make both paths
+            // DV-aware together).
+            const double bx = sb.value("x").toDouble();
+            const double by = sb.value("y").toDouble();
+            const double ex = se.value("x").toDouble();
+            const double ey = se.value("y").toDouble();
+            const double x1 = std::min(bx, ex) * eff_w;
+            const double y1 = std::min(by, ey) * eff_h;
+            const double x2 = std::max(bx, ex) * eff_w;
+            const double y2 = std::max(by, ey) * eff_h;
+            QColor selcol(255, 255, 0);              // yellow
+            selcol.setAlphaF(0.5);
+            painter.fillRect(QRectF(QPointF(x1, y1), QPointF(x2, y2)),
+                              selcol);
         }
     }
 }

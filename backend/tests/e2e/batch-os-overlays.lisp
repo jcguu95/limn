@@ -129,11 +129,37 @@
     (let* ((d (limn/bridge:response-data (limn:call "view/get" :|win-id| "w1")))
            (ov (getf d :|overlays|))
            (oc (getf d :|overlay-count|)))
-      (check (format nil "Ω1 — :overlay-count == 1 (got ~a)" oc)
+      (check (format nil "Ω1a wire — :overlay-count == 1 (got ~a)" oc)
              (eql oc 1))
-      (check (format nil "Ω1 — :overlays list len 1 (got ~a)"
+      (check (format nil "Ω1a wire — :overlays list len 1 (got ~a)"
                      (and (listp ov) (length ov)))
              (and (listp ov) (= 1 (length ov)))))
+    ;; v0.37 strict: was wire-only.  Add pixel check: the red rect
+    ;; must visually appear at the expected page-norm coords.  Red
+    ;; rect at norm (0.1, 0.1, 0.5, 0.5) → page-pixel (pr.x + 0.1*pr.w,
+    ;; pr.y + 0.1*pr.h, ...) for ~60% page width × 40% page height.
+    (let* ((pr (page-pixel-rect))
+           (bbox (and pr
+                      (limn/bridge:response-data
+                       (limn:call "test/region-bbox"
+                                  :|x0| 0 :|y0| 0
+                                  :|x1| (+ (getf pr :|x|) (getf pr :|w|))
+                                  :|y1| (+ (getf pr :|y|) (getf pr :|h|))
+                                  :|match-color| "#FF0000")))))
+      (check (format nil "Ω1b pixel — red rect bbox exists (~s)" bbox)
+             (and bbox (getf bbox :|w|) (getf bbox :|h|)
+                  (> (getf bbox :|w|) 0) (> (getf bbox :|h|) 0)))
+      ;; Expected dims: (0.5 - 0.1) * pr.w = 0.4 * pr.w wide,
+      ;; (0.5 - 0.1) * pr.h = 0.4 * pr.h tall, ±15%.
+      (when (and bbox pr (getf bbox :|w|))
+        (let ((exp-w (round (* 0.4 (getf pr :|w|))))
+              (exp-h (round (* 0.4 (getf pr :|h|))))
+              (tol 0.15))
+          (check (format nil "Ω1c pixel — bbox dims match page-norm (~ax~a vs expected ~ax~a ±~a%)"
+                         (getf bbox :|w|) (getf bbox :|h|)
+                         exp-w exp-h (round (* 100 tol)))
+                 (and (< (abs (- (getf bbox :|w|) exp-w)) (* tol exp-w))
+                      (< (abs (- (getf bbox :|h|) exp-h)) (* tol exp-h)))))))
 
 ;;; ── Ω2: per-pixel RED color ──────────────────────────────────────
 

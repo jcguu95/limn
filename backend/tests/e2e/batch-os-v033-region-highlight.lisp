@@ -120,10 +120,20 @@
                                        "#3366ff"))))
       (check (format nil "Ω1c — region blue area visible (bbox = ~s)" bbox)
              (not (null bbox)))
-      ;; Ω2: width 應 > 0；多 codepoint 寬
-      (check (format nil "Ω2 — region bbox width > 10 px (~s)"
+      ;; v0.37 strict: was just "> 10 px" — catches zero but not
+      ;; wrong-position / wrong-size bugs.  Region selects 5 chars
+      ;; (offset 3..8 in "hello world example", = "lo wo").  At
+      ;; typical text-widget font, 5 chars ≈ 30-100 px wide, single
+      ;; line 10-40 px tall, near widget top-left (x,y < 100).
+      (check (format nil "Ω2 — region bbox width sensible (30..150 px, got ~s)"
                      (and bbox (getf bbox :|w|)))
-             (and bbox (> (getf bbox :|w|) 10)))))
+             (and bbox (>= (getf bbox :|w|) 30) (<= (getf bbox :|w|) 150)))
+      (check (format nil "Ω2 — region bbox height sensible (single line, 8..40 px, got ~s)"
+                     (and bbox (getf bbox :|h|)))
+             (and bbox (>= (getf bbox :|h|) 8) (<= (getf bbox :|h|) 40)))
+      (check (format nil "Ω2 — region bbox positioned at text widget top (x<100, y<100, got ~s)"
+                     (and bbox (list (getf bbox :|x|) (getf bbox :|y|))))
+             (and bbox (< (getf bbox :|x|) 100) (< (getf bbox :|y|) 100)))))
 
   (format t "~%── v033-region OS e2e results ──~%")
   (if (null *failures*)

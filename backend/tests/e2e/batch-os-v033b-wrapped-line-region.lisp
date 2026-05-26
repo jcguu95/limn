@@ -134,7 +134,15 @@
       (when bbox
         (check (format nil "Ω2 — bbox height >= 25 (2+ wrap lines, got ~A)"
                        (getf bbox :|h|))
-               (>= (getf bbox :|h|) 25))))
+               (>= (getf bbox :|h|) 25))
+        ;; v0.37 strict: also bound from above + verify width spans
+        ;; reasonable portion of widget (wrapped → fills line width).
+        (check (format nil "Ω2 — bbox height upper bound (≤200 px, got ~A)"
+                       (getf bbox :|h|))
+               (<= (getf bbox :|h|) 200))
+        (check (format nil "Ω2 — bbox width fills wrap line (>=50 px, got ~A)"
+                       (getf bbox :|w|))
+               (>= (getf bbox :|w|) 50))))
 
     ;; Ω3 — buffer/codepoint-rects returns >= 2 rects for the same range
     (let* ((r (limn:call "buffer/codepoint-rects"
