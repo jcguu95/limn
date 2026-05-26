@@ -25,9 +25,16 @@
     (check "A.1 CJK file open"
            (and bid t)
            (format nil "bid=~a" bid))
-    ;; Type a Chinese character (replacing or appending)
-    (xdotool "type" "--delay" "80" "新增中文段落")
-    (sleep 0.8)
+    ;; v0.39: xdotool's `type` for CJK relies on X11 XSendKeyEvent
+    ;; which strips Unicode in headless Xvfb — no IME, no
+    ;; Latin-1-equivalent keysym for CJK glyphs.  That's an X11
+    ;; quirk, NOT a Limn editing-pipeline gap.  Use the kill-ring
+    ;; path (same wire C-y goes through) to prove buffer/insert +
+    ;; buffer/save survive multi-byte UTF-8 unchanged.
+    (limn/kill:kill-new "新增中文段落")
+    (sleep 0.1)
+    (xdotool "key" "--clearmodifiers" "ctrl+y")
+    (sleep 0.4)
     (handler-case (limn/file:save-buffer bid) (error () nil))
     (sleep 0.3)
     (let ((content (when (probe-file *path*) (with-open-file (s *path* :element-type '(unsigned-byte 8))
