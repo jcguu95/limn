@@ -389,6 +389,15 @@
                         (find-symbol "INSTALL-DEFAULT-BINDINGS"
                                      :limn/runtime))))
       (when install (funcall install *global-keymap*)))
+    ;; v0.38 B5 fix: install M-x / M-r / which-key defaults.  This was
+    ;; exported by limn/default-config since v0.37 Phase B but never
+    ;; called from start, so M-letter keystrokes never had bindings to
+    ;; dispatch into (W27/W28 dogfood finding).
+    (let ((install-defaults (and (find-package :limn/default-config)
+                                   (find-symbol "INSTALL-DEFAULTS"
+                                                :limn/default-config))))
+      (when (and install-defaults (fboundp install-defaults))
+        (funcall (symbol-function install-defaults) *global-keymap*)))
     (%install-key-handler)
     (%install-buffer-handlers)
     ;; Register the default engine→mode mapping and bootstrap mode-buffers

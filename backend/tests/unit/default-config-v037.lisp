@@ -85,3 +85,26 @@
         (if orig-env
             (sb-posix:setenv "LIMN_INIT" orig-env 1)
             (sb-posix:unsetenv "LIMN_INIT"))))))
+
+;;; ═════════════════════════════════════════════════════════════════════
+;;; v0.38 B5 regression: ensure install-defaults is actually called
+;;; somewhere on limn:start.  Pre-v0.38 it was exported but never
+;;; invoked, so M-x/M-r were unbound at runtime even though tests
+;;; passed (tests called install-defaults directly).
+;;;
+;;; This test reads limn.lisp source to check it references
+;;; install-defaults.  It's a smoke test on the wiring, not a runtime
+;;; check (start requires socket).
+;;; ═════════════════════════════════════════════════════════════════════
+
+(deftest v038-b5-limn-start-calls-install-defaults
+  "limn.lisp source should call limn/default-config:install-defaults."
+  (let* ((path (merge-pathnames
+                "../../limn.lisp"
+                (or *load-pathname* *default-pathname-defaults*)))
+         (text (when (probe-file path)
+                 (with-open-file (s path)
+                   (let ((b (make-string (file-length s))))
+                     (read-sequence b s) b)))))
+    (assert-true (and text (search "INSTALL-DEFAULTS" text :test #'string-equal))
+                 "limn.lisp must reference install-defaults to wire M-x/M-r")))
