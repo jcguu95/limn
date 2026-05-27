@@ -268,6 +268,9 @@ private:
     struct LimnFaceEntry {
         QString foreground;   // "#RRGGBB" or empty
         QString background;
+        // Route B: font-family for this face (e.g. "Terminus").  Empty means
+        // "inherit from the global status_font config / JetBrainsMono fallback".
+        QString family;
         bool    bold       = false;
         bool    italic     = false;
         bool    underline  = false;

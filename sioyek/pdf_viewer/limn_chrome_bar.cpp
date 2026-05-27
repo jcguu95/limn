@@ -3,6 +3,11 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 
+// Forward-declare font helpers from utils.cpp.  We avoid #include "utils.h"
+// here because that header transitively pulls in mupdf/fitz.h and other heavy
+// dependencies that have no place in a thin Qt widget.
+QString get_status_font_face_name();
+
 LimnChromeBar::LimnChromeBar(QWidget* parent) : QWidget(parent) {
     setObjectName("LimnChromeBar");
     setFocusPolicy(Qt::NoFocus);
@@ -41,19 +46,10 @@ LimnChromeBar::LimnChromeBar(QWidget* parent) : QWidget(parent) {
     root->addWidget(echo_line_);
 
     // ── minimal styling so the two rows are visually distinct ───────
-    // Modeline: muted background; echo: lighter. Stylesheets keep us
-    // independent of Qt's platform theme.
-    setStyleSheet(R"(
-        QLabel#modeline_seg {
-            background: #2c2c2c; color: #d0d0d0;
-            padding: 1px 4px;  font-size: 11px;
-        }
-        QLabel#echo_line {
-            background: #1a1a1a; color: #e8e8e8;
-            padding: 2px 8px;  font-size: 12px;
-            font-family: "Menlo","Consolas","Courier New",monospace;
-        }
-    )");
+    // Route A: use the `status_font` config value (falls back to the embedded
+    // JetBrainsMono when unset) rather than a hard-coded OS-specific cascade
+    // like "Menlo","Consolas","Courier New".
+    rebuild_stylesheet(get_status_font_face_name());
 
     refresh_echo_line();
 }
@@ -86,4 +82,37 @@ void LimnChromeBar::refresh_echo_line() {
     } else {
         echo_line_->setText(echo_text_);
     }
+}
+
+// ── Route A/B font helpers ───────────────────────────────────────────────
+
+void LimnChromeBar::rebuild_stylesheet(const QString& font_family) {
+    // Build the font-family CSS fragment.  An empty family string means "let
+    // Qt pick the platform monospace default" — we emit no font-family rule so
+    // the OS cascade applies rather than an empty/broken declaration.
+    const QString ff_rule = font_family.isEmpty()
+        ? QString()
+        : QString("font-family: \"%1\", monospace;").arg(font_family);
+
+    setStyleSheet(QString(R"(
+        QLabel#modeline_seg {
+            background: #2c2c2c; color: #d0d0d0;
+            padding: 1px 4px;  font-size: 11px;
+        }
+        QLabel#echo_line {
+            background: #1a1a1a; color: #e8e8e8;
+            padding: 2px 8px;  font-size: 12px;
+            %1
+        }
+    )").arg(ff_rule));
+}
+
+// Route B entry-point: called by LimnCommand after display/sync-faces
+// resolves a :family attribute on the "minibuffer" face.
+void LimnChromeBar::apply_face_font(const QString& family) {
+    // If the face table specified an explicit family, use it; otherwise fall
+    // back to the `status_font` config value (which itself falls back to the
+    // embedded JetBrainsMono when unconfigured).
+    const QString resolved = family.isEmpty() ? get_status_font_face_name() : family;
+    rebuild_stylesheet(resolved);
 }

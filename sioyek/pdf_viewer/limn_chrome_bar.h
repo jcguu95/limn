@@ -38,7 +38,15 @@ public:
                          const QString& prompt,
                          const QString& text);
 
+    // Route B: apply a font-family to the echo/minibuffer line at runtime.
+    // Called by LimnCommand::cmd_display_sync_faces when the "minibuffer"
+    // face carries a non-empty :family field.  Empty string → falls back to
+    // the value of the `status_font` config variable (or the embedded
+    // JetBrainsMono when that is also unset).
+    void apply_face_font(const QString& family);
+
 private:
+    void rebuild_stylesheet(const QString& font_family);
     void refresh_echo_line();
 
     // Modeline labels

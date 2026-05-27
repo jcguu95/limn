@@ -1351,11 +1351,29 @@ void LimnCommand::cmd_display_sync_faces(const QString& id, const QJsonObject& m
         LimnFaceEntry entry;
         entry.foreground = f.value("foreground").toString();
         entry.background = f.value("background").toString();
+        // Route B: parse optional font-family.  The Lisp side sends
+        // {:name "minibuffer" :family "Terminus" ...} to specify a per-face
+        // font.  Any face may carry :family; only "minibuffer" is acted upon
+        // by the chrome bar at the moment.
+        entry.family     = f.value("family").toString();
         entry.bold       = f.value("bold").toBool(false);
         entry.italic     = f.value("italic").toBool(false);
         entry.underline  = f.value("underline").toBool(false);
         face_registry_.insert(name, entry);
     }
+
+    // Route B: push the "minibuffer" face's font family (if any) to the
+    // chrome bar so the echo/minibuffer line switches font at runtime.
+    // An absent or empty :family on the minibuffer face tells the bar to
+    // fall back to the status_font config value.
+    if (LimnChromeBar* cb = chrome_of(main_widget)) {
+        const QString mb_family = [&]() -> QString {
+            auto it = face_registry_.find("minibuffer");
+            return (it != face_registry_.end()) ? it->family : QString();
+        }();
+        cb->apply_face_font(mb_family);
+    }
+
     bridge->send_ok(id);
 }
 
