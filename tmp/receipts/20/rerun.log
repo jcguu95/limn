@@ -1,3 +1,5 @@
+; caught STYLE-WARNING:
+;   reading an ignored variable: S
 
 ; --> LET UNWIND-PROTECT FLET #:CLEANUP-FUN-0 BLOCK WHEN IF CLOSE 
 ; ==>
@@ -36,7 +38,7 @@ XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
 
 ── Phase A: find-file empty path via direct call ──
   ✓ A.1 find-file empty path returns buffer-id   [buffer-id=limn-file-buf-1]
-  ✗ A.2 buffer list contains the new path   [paths=NIL]
+  ✓ A.2 buffer list contains the new path   [paths=(   /tmp/w20-fresh-1.txt)]
 
 ── Phase B: xdotool type 'hello' ──
 
@@ -45,6 +47,4 @@ XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
   ✓ D.1 file exists on disk   [/tmp/w20-fresh-1.txt]
   ✓ D.2 file content is 'hello' (xdotool type landed in buffer)   [content: "hello"]
 
-── W20 result: 5 / 6 pass ──
-FAILURES:
-  • A.2 buffer list contains the new path
+── W20 result: 6 / 6 pass ──

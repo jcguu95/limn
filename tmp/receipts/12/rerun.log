@@ -1,6 +1,3 @@
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
-; compilation finished in 0:00:00.027
-; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
 ; compilation finished in 0:00:00.031
@@ -40,11 +37,14 @@
 ;   caught 3 WARNING conditions
 ;   printed 6 notes
 
-── W30 auto-revert ──
-  bid=limn-file-buf-1
-  ✓ A.1 buffer content reads 'old content'   [content="old content"]
-  ✓ A.2 auto-revert-mode enabled   [ok]
-  external write 'new' done
-  ✓ A.3 after external write + wait, buffer content reflects 'new'   [content="new content here"]
+── W12 sidecar manual destruction ──
+  3 highlights → overlay count = 3
+  ✓ A.1 baseline: 3 highlights present   [overlays=3]
+  sidecar files before nuke: 1
+  deleted 1 sidecar files
+  ✓ A.2 sidecars existed before nuke   [1 files]
+  ✓ A.3 reopen after sidecar nuke does not crash   [ok]
+  ✓ A.4 after nuke + reopen, 0 highlights   [overlays=0]
+  ✓ A.5 limn process still alive (wire responds)
 
-── W30 result: 3 / 3 pass ──
+── W12 result: 5 / 5 pass ──

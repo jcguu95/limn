@@ -1,9 +1,7 @@
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
-; compilation finished in 0:00:00.027
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.031
+; compilation finished in 0:00:00.032
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
@@ -40,11 +38,13 @@
 ;   caught 3 WARNING conditions
 ;   printed 6 notes
 
-── W30 auto-revert ──
-  bid=limn-file-buf-1
-  ✓ A.1 buffer content reads 'old content'   [content="old content"]
-  ✓ A.2 auto-revert-mode enabled   [ok]
-  external write 'new' done
-  ✓ A.3 after external write + wait, buffer content reflects 'new'   [content="new content here"]
+── W24 預設 zoom = 150% ──
+;; loaded init: /tmp/.limn/init.lisp
+  ✓ A.1 default zoom = 1.5 after init.lisp setting   [zoom=1.5d0]
+  zoom-related symbols in limn/pdf-mode: (%ZOOM-SET PDF-ZOOM-RESET PDF-ZOOM-OUT
+                                                    PDF-ZOOM-IN
+                                                    *PDF-ZOOM-OUT-FACTOR*
+                                                    *PDF-DEFAULT-ZOOM*
+                                                    *PDF-ZOOM-IN-FACTOR*)
 
-── W30 result: 3 / 3 pass ──
+── W24 result: 1 / 1 pass ──

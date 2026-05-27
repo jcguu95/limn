@@ -1,0 +1,245 @@
+--- LIMN-LOG ---
+warning: Error disabling address space randomization: Operation not permitted
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libthread_db.so.1".
+warning: File "/nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0.8600.3-gdb.py" auto-loading has been declined by your `auto-load safe-path' set to "$debugdir:$datadir/auto-load:/nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib".
+To enable execution of this file add
+	add-auto-load-safe-path /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0.8600.3-gdb.py
+line to your configuration file "/root/.config/gdb/gdbinit".
+To completely disable this security protection add
+	set auto-load safe-path /
+line to your configuration file "/root/.config/gdb/gdbinit".
+For more information about this security protection see the
+"Auto-loading safe path" section in the GDB manual.  E.g., run from the shell:
+	info "(gdb)Auto-loading safe path"
+warning: File "/nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libgobject-2.0.so.0.8600.3-gdb.py" auto-loading has been declined by your `auto-load safe-path' set to "$debugdir:$datadir/auto-load:/nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib".
+── limn build info ─────────────────────────────────────────
+  git:    870910562367 (dirty)
+  built:  2026-05-26T22:49:28Z
+  qt:     6.11.0
+  host:   Linux_6.12.54-linuxkit_aarch64
+────────────────────────────────────────────────────────────
+[limn-bridge] listening on /tmp/limn-w10-9
+[limn-bridge] client connected
+*** stack smashing detected ***: terminated
+
+Thread 1 "limn" received signal SIGABRT, Aborted.
+0x0000ffffb04d52ac in __pthread_kill_implementation () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#0  0x0000ffffb04d52ac in __pthread_kill_implementation () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+No symbol table info available.
+#1  0x0000ffffb047c5b8 in raise () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+No symbol table info available.
+#2  0x0000ffffb0465d38 in abort () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+No symbol table info available.
+#3  0x0000ffffb04c6e68 in __libc_message_impl () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+No symbol table info available.
+#4  0x0000ffffb0550438 in __fortify_fail () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+No symbol table info available.
+#5  0x0000ffffb0551734 in __stack_chk_fail () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+No symbol table info available.
+#6  0x0000ffffb24748f0 in QWidgetPrivate::paintBackground(QPainter*, QRegion const&, QFlags<QWidgetPrivate::DrawWidgetFlag>) const () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+No symbol table info available.
+#7  0x0000ffffb2488cc0 in QWidgetPrivate::drawWidget(QPaintDevice*, QRegion const&, QPoint const&, QFlags<QWidgetPrivate::DrawWidgetFlag>, QPainter*, QWidgetRepaintManager*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+No symbol table info available.
+#8  0x0000ffffb249e0d0 in QWidgetRepaintManager::paintAndFlush() () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+No symbol table info available.
+#9  0x0000ffffb2491924 in QWidget::event(QEvent*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+No symbol table info available.
+#10 0x0000ffffb24252ac in QApplicationPrivate::notify_helper(QObject*, QEvent*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+No symbol table info available.
+#11 0x0000ffffb0c72ff8 in QCoreApplication::notifyInternal2(QObject*, QEvent*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+No symbol table info available.
+#12 0x0000ffffb0c7732c in QCoreApplicationPrivate::sendPostedEvents(QObject*, int, QThreadData*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+No symbol table info available.
+#13 0x0000ffffb0fc836c in postEventSourceDispatch(_GSource*, int (*)(void*), void*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+No symbol table info available.
+#14 0x0000ffffafba3160 in g_main_context_dispatch_unlocked () from /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0
+No symbol table info available.
+#15 0x0000ffffafba694c in g_main_context_iterate_unlocked.isra () from /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0
+No symbol table info available.
+#16 0x0000ffffafba731c in g_main_context_iteration () from /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0
+No symbol table info available.
+#17 0x0000ffffb0fc7804 in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+No symbol table info available.
+#18 0x0000ffffb0c81f8c in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+No symbol table info available.
+#19 0x0000ffffb0c7c5e8 in QCoreApplication::exec() () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+No symbol table info available.
+#20 0x0000aaaab69d7bd8 in main ()
+No symbol table info available.
+
+Thread 16 (Thread 0xffff99216d00 (LWP 76) "limn"):
+#0  0x0000ffffb04dd2ac in __syscall_cancel_arch () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb04cf2b4 in __internal_syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb04cf350 in __syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb053b508 in fsync () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000aaaab6aa2310 in unixSync ()
+#5  0x0000aaaab6ad9534 in sqlite3PagerCommitPhaseOne.part.0 ()
+#6  0x0000aaaab6ad96a0 in sqlite3BtreeCommitPhaseOne.part.0 ()
+#7  0x0000aaaab6ada350 in sqlite3VdbeHalt ()
+#8  0x0000aaaab6b0552c in sqlite3VdbeExec ()
+#9  0x0000aaaab6b05db4 in sqlite3_step ()
+#10 0x0000aaaab6b06f98 in sqlite3_exec ()
+#11 0x0000aaaab69e08f4 in DatabaseManager::insert_document_hash(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) ()
+#12 0x0000aaaab6a123e0 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<Document::load_document_metadata_from_db()::{lambda()#1}> > >::_M_run() ()
+#13 0x0000ffffb080507c in execute_native_thread_routine () from /nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib/lib/libstdc++.so.6
+#14 0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#15 0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 15 (Thread 0xffff9a236d00 (LWP 75) "limn"):
+#0  0x0000ffffb3dbb4dc in FT_New_Size () from /nix/store/pmab4c96570ifwqn67vv8af8gakl3pky-freetype-2.14.2/lib/libfreetype.so.6
+#1  0x0000ffffb3dbc280 in ft_open_face_internal () from /nix/store/pmab4c96570ifwqn67vv8af8gakl3pky-freetype-2.14.2/lib/libfreetype.so.6
+#2  0x0000ffffb3dbd474 in FT_New_Memory_Face () from /nix/store/pmab4c96570ifwqn67vv8af8gakl3pky-freetype-2.14.2/lib/libfreetype.so.6
+#3  0x0000ffffb41b9114 in fz_new_font_from_buffer () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#4  0x0000ffffb4281c20 in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#5  0x0000ffffb42829e4 in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#6  0x0000ffffb4282ca0 in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#7  0x0000ffffb428471c in pdf_load_font () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#8  0x0000ffffb4298080 in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#9  0x0000ffffb429a49c in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#10 0x0000ffffb429adac in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#11 0x0000ffffb429bb9c in pdf_process_raw_contents () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#12 0x0000ffffb429bce8 in pdf_process_contents () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#13 0x0000ffffb42dd31c in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#14 0x0000ffffb42ddbb4 in pdf_run_page_contents_with_usage () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#15 0x0000ffffb42ddc30 in pdf_run_page_contents () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#16 0x0000ffffb42d2b04 in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#17 0x0000ffffb416e110 in fz_run_page_contents () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#18 0x0000ffffb42481f0 in fz_new_stext_page_from_page_with_cookie () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#19 0x0000ffffb42482ec in fz_new_stext_page_from_page_number () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#20 0x0000aaaab6a10d28 in Document::index_document(bool*)::{lambda()#1}::operator()() const ()
+#21 0x0000ffffb080507c in execute_native_thread_routine () from /nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib/lib/libstdc++.so.6
+#22 0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#23 0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 13 (Thread 0xffff9aa46d00 (LWP 73) "limn"):
+#0  0x0000ffffb04d6950 in pthread_mutex_lock@@GLIBC_2.17 () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000aaaab6a52c34 in lock_mutex(void*, int) ()
+#2  0x0000ffffb41e2d1c in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#3  0x0000ffffb41e3000 in fz_calloc () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#4  0x0000ffffb4282a94 in pdf_new_font_desc () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#5  0x0000ffffb4282c4c in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#6  0x0000ffffb428471c in pdf_load_font () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#7  0x0000ffffb4298080 in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#8  0x0000ffffb429a49c in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#9  0x0000ffffb429adac in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#10 0x0000ffffb429bb9c in pdf_process_raw_contents () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#11 0x0000ffffb429bce8 in pdf_process_contents () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#12 0x0000ffffb42dd31c in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#13 0x0000ffffb42ddbb4 in pdf_run_page_contents_with_usage () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#14 0x0000ffffb42ddc30 in pdf_run_page_contents () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#15 0x0000ffffb42d2b04 in ?? () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#16 0x0000ffffb416e110 in fz_run_page_contents () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#17 0x0000ffffb42481f0 in fz_new_stext_page_from_page_with_cookie () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#18 0x0000ffffb42482ec in fz_new_stext_page_from_page_number () from /nix/store/0qrnrrd7lj9q91hbck4a8f72cz8figrf-mupdf-1.27.2/lib/libmupdf.so.27.2
+#19 0x0000aaaab6a04430 in Document::get_stext_with_page_number(fz_context*, int, fz_document*) ()
+#20 0x0000aaaab6a0ca40 in Document::detect_paper_name[abi:cxx11](fz_context*, fz_document*) ()
+#21 0x0000aaaab6a1d1ec in Document::load_page_dimensions(bool)::{lambda()#1}::operator()() const ()
+#22 0x0000ffffb080507c in execute_native_thread_routine () from /nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib/lib/libstdc++.so.6
+#23 0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#24 0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 8 (Thread 0xffff9b7eed00 (LWP 65) "QDBusConnection"):
+#0  0x0000ffffb04dd2a8 in __syscall_cancel_arch () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb04cf2b4 in __internal_syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb04cf350 in __syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb0537408 in ppoll () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000ffffafba6a08 in g_main_context_iterate_unlocked.isra () from /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0
+#5  0x0000ffffafba731c in g_main_context_iteration () from /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0
+#6  0x0000ffffb0fc7804 in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#7  0x0000ffffb0c81f8c in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#8  0x0000ffffb0dc4754 in QThread::exec() () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#9  0x0000ffffaf705404 in QDBusConnectionManager::run() () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6DBus.so.6
+#10 0x0000ffffb0e778e0 in QThreadPrivate::start(void*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#11 0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#12 0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 7 (Thread 0xffff9bffed00 (LWP 64) "limn"):
+#0  0x0000ffffb04dd2a8 in __syscall_cancel_arch () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb04cf2b4 in __internal_syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb050f554 in clock_nanosleep@@GLIBC_2.17 () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb051a97c in nanosleep () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000aaaab6b249d0 in sleep_ms(unsigned int) ()
+#5  0x0000aaaab6a59488 in PdfRenderer::run_search(int) ()
+#6  0x0000ffffb080507c in execute_native_thread_routine () from /nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib/lib/libstdc++.so.6
+#7  0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#8  0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 6 (Thread 0xffffa8a87d00 (LWP 63) "limn"):
+#0  0x0000ffffb04dd2a8 in __syscall_cancel_arch () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb04cf2b4 in __internal_syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb050f554 in clock_nanosleep@@GLIBC_2.17 () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb051a97c in nanosleep () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000aaaab6b249d0 in sleep_ms(unsigned int) ()
+#5  0x0000aaaab6a58aa8 in PdfRenderer::run(int) ()
+#6  0x0000ffffb080507c in execute_native_thread_routine () from /nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib/lib/libstdc++.so.6
+#7  0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#8  0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 5 (Thread 0xffffa9297d00 (LWP 62) "limn"):
+#0  0x0000ffffb04dd2a8 in __syscall_cancel_arch () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb04cf2b4 in __internal_syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb050f554 in clock_nanosleep@@GLIBC_2.17 () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb051a97c in nanosleep () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000aaaab6b249d0 in sleep_ms(unsigned int) ()
+#5  0x0000aaaab6a58aa8 in PdfRenderer::run(int) ()
+#6  0x0000ffffb080507c in execute_native_thread_routine () from /nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib/lib/libstdc++.so.6
+#7  0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#8  0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 4 (Thread 0xffffa9aa7d00 (LWP 61) "limn"):
+#0  0x0000ffffb04dd2a8 in __syscall_cancel_arch () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb04cf2b4 in __internal_syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb050f554 in clock_nanosleep@@GLIBC_2.17 () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb051a97c in nanosleep () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000aaaab6b249d0 in sleep_ms(unsigned int) ()
+#5  0x0000aaaab6a58aa8 in PdfRenderer::run(int) ()
+#6  0x0000ffffb080507c in execute_native_thread_routine () from /nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib/lib/libstdc++.so.6
+#7  0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#8  0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 3 (Thread 0xffffaa2b7d00 (LWP 60) "limn"):
+#0  0x0000ffffb04dd2a8 in __syscall_cancel_arch () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb04cf2b4 in __internal_syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb050f554 in clock_nanosleep@@GLIBC_2.17 () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb051a97c in nanosleep () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000aaaab6b249d0 in sleep_ms(unsigned int) ()
+#5  0x0000aaaab6a58aa8 in PdfRenderer::run(int) ()
+#6  0x0000ffffb080507c in execute_native_thread_routine () from /nix/store/dcb4bsy8fcn51bw0qp3vwx8q0rzpghd5-gcc-15.2.0-lib/lib/libstdc++.so.6
+#7  0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#8  0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 2 (Thread 0xffffaab5ed00 (LWP 59) "QXcbEventQueue"):
+#0  0x0000ffffb04dd2a8 in __syscall_cancel_arch () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb04cf2b4 in __internal_syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb04cf350 in __syscall_cancel () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb0536d9c in poll () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000ffffac24d8d0 in _xcb_conn_wait () from /nix/store/dnyyyksd5hryz3bjh0s793b2k6fwsrp8-libxcb-1.17.0/lib/libxcb.so.1
+#5  0x0000ffffac24fc50 in xcb_wait_for_event () from /nix/store/dnyyyksd5hryz3bjh0s793b2k6fwsrp8-libxcb-1.17.0/lib/libxcb.so.1
+#6  0x0000ffffaaf51848 in QXcbEventQueue::run() () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/qt-6/plugins/platforms/../../../libQt6XcbQpa.so.6
+#7  0x0000ffffb0e778e0 in QThreadPrivate::start(void*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#8  0x0000ffffb04d3380 in start_thread () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#9  0x0000ffffb054296c in thread_start () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+
+Thread 1 (Thread 0xffffb3e9d020 (LWP 57) "limn"):
+#0  0x0000ffffb04d52ac in __pthread_kill_implementation () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#1  0x0000ffffb047c5b8 in raise () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#2  0x0000ffffb0465d38 in abort () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#3  0x0000ffffb04c6e68 in __libc_message_impl () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#4  0x0000ffffb0550438 in __fortify_fail () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#5  0x0000ffffb0551734 in __stack_chk_fail () from /nix/store/m8ckqvgrqjipr958qckyvgcgjvfvjz94-glibc-2.42-61/lib/libc.so.6
+#6  0x0000ffffb24748f0 in QWidgetPrivate::paintBackground(QPainter*, QRegion const&, QFlags<QWidgetPrivate::DrawWidgetFlag>) const () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+#7  0x0000ffffb2488cc0 in QWidgetPrivate::drawWidget(QPaintDevice*, QRegion const&, QPoint const&, QFlags<QWidgetPrivate::DrawWidgetFlag>, QPainter*, QWidgetRepaintManager*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+#8  0x0000ffffb249e0d0 in QWidgetRepaintManager::paintAndFlush() () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+#9  0x0000ffffb2491924 in QWidget::event(QEvent*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+#10 0x0000ffffb24252ac in QApplicationPrivate::notify_helper(QObject*, QEvent*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Widgets.so.6
+#11 0x0000ffffb0c72ff8 in QCoreApplication::notifyInternal2(QObject*, QEvent*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#12 0x0000ffffb0c7732c in QCoreApplicationPrivate::sendPostedEvents(QObject*, int, QThreadData*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#13 0x0000ffffb0fc836c in postEventSourceDispatch(_GSource*, int (*)(void*), void*) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#14 0x0000ffffafba3160 in g_main_context_dispatch_unlocked () from /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0
+#15 0x0000ffffafba694c in g_main_context_iterate_unlocked.isra () from /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0
+#16 0x0000ffffafba731c in g_main_context_iteration () from /nix/store/c1bydvy86k46q13qzqz1y9l0l3k3006i-glib-2.86.3/lib/libglib-2.0.so.0
+#17 0x0000ffffb0fc7804 in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#18 0x0000ffffb0c81f8c in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#19 0x0000ffffb0c7c5e8 in QCoreApplication::exec() () from /nix/store/sp1xlmzf32zi635v27qlbpdf2793dzlj-qtbase-6.11.0/lib/libQt6Core.so.6
+#20 0x0000aaaab69d7bd8 in main ()

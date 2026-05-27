@@ -1,28 +1,20 @@
-; compilation finished in 0:00:00.053
-; compiling file "/limn/backend/limn-file-notify.lisp" (written 26 MAY 2026 11:43:09 AM):
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-file-notify-tmpG6VFGMYP.fasl
-; compilation finished in 0:00:00.043
-; compiling file "/limn/backend/limn-auto-revert.lisp" (written 26 MAY 2026 11:43:09 AM):
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-auto-revert-tmp4QIPRMOF.fasl
-; compilation finished in 0:00:00.022
+; compilation finished in 0:00:00.018
 ; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
-; compilation finished in 0:00:00.120
+; compilation finished in 0:00:00.027
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.037
+; compilation finished in 0:00:00.031
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
-; compilation finished in 0:00:00.007
-; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:22:05 PM):
+; compilation finished in 0:00:00.005
+; compiling file "/limn/backend/limn.lisp" (written 27 MAY 2026 12:22:54 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.038
+; compilation finished in 0:00:00.035
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -36,11 +28,19 @@
 ; 
 ; caught WARNING:
 ;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+
+; file: /limn/backend/limn-file.lisp
+; in: DEFUN LIMN/FILE:BUFFER-WIRE-ID
+;     (GETHASH LIMN/FILE::BUF-ID LIMN/FILE::*BUFS*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/FILE::*BUFS*
 ; 
 ; compilation unit finished
-;   Undefined variable:
-;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
-;   caught 2 WARNING conditions
+;   Undefined variables:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH* LIMN/FILE::*BUFS*
+;   caught 3 WARNING conditions
 ;   printed 6 notes
 
 ── W23 defun + leader binding ──

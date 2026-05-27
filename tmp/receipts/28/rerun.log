@@ -1,23 +1,15 @@
-; compiling file "/limn/backend/limn-auto-revert.lisp" (written 26 MAY 2026 11:43:09 AM):
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-auto-revert-tmp4QIPRMOF.fasl
-; compilation finished in 0:00:00.020
-; compiling file "/limn/backend/limn-indent.lisp" (written 26 MAY 2026 11:43:09 AM):
-
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
-; compilation finished in 0:00:00.029
 ; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.033
+; compilation finished in 0:00:00.031
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
-; compilation finished in 0:00:00.006
-; compiling file "/limn/backend/limn.lisp" (written 26 MAY 2026 09:22:05 PM):
+; compilation finished in 0:00:00.004
+; compiling file "/limn/backend/limn.lisp" (written 27 MAY 2026 12:22:54 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.032
+; compilation finished in 0:00:00.034
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -31,11 +23,19 @@
 ; 
 ; caught WARNING:
 ;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+
+; file: /limn/backend/limn-file.lisp
+; in: DEFUN LIMN/FILE:BUFFER-WIRE-ID
+;     (GETHASH LIMN/FILE::BUF-ID LIMN/FILE::*BUFS*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/FILE::*BUFS*
 ; 
 ; compilation unit finished
-;   Undefined variable:
-;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
-;   caught 2 WARNING conditions
+;   Undefined variables:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH* LIMN/FILE::*BUFS*
+;   caught 3 WARNING conditions
 ;   printed 6 notes
 
 ── W28 M-x completion → execute ──
@@ -44,7 +44,7 @@
   ✓ A.1 alt+x opens minibuffer (M-x dispatch path)   [minibuffer: (cursor 0 open T prompt M-x  text )]
 
 ── Phase B: registry lookup ──
-  ✓ B.1 limn/cmd:list-commands returns non-empty   [44 commands]
+  ✓ B.1 limn/cmd:list-commands returns non-empty   [49 commands]
   ✓ B.2 'que' prefix matches at least one command   [matches: (query-replace query-replace-regexp)]
 
 ── W28 result: 3 / 3 pass ──

@@ -1,9 +1,5 @@
-; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-indent-tmpGW0QV22K.fasl
-; compilation finished in 0:00:00.027
-; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
-
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
-; compilation finished in 0:00:00.031
+; compilation finished in 0:00:00.033
 ; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
@@ -11,7 +7,7 @@
 ; compiling file "/limn/backend/limn.lisp" (written 27 MAY 2026 12:22:54 AM):
 
 ; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
-; compilation finished in 0:00:00.035
+; compilation finished in 0:00:00.037
 
 ; file: /limn/backend/limn-pdf-mode.lisp
 ; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
@@ -40,11 +36,15 @@
 ;   caught 3 WARNING conditions
 ;   printed 6 notes
 
-── W30 auto-revert ──
-  bid=limn-file-buf-1
-  ✓ A.1 buffer content reads 'old content'   [content="old content"]
-  ✓ A.2 auto-revert-mode enabled   [ok]
-  external write 'new' done
-  ✓ A.3 after external write + wait, buffer content reflects 'new'   [content="new content here"]
+── W19 query-replace-regexp 互動 ──
+  ✓ A.1 file open
+  ✓ A.2 query-replace-regexp 在 :cl-user package   [sym=QUERY-REPLACE-REGEXP]
+  ✓ A.3 query-replace-regexp 在 defcommand registry   [in-registry=#S(COMMAND
+               :NAME QUERY-REPLACE-REGEXP
+               :SPEC NIL
+               :MODE NIL
+               :BODY #<FUNCTION (LAMBDA ()
+                                  :IN
+                                  LIMN/DEFAULT-CONFIG:INSTALL-DEFAULT-COMMANDS) {10093844AB}>)]
 
-── W30 result: 3 / 3 pass ──
+── W19 result: 3 / 3 pass ──
