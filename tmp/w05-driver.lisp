@@ -33,21 +33,27 @@
       (sleep 0.1))))
 
 (defun grab-png (out-path)
-  "Save current paint to OUT-PATH as PNG. Uses test/grab-window.
-   v0.39 W05 honest: returns multiple values (bytes, avg-luminance)
-   — the avg-luminance is the action-effect signal that proves the
-   mupdf re-render respected the dark-mode flag, not just that the
-   PNG layout changed."
+  "Save current paint to OUT-PATH as PNG.  Uses test/grab-window and
+   returns (bytes avg-luminance gl-color-mode capture-source).
+   v0.39 W05 honest²: gl-color-mode is THE PRODUCTION state — the
+   PdfViewOpenGLWidget's color_mode enum, which the dark-mode
+   fragment shader reads at paint time.  Asserting on it catches
+   regressions that break set_dark_mode wiring without depending on
+   grabFramebuffer (which is null in headless Xvfb).  Capture-source
+   surfaces which path produced the bytes (opengl / mupdf / widget-
+   grab) so it's clear what was actually exercised."
   (let* ((r    (limn:call "test/grab-window" :|win-id| "w1"))
          (data (limn/bridge:response-data r))
          (b64  (getf data :|png|))
          (lum  (getf data :|avg-luminance|))
+         (cm   (getf data :|gl-color-mode|))
+         (src  (getf data :|capture-source|))
          (raw  (cl-user::base64-string-to-bytes b64)))
     (with-open-file (s out-path :direction :output
                                 :element-type '(unsigned-byte 8)
                                 :if-exists :supersede)
       (write-sequence raw s))
-    (values (length raw) lum)))
+    (values (length raw) lum cm src)))
 
 (defparameter *out-dir* "/host-tmp/receipts/05/")
 (ensure-directories-exist *out-dir*)
@@ -94,53 +100,65 @@
   (xdotool "search" "--name" "Limn" "windowactivate") (sleep 0.3)
 
   ;; Baseline: dark-mode should be off (NIL or :false).
-  (multiple-value-bind (bytes-00 lum-00)
+  (multiple-value-bind (bytes-00 lum-00 cm-00 src-00)
       (grab-png (concatenate 'string *out-dir* "step-00.png"))
     (let ((dark-00 (%dark-now)))
-      (format t "  step-00 captured (~a bytes, lum=~,1f), dark=~a~%"
-              bytes-00 lum-00 dark-00)
-      (check "A.1 baseline dark-mode is off"
+      (format t "  step-00 captured (~a bytes, lum=~,1f, cm=~a, src=~a), dark=~a~%"
+              bytes-00 lum-00 cm-00 src-00 dark-00)
+      (check "A.1 baseline win->dark_mode is off (state)"
              (or (null dark-00) (eq dark-00 :false))
              (format nil "dark=~a" dark-00))
-      (check "A.2 baseline frame has bright avg luminance (light mode)"
+      (check "A.2 baseline GL widget color_mode is 'normal' (production state)"
+             (equal cm-00 "normal")
+             (format nil "gl-color-mode=~a" cm-00))
+      (check "A.3 baseline frame has bright avg luminance (light render)"
              (and (numberp lum-00) (> lum-00 200))
-             (format nil "lum=~,1f" lum-00))
+             (format nil "lum=~,1f via ~a" lum-00 src-00))
 
-      ;; Toggle 3 times; verify state AND pixel evidence flip in lockstep.
-      ;; v0.39 honest: avg-luminance is the canonical "the mupdf
-      ;; render actually applied dark-mode" signal — not a state
-      ;; round-trip.  Light: ~250 (white bg).  Dark: ~5 (black bg
-      ;; after fz_invert_pixmap).  Anything in between would mean
-      ;; the toggle half-fired.
+      ;; Toggle 3 times; verify ALL THREE signals flip together:
+      ;;   - win->dark_mode (LimnWindow snapshot field)
+      ;;   - opengl_widget->color_mode (production GL shader input)
+      ;;   - avg-luminance (mupdf render with fz_invert_pixmap, OR
+      ;;                    real GL framebuffer when grabFramebuffer
+      ;;                    works — capture-source surfaces which)
+      ;;
+      ;; The GL color_mode check is the honest² part: it's the
+      ;; PRODUCTION state slot the dark-mode fragment shader reads.
+      ;; If a regression breaks the set_dark_mode → color_mode wiring
+      ;; (so the user's screen wouldn't actually go dark on a real
+      ;; display), this assertion fails — independent of whether
+      ;; headless Xvfb can grab the GL framebuffer.
       (let ((prev-lum lum-00)
             (steps '("01" "02" "03"))
-            (expected-dark '(t :false t)))
+            (expected-dark '(t :false t))
+            (expected-cm   '("dark" "normal" "dark")))
         (loop for label in steps
               for want in expected-dark
+              for want-cm in expected-cm
               do (format t "  → xdotool key d (step ~a)~%" label)
                  (xdotool "key" "--clearmodifiers" "d")
                  (sleep 0.5)
-                 (multiple-value-bind (bytes lum)
+                 (multiple-value-bind (bytes lum cm src)
                      (grab-png (concatenate 'string *out-dir*
                                              "step-" label ".png"))
                    (declare (ignore bytes))
                    (let ((dark (%dark-now)))
-                     (format t "  step-~a captured (lum=~,1f), dark=~a~%"
-                             label lum dark)
-                     (check (format nil "B.~a dark-mode state is ~a"
+                     (format t "  step-~a captured (lum=~,1f, cm=~a, src=~a), dark=~a~%"
+                             label lum cm src dark)
+                     (check (format nil "B.~a win->dark_mode state is ~a"
                                     label want)
                             (if (eq want t)
                                 (eq dark t)
                                 (or (eq dark want) (null dark)))
                             (format nil "dark=~a (want ~a)" dark want))
-                     ;; Luminance must MOVE between snapshots — same
-                     ;; direction-of-travel as the state flag.  Light→
-                     ;; dark drops it (~250 → ~5); dark→light raises
-                     ;; (~5 → ~250).  Threshold 100 is well clear of
-                     ;; either bucket; rejects half-rendered states.
+                     (check (format nil "B.~a GL color_mode is '~a' (production shader input)"
+                                    label want-cm)
+                            (equal cm want-cm)
+                            (format nil "gl-color-mode=~a (want ~a)"
+                                    cm want-cm))
                      (let ((delta (abs (- lum prev-lum))))
-                       (check (format nil "B.~a avg-lum moved ≥ 100 (pixel evidence)"
-                                      label)
+                       (check (format nil "B.~a avg-lum moved ≥ 100 (pixel evidence via ~a)"
+                                      label src)
                               (> delta 100)
                               (format nil "prev=~,1f now=~,1f delta=~,1f"
                                       prev-lum lum delta)))

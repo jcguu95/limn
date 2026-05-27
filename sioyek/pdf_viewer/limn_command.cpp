@@ -1,4 +1,5 @@
 #include "limn_command.h"
+#include <cstdio>
 
 #include "limn_build_info.h"
 #include "limn_bridge.h"
@@ -911,6 +912,34 @@ void LimnCommand::handle_ime_event(const QString& preedit, const QString& commit
             input_ev.insert("frame-id", "f1");
             input_ev.insert("text", updated);
             bridge->push_event("minibuffer-input", input_ev);
+        } else {
+            // v0.39 W16 honest² — when the minibuffer is closed and
+            // the focused window points at a text-engine buffer, the
+            // IME commit must land THERE.  Pre-v0.39 the production
+            // path (LimnInputFilter → Qt::InputMethod → this handler)
+            // only inserted into the minibuffer; for any text-mode
+            // buffer the commit fired only as a wire event with no
+            // mutation — meaning real users using fcitx5 / IBus to
+            // type CJK into a .org / .txt buffer literally couldn't.
+            // No Lisp observer fixed it either (the limn.lisp v0.16
+            // commentary even noted that mutation was supposed to
+            // be automatic server-side — but only the minibuffer
+            // branch was actually wired).  This branch closes the
+            // gap so production and test/inject-ime-commit share
+            // the same insert path.
+            const QString fid = windows ? windows->focused_id() : QString();
+            LimnWindow* fw    = (windows && !fid.isEmpty())
+                                  ? windows->get(fid) : nullptr;
+            if (fw && text_buffers.contains(fw->buffer_id)) {
+                GapBuffer& buf = text_buffers[fw->buffer_id];
+                int&       cur = text_cursors[fw->buffer_id];
+                buf.insert(cur, commit);
+                cur += commit.length();
+                if (main_widget) sync_text_widget(fw->buffer_id);
+                QJsonObject changed_ev;
+                changed_ev.insert("buffer-id", fw->buffer_id);
+                bridge->push_event("text-changed", changed_ev);
+            }
         }
         QJsonObject ev;
         ev.insert("frame-id", "f1");
@@ -2612,62 +2641,20 @@ void LimnCommand::cmd_test_inject_drag_drop(const QString& id, const QJsonObject
 }
 
 void LimnCommand::cmd_test_inject_ime_commit(const QString& id, const QJsonObject& msg) {
-    QJsonObject ev = pick_keys(msg, {"frame-id", "text"});
-    // v0.16: SPEC §6 requires :frame-id on every frame-scoped event.
-    // Default to "f1" if caller didn't pass one (back-compat with v0.7).
-    if (!ev.contains("frame-id")) ev.insert("frame-id", "f1");
     const QString text = msg.value("text").toString();
 
-    // v0.16: SERVER-SIDE dispatch. When the minibuffer is open, commit
-    // the IME text into *minibuffer* (advancing cursor by codepoint
-    // count of text) and emit minibuffer-input so Lisp observers see
-    // the change. When the minibuffer is closed: just fire the
-    // ime-commit event (graceful no-op for the text — observers can
-    // still react if they want).
-    //
-    // Same vanilla-Emacs C-core pattern: the C-level commit_text path
-    // mutates the buffer at point; Lisp doesn't have to wire dispatch.
-    if (minibuffer_open && !text.isEmpty()) {
-        GapBuffer& buf = text_buffers["*minibuffer*"];
-        int&       cur = text_cursors["*minibuffer*"];
-        buf.insert(cur, text);
-        cur += text.length();         // UTF-16 internal units
-        const QString updated = buf.to_qstring();
-        if (auto* c = chrome_of(main_widget))
-            c->set_minibuffer(true, minibuffer_prompt, updated);
-        QJsonObject input_ev;
-        input_ev.insert("frame-id", "f1");
-        input_ev.insert("text", updated);
-        bridge->push_event("minibuffer-input", input_ev);
-    } else if (!text.isEmpty()) {
-        // v0.39 W16 honest fix — when the minibuffer is closed and the
-        // focused window points at a text-engine buffer, deliver the
-        // commit there.  This is what fcitx5/IBus would do via Qt's
-        // inputMethodEvent on a real X11 display; in headless Xvfb,
-        // xdotool can't actually generate CJK keysyms (X11 has no
-        // keysym for them and Xvfb's default keymap doesn't include
-        // a Unicode keysym path) — so we couldn't pump CJK through
-        // the regular key-event pipeline.  Going via test/inject-
-        // ime-commit lands at the same `text_buffers[buf].insert`
-        // call the IME path uses in production; the W16 driver gets
-        // back to testing buffer/insert + buffer/save UTF-8 round-
-        // trip without needing X11 to do something it can't.
-        const QString fid = windows ? windows->focused_id() : QString();
-        LimnWindow* fw    = (windows && !fid.isEmpty())
-                              ? windows->get(fid) : nullptr;
-        if (fw && text_buffers.contains(fw->buffer_id)) {
-            GapBuffer& buf = text_buffers[fw->buffer_id];
-            int&       cur = text_cursors[fw->buffer_id];
-            buf.insert(cur, text);
-            cur += text.length();
-            if (main_widget) sync_text_widget(fw->buffer_id);
-            QJsonObject changed_ev;
-            changed_ev.insert("buffer-id", fw->buffer_id);
-            bridge->push_event("text-changed", changed_ev);
-        }
-    }
+    // v0.39 W16 honest² — DELEGATE to handle_ime_event so the test
+    // wire cmd exercises the EXACT same code the production fcitx5 /
+    // Qt::InputMethod path lands at.  Pre-v0.39 we duplicated the
+    // commit logic here, which let a real production bug
+    // (handle_ime_event ignoring text-engine buffers when the
+    // minibuffer was closed) slip past the test — the test wrote
+    // its own duplicate insert call, so passing a test/inject-ime-
+    // commit run said nothing about whether real CJK input worked.
+    // Now both flow through handle_ime_event; if a future patch
+    // breaks the production path the test catches it.
+    handle_ime_event(QString(), text);   // preedit="", commit=text
 
-    bridge->push_event("ime-commit", ev);
     bridge->send_ok(id);
 }
 
@@ -2771,46 +2758,90 @@ void LimnCommand::cmd_test_grab_window(const QString& id, const QJsonObject& msg
     // not yet be reflected in the backing store.
     QCoreApplication::processEvents();
 
-    // v0.39 W05 honest fix — was QWidget::grab() on main_widget.  In a
-    // headless Xvfb container, grab() on a QWidget that hosts a
-    // QOpenGLWidget child does NOT include the GL widget's painted
-    // contents (well-known Qt issue: grab() walks the QWidget paint
-    // pipeline, which on a non-active GL context paints nothing for
-    // the GL child).  Result: every grab returned the same chrome-bar
-    // + empty viewport image regardless of PDF state.  Dark-mode
-    // toggle, page navigation, zoom — all visually indistinguishable
-    // in the captured PNG.  W05 had to skip its pixel evidence check
-    // for that reason.
+    // v0.39 W05 honest² — try three capture paths in order of
+    // production fidelity:
     //
-    // Replace with a server-side mupdf render of the focused window's
-    // current page, with dark-mode + rotation applied.  This is
-    // deterministic, doesn't depend on the GL context being live, and
-    // legitimately changes when the user toggles dark-mode (which is
-    // what W05 wants to verify).  Falls back to the old grab() path
-    // when no PDF document is loaded (text-engine buffer, fresh
-    // session) — in that case the chrome bar IS the entire visual.
+    //   1. QOpenGLWidget::grabFramebuffer() on the live GL widget.
+    //      This exercises the ACTUAL production fragment shader (incl.
+    //      the dark-mode invert in dark_mode.fragment).  Requires a
+    //      live GL context — works on real displays and with mesa-
+    //      llvmpipe in Xvfb when LIBGL_ALWAYS_SOFTWARE=1; on a
+    //      framebuffer-less Xvfb it returns a null image and we fall
+    //      through.
+    //
+    //   2. LimnMupdf::render_page_with_view_state — mupdf re-render
+    //      with dark_mode → fz_invert_pixmap.  NOT the same code path
+    //      as production (parallel impl) but the math matches what
+    //      the GL shader does ("1.0 - color").  Used to be sole
+    //      pixel source in v0.39-mid; honesty-flagged because a
+    //      broken GL shader wouldn't surface here.  Kept as fallback
+    //      for headless-no-GL environments so the test still has
+    //      pixel evidence rather than reverting to state-only.
+    //
+    //   3. QWidget::grab() on main_widget — only catches the chrome
+    //      bar (the QOpenGLWidget child doesn't render through the
+    //      backing store).  Last-resort fallback for the case where
+    //      no document is loaded at all (chrome-only state).
     QImage img;
+    QString capture_source = "none";
     {
         const QString fid = windows ? windows->focused_id() : QString();
         LimnWindow* fw    = (windows && !fid.isEmpty()) ? windows->get(fid)
                                                        : nullptr;
-        Document* doc = nullptr;
-        if (fw && !fw->buffer_id.isEmpty() && registry) {
-            doc = registry->lookup(fw->buffer_id);
+        // Path 1: real GL framebuffer (production fragment shader).
+        if (main_widget && main_widget->opengl_widget()) {
+            // Force a synchronous repaint so any pending view-state
+            // changes (dark-mode toggle, scroll, zoom) reflect in the
+            // framebuffer we're about to grab.
+            main_widget->opengl_widget()->update();
+            QCoreApplication::processEvents();
+            QImage gl_img = main_widget->opengl_widget()->grabFramebuffer();
+            // Probe whether the GL framebuffer actually has rendered
+            // content — sample 9 interior pixels at quarter/center/
+            // three-quarter rows×cols.  When the GL context is dead
+            // (Xvfb without EGL surface) grabFramebuffer returns a
+            // uniform clear-color buffer; we want to fall through to
+            // the mupdf path in that case.  9 samples is permissive
+            // enough that a real PDF render (which almost certainly
+            // has SOME variation across the page) accepts it, and
+            // strict enough that a uniform clear (all 9 == one
+            // value) is rejected.
+            if (!gl_img.isNull() && gl_img.width() >= 4 && gl_img.height() >= 4) {
+                const int w = gl_img.width();
+                const int h = gl_img.height();
+                const int xs[3] = { w / 4, w / 2, w * 3 / 4 };
+                const int ys[3] = { h / 4, h / 2, h * 3 / 4 };
+                QRgb seen = gl_img.pixel(xs[0], ys[0]);
+                bool any_differ = false;
+                for (int yi = 0; yi < 3 && !any_differ; ++yi)
+                    for (int xi = 0; xi < 3 && !any_differ; ++xi)
+                        if (gl_img.pixel(xs[xi], ys[yi]) != seen)
+                            any_differ = true;
+                if (any_differ) {
+                    img = gl_img.convertToFormat(QImage::Format_ARGB32);
+                    capture_source = "opengl";
+                }
+            }
         }
-        if (doc) {
-            // Pick a DPI that yields a reasonable image (large enough
-            // to detect changes, small enough not to balloon the wire).
-            // 96 DPI matches a typical "fit-to-page" on a 720p viewport.
-            img = LimnMupdf::render_page_with_view_state(
-                doc, fw ? fw->page : 0, 96,
-                fw ? fw->dark_mode : false,
-                fw ? fw->rotation  : 0);
-        }
+        // Path 2: mupdf re-render with view state (parallel impl).
         if (img.isNull()) {
-            // No doc (or render failed) — fall back to widget grab.
+            Document* doc = nullptr;
+            if (fw && !fw->buffer_id.isEmpty() && registry) {
+                doc = registry->lookup(fw->buffer_id);
+            }
+            if (doc) {
+                img = LimnMupdf::render_page_with_view_state(
+                    doc, fw ? fw->page : 0, 96,
+                    fw ? fw->dark_mode : false,
+                    fw ? fw->rotation  : 0);
+                if (!img.isNull()) capture_source = "mupdf";
+            }
+        }
+        // Path 3: chrome-only widget grab.
+        if (img.isNull()) {
             QPixmap pm = target->grab();
             img = pm.toImage().convertToFormat(QImage::Format_ARGB32);
+            capture_source = "widget-grab";
         }
     }
 
@@ -2852,6 +2883,33 @@ void LimnCommand::cmd_test_grab_window(const QString& id, const QJsonObject& msg
     data.insert("height",         h);
     data.insert("avg-luminance",  avg_lum);
     data.insert("opaque-pixels",  static_cast<qint64>(opaque));
+    // v0.39 W05 honest² — expose which capture path actually produced
+    // the bytes ("opengl" = real production GL render via the dark-
+    // mode fragment shader; "mupdf" = the parallel-impl fallback that
+    // applies fz_invert_pixmap; "widget-grab" = last-resort chrome-
+    // only).  Tests can assert on this to know which path their
+    // pixel evidence comes from.
+    data.insert("capture-source", capture_source);
+    // v0.39 W05 honest² — also expose the live PdfViewOpenGLWidget's
+    // color_mode (Normal / Dark / Custom).  This is the production
+    // state slot that the dark-mode FRAGMENT SHADER reads — separate
+    // from win->dark_mode (the LimnWindow snapshot field).  W05 now
+    // asserts on this so a future regression that breaks set_dark_mode
+    // (e.g. silently no-ops, or fails to propagate to the GL widget)
+    // surfaces — without depending on grabFramebuffer, which is null
+    // in headless Xvfb with EGL surfaceless.
+    {
+        QString cm = "unknown";
+        if (main_widget && main_widget->opengl_widget()) {
+            switch (main_widget->opengl_widget()->get_current_color_mode()) {
+                case PdfViewOpenGLWidget::Normal: cm = "normal"; break;
+                case PdfViewOpenGLWidget::Dark:   cm = "dark";   break;
+                case PdfViewOpenGLWidget::Custom: cm = "custom"; break;
+                case PdfViewOpenGLWidget::None:   cm = "none";   break;
+            }
+        }
+        data.insert("gl-color-mode", cm);
+    }
     // Accept the win-id for echo even though we ignore it for routing.
     if (msg.contains("win-id")) {
         data.insert("win-id", msg.value("win-id").toString());
