@@ -20,6 +20,7 @@
            #:*file-exists-p-fn* #:*engine-load-fn*
            #:*buffer-set-content-fn* #:*minibuffer-yes-no-fn*
            #:*open-text-engine-fn* #:*fetch-wire-content-fn*
+           #:*show-buffer-fn*
            #:buffer-wire-id))
 
 (in-package #:limn/file)
@@ -117,6 +118,19 @@
    open-time snapshot.  Returns NIL if unavailable, in which case
    save-buffer falls back to the cached fbuf-content.")
 
+(defvar *show-buffer-fn*
+  (lambda (wire-id)
+    (declare (ignore wire-id))
+    nil)
+  "v0.39 W17 — hook called by find-file when reopening an already-open
+   path.  Should ask C++ to switch the visible window to WIRE-ID (the
+   existing C++ text_buffers tid).  Without this, the Lisp-side fbuf
+   id was returned but the C++ widget kept showing whatever buffer
+   was loaded last, so cross-buffer operations (kill from A then yank
+   in B then come back to verify A) couldn't actually re-focus A.
+   Returns whatever the wire call returns (typically the response
+   plist); callers don't read it.")
+
 (defstruct fbuf
   id
   path
@@ -201,7 +215,18 @@
   (let* ((abs (%normalize path))
          (existing (gethash abs *by-path*)))
     (if existing
-        existing
+        ;; v0.39 W17 — re-opening an already-known path: ask C++ to
+        ;; switch the visible window back to this buffer.  Without
+        ;; this, find-file('A') after find-file('B') returned A's
+        ;; fbuf-id but the widget stayed on B, breaking the cross-
+        ;; buffer kill/yank dogfood pattern.  Wrapped so unit-tier
+        ;; (no wire) stays a no-op via the default no-op hook.
+        (let ((wire (let ((b (gethash existing *bufs*)))
+                      (and b (fbuf-wire-id b)))))
+          (when wire
+            (handler-case (funcall *show-buffer-fn* wire)
+              (error () nil)))
+          existing)
         (let* ((file-exists-p (funcall *file-exists-p-fn* abs))
                (kind  (file-type abs)))
           (when (and (not file-exists-p) (eq kind :pdf))

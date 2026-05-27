@@ -10,6 +10,7 @@
 // On failure each helper throws std::runtime_error; the dispatcher catches
 // it and translates to a fail-response.
 //
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
@@ -42,5 +43,13 @@ QJsonObject render_page_to_png   (Document* doc, int page, int dpi);
 QJsonObject render_region_to_png (Document* doc, int page,
                                    double x0, double y0, double x1, double y1,
                                    int dpi);
+
+// v0.39 W05 honest fix — render with view state applied (dark-mode +
+// rotation).  Used by test/grab-window so the captured PNG actually
+// reflects what the user sees, not what mupdf would render with
+// defaults.  Returns the raw QImage so test/grab-window can compute
+// avg-luminance and opaque-pixels itself.
+QImage render_page_with_view_state(Document* doc, int page, int dpi,
+                                    bool dark_mode, int rotation);
 
 }  // namespace LimnMupdf

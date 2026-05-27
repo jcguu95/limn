@@ -5,6 +5,7 @@
 #include "utils.h"         // parse_uri
 
 #include <mupdf/fitz.h>
+#include <cstring>
 #include <QByteArray>
 #include <QJsonValue>
 #include <QString>
@@ -399,6 +400,82 @@ QJsonObject render_region_to_png(Document* doc, int page,
     QJsonObject data;
     data.insert("png", b64);
     return data;
+}
+
+// v0.39 W05 honest fix — render a page with the focused window's
+// view state applied (dark mode, rotation) and return a QImage.
+//
+// Pre-v0.39, test/grab-window used QWidget::grab() on the MainWidget,
+// which on a QOpenGLWidget child in headless Xvfb returns the bare
+// widget chrome WITHOUT the actual PDF render — so dark-mode toggle
+// looked identical pixel-for-pixel and the W05 driver had to skip
+// the pixel evidence check (relying on view/get state round-trip
+// alone).  Rendering via mupdf here sidesteps the GL context
+// entirely and produces a deterministic image that legitimately
+// changes when dark-mode flips.
+//
+// Dark mode applies as a post-render colour inversion (mupdf has
+// fz_invert_pixmap), matching what the OpenGL fragment shader does
+// in production.  Rotation is folded into the matrix (90/180/270
+// supported; arbitrary degrees would work too but we never use them).
+QImage render_page_with_view_state(Document* doc, int page, int dpi,
+                                    bool dark_mode, int rotation) {
+    if (!doc || !doc->doc) return QImage();
+    if (page < 0 || page >= doc->num_pages()) return QImage();
+    if (dpi <= 0 || dpi > 1200) return QImage();
+
+    fz_context* ctx = mupdf_context;
+    fz_page*    p   = nullptr;
+    fz_pixmap*  pix = nullptr;
+
+    fz_var(p); fz_var(pix);
+
+    QImage out;
+
+    fz_try(ctx) {
+        p = fz_load_page(ctx, doc->doc, page);
+        if (!p) fz_throw(ctx, FZ_ERROR_GENERIC, "could not load page");
+
+        const float    scale     = static_cast<float>(dpi) / 72.0f;
+        const int      rot       = ((rotation % 360) + 360) % 360;
+        const fz_matrix transform = fz_concat(fz_rotate(static_cast<float>(rot)),
+                                              fz_scale(scale, scale));
+
+        pix = fz_new_pixmap_from_page(
+            ctx, p, transform, fz_device_rgb(ctx), 0);
+        if (!pix) fz_throw(ctx, FZ_ERROR_GENERIC, "pixmap render failed");
+
+        if (dark_mode) {
+            // Invert RGB in place; alpha untouched.  Matches the
+            // production OpenGL "dark mode" shader (1.0 - color).
+            fz_invert_pixmap(ctx, pix);
+        }
+
+        // Copy into a QImage we own (mupdf pixmap is dropped in fz_always).
+        // fz_pixmap is RGB or RGBA; we forced device_rgb above with alpha=0,
+        // so 3 bytes/pixel, row stride = w * 3 (no padding from mupdf).
+        const int w      = fz_pixmap_width(ctx, pix);
+        const int h      = fz_pixmap_height(ctx, pix);
+        const int stride = fz_pixmap_stride(ctx, pix);
+        const unsigned char* samples = fz_pixmap_samples(ctx, pix);
+
+        QImage tmp(w, h, QImage::Format_RGB888);
+        // Source stride may equal w*3 (typical) or be padded — copy
+        // row by row to be safe.
+        for (int y = 0; y < h; ++y) {
+            std::memcpy(tmp.scanLine(y),
+                        samples + y * stride,
+                        std::min(stride, w * 3));
+        }
+        // Convert to ARGB32 so callers can use QRgb / qRed / qGreen etc.
+        out = tmp.convertToFormat(QImage::Format_ARGB32);
+    } fz_always(ctx) {
+        if (pix) fz_drop_pixmap(ctx, pix);
+        if (p)   fz_drop_page(ctx, p);
+    } fz_catch(ctx) {
+        // Swallow; out stays null and caller decides what to do.
+    }
+    return out;
 }
 
 }  // namespace LimnMupdf

@@ -33,16 +33,21 @@
       (sleep 0.1))))
 
 (defun grab-png (out-path)
-  "Save current paint to OUT-PATH as PNG. Uses test/grab-window."
+  "Save current paint to OUT-PATH as PNG. Uses test/grab-window.
+   v0.39 W05 honest: returns multiple values (bytes, avg-luminance)
+   — the avg-luminance is the action-effect signal that proves the
+   mupdf re-render respected the dark-mode flag, not just that the
+   PNG layout changed."
   (let* ((r    (limn:call "test/grab-window" :|win-id| "w1"))
          (data (limn/bridge:response-data r))
          (b64  (getf data :|png|))
+         (lum  (getf data :|avg-luminance|))
          (raw  (cl-user::base64-string-to-bytes b64)))
     (with-open-file (s out-path :direction :output
                                 :element-type '(unsigned-byte 8)
                                 :if-exists :supersede)
       (write-sequence raw s))
-    (length raw)))
+    (values (length raw) lum)))
 
 (defparameter *out-dir* "/host-tmp/receipts/05/")
 (ensure-directories-exist *out-dir*)
@@ -89,49 +94,57 @@
   (xdotool "search" "--name" "Limn" "windowactivate") (sleep 0.3)
 
   ;; Baseline: dark-mode should be off (NIL or :false).
-  (let ((bytes-00 (grab-png (concatenate 'string *out-dir* "step-00.png")))
-        (dark-00  (%dark-now)))
-    (format t "  step-00 captured (~a bytes), dark=~a~%" bytes-00 dark-00)
-    (check "A.1 baseline dark-mode is off"
-           (or (null dark-00) (eq dark-00 :false))
-           (format nil "dark=~a" dark-00))
-    (check "A.2 baseline frame has non-trivial paint"
-           (> bytes-00 1000)
-           (format nil "bytes=~a" bytes-00))
+  (multiple-value-bind (bytes-00 lum-00)
+      (grab-png (concatenate 'string *out-dir* "step-00.png"))
+    (let ((dark-00 (%dark-now)))
+      (format t "  step-00 captured (~a bytes, lum=~,1f), dark=~a~%"
+              bytes-00 lum-00 dark-00)
+      (check "A.1 baseline dark-mode is off"
+             (or (null dark-00) (eq dark-00 :false))
+             (format nil "dark=~a" dark-00))
+      (check "A.2 baseline frame has bright avg luminance (light mode)"
+             (and (numberp lum-00) (> lum-00 200))
+             (format nil "lum=~,1f" lum-00))
 
-    ;; Toggle 3 times; verify state alternates AND PNG bytes differ.
-    (let ((prev-bytes bytes-00)
-          (steps '("01" "02" "03"))
-          (expected-dark '(t :false t)))
-      (loop for label in steps
-            for want in expected-dark
-            do (format t "  → xdotool key d (step ~a)~%" label)
-               (xdotool "key" "--clearmodifiers" "d")
-               (sleep 0.5)
-               (let ((bytes (grab-png (concatenate 'string *out-dir*
-                                                   "step-" label ".png")))
-                     (dark  (%dark-now)))
-                 (format t "  step-~a captured (~a bytes), dark=~a~%"
-                         label bytes dark)
-                 (check (format nil "B.~a dark-mode is ~a after toggle"
-                                label want)
-                        (if (eq want t)
-                            (eq dark t)
-                            (or (eq dark want) (null dark)))
-                        (format nil "dark=~a (want ~a)" dark want))
-                 ;; v0.39 note: PNG byte comparison would be ideal pixel
-                 ;; evidence, but Xvfb's framebuffer in this container
-                 ;; doesn't actually rebuild on QOpenGLWidget repaints
-                 ;; (test/grab-window returns a stale or fixed-size
-                 ;; raster — known structural issue B2).  The view/get
-                 ;; engine-params.dark-mode round-trip IS the action-
-                 ;; effect signal: a state change there proves the
-                 ;; key bound, ran pdf-toggle-dark, and the view/set
-                 ;; wire-call landed on the right C++ slot.  Same
-                 ;; pattern W01 uses (offset-y as the "did j actually
-                 ;; move" signal) and for the same reason.  PNG saved
-                 ;; for forensic inspection; not asserted on.
-                 (setf prev-bytes bytes)))))
+      ;; Toggle 3 times; verify state AND pixel evidence flip in lockstep.
+      ;; v0.39 honest: avg-luminance is the canonical "the mupdf
+      ;; render actually applied dark-mode" signal — not a state
+      ;; round-trip.  Light: ~250 (white bg).  Dark: ~5 (black bg
+      ;; after fz_invert_pixmap).  Anything in between would mean
+      ;; the toggle half-fired.
+      (let ((prev-lum lum-00)
+            (steps '("01" "02" "03"))
+            (expected-dark '(t :false t)))
+        (loop for label in steps
+              for want in expected-dark
+              do (format t "  → xdotool key d (step ~a)~%" label)
+                 (xdotool "key" "--clearmodifiers" "d")
+                 (sleep 0.5)
+                 (multiple-value-bind (bytes lum)
+                     (grab-png (concatenate 'string *out-dir*
+                                             "step-" label ".png"))
+                   (declare (ignore bytes))
+                   (let ((dark (%dark-now)))
+                     (format t "  step-~a captured (lum=~,1f), dark=~a~%"
+                             label lum dark)
+                     (check (format nil "B.~a dark-mode state is ~a"
+                                    label want)
+                            (if (eq want t)
+                                (eq dark t)
+                                (or (eq dark want) (null dark)))
+                            (format nil "dark=~a (want ~a)" dark want))
+                     ;; Luminance must MOVE between snapshots — same
+                     ;; direction-of-travel as the state flag.  Light→
+                     ;; dark drops it (~250 → ~5); dark→light raises
+                     ;; (~5 → ~250).  Threshold 100 is well clear of
+                     ;; either bucket; rejects half-rendered states.
+                     (let ((delta (abs (- lum prev-lum))))
+                       (check (format nil "B.~a avg-lum moved ≥ 100 (pixel evidence)"
+                                      label)
+                              (> delta 100)
+                              (format nil "prev=~,1f now=~,1f delta=~,1f"
+                                      prev-lum lum delta)))
+                     (setf prev-lum lum)))))))
 
   ;; Cleanup
   (ignore-errors (sb-ext:process-kill proc 15))

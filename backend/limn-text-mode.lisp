@@ -148,6 +148,46 @@
       (when buf
         (limn/text::%limn-call "buffer/save" :|buffer-id| buf)))))
 
+;;; v0.39 W17 — switch-to-buffer.  Emacs's C-x b: list every buffer
+;;;  known to the wire (PDF + text), let the user pick one via
+;;;  completing-read, then ask C++ to make it visible in w1.  Works
+;;;  cross-engine (PDF ↔ text).  Re-uses buffer/list (W20) for the
+;;;  collection so the names match exactly what M-x buffer-list
+;;;  would show.
+(limn/cmd:defcommand switch-to-buffer (:interactive nil)
+  (lambda ()
+    (let* ((r       (limn/text::%limn-call "buffer/list"))
+           (entries (limn/text::%response-data r))
+           ;; Format each entry as "<id>  <path>" so users can pick by
+           ;; either path or id.  Empty path → just the id (chrome).
+           (lines   (and (listp entries)
+                          (mapcar
+                           (lambda (e)
+                             (let ((bid (getf e :|buffer-id|))
+                                   (path (getf e :|path|)))
+                               (if (and path (stringp path)
+                                         (plusp (length path)))
+                                   (format nil "~a  ~a" bid path)
+                                   (format nil "~a" bid))))
+                           entries)))
+           (cr      (find-symbol "COMPLETING-READ" :limn/completion))
+           (pick    (and cr (fboundp cr) lines
+                          (funcall (symbol-function cr)
+                                   "Switch to buffer: " lines
+                                   :require-match t))))
+      (when (and pick (stringp pick))
+        ;; First whitespace-token is the buffer-id.
+        (let* ((sp (position #\Space pick))
+               (bid (if sp (subseq pick 0 sp) pick)))
+          (when (plusp (length bid))
+            (limn/text::%limn-call "buffer/show"
+                                    :|buffer-id| bid :|win-id| "w1")
+            ;; If we just switched to a text buffer, cache it so
+            ;; the next self-insert/yank routes correctly.
+            (when (or (char= (aref bid 0) #\t)
+                       (char= (aref bid 0) #\*))
+              (setf limn/text:*current-text-buffer* bid))))))))
+
 ;;; v0.39 W17 — set-mark-command pins POS=cursor in the focused buffer.
 ;;; Emacs C-SPC; the inverse half of kill-region.  Stores into
 ;;; limn/mark, which kill-region reads via limn/mark:mark on the same

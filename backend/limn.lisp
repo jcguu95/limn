@@ -550,9 +550,33 @@
             (ignore-errors
               (let* ((r (call "buffer/text" :|buffer-id| wire-id))
                      (ok (eq (getf r :|ok|) t)))
-                (and ok (getf (getf r :|data|) :|text|)))))))
+                (and ok (getf (getf r :|data|) :|text|))))))
+        ;; v0.39 W17 — switch the visible window to an already-open
+        ;; buffer.  Called by limn/file:find-file when the path is
+        ;; already cached in *by-path*.  Also activates text-mode on
+        ;; the mode-buffer + caches *current-text-buffer* so the
+        ;; next keystroke routes self-insert/yank/kill to this buf.
+        (show-fn
+          (lambda (wire-id)
+            (ignore-errors
+              (call "buffer/show" :|buffer-id| wire-id :|win-id| "w1")
+              (let* ((tpkg (find-package '#:limn/text))
+                     (sym  (and tpkg (find-symbol "*CURRENT-TEXT-BUFFER*"
+                                                   tpkg))))
+                (when (and sym (boundp sym))
+                  (set sym wire-id)))
+              (let* ((rt (find-package '#:limn/runtime))
+                     (mb-fn (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW"
+                                                  rt))))
+                (when (and mb-fn (fboundp mb-fn))
+                  (let ((mb (funcall (symbol-function mb-fn) "w1"))
+                        (sym-tm (find-symbol "TEXT-MODE" :cl-user)))
+                    (when (and mb sym-tm)
+                      (ignore-errors
+                        (limn/mode:activate mb sym-tm))))))))))
     (setf limn/file:*open-text-engine-fn*   open-fn
-          limn/file:*fetch-wire-content-fn* fetch-fn)))
+          limn/file:*fetch-wire-content-fn* fetch-fn
+          limn/file:*show-buffer-fn*        show-fn)))
 
 (defun stop ()
   (when *session*

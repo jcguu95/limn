@@ -144,6 +144,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "buffer/open")          { cmd_buffer_open         (id, msg); return; }
     if (cmd == "buffer/close")         { cmd_buffer_close        (id, msg); return; }
     if (cmd == "buffer/list")          { cmd_buffer_list         (id, msg); return; }
+    if (cmd == "buffer/show")          { cmd_buffer_show         (id, msg); return; }
 
     if (cmd == "buffer/toc")           { cmd_buffer_toc          (id, msg); return; }
     if (cmd == "buffer/text")          { cmd_buffer_text         (id, msg); return; }
@@ -1652,6 +1653,75 @@ void LimnCommand::cmd_buffer_list(const QString& id, const QJsonObject&) {
     bridge->send_ok_array(id, out);
 }
 
+// ─── buffer/show ──────────────────────────────────────────────────────
+//
+// v0.39 W17 — switch a window's visible buffer to an already-existing
+// one.  Pre-v0.39 the only way to display a buffer was bridge/engine-
+// load, which CREATES a fresh buffer.  Switching back to a previously-
+// opened buffer wasn't possible — once two text buffers existed, you
+// could only see the second.  That's why W17's cross-buffer kill/yank
+// dogfood had no real test path; the v0.39-mid driver "reordered"
+// (kill before opening B) to dodge the switching problem.
+//
+// Request shape:
+//   { cmd: "buffer/show", buffer-id: "...", win-id: "w1" }
+// Validates: buffer-id exists in text_buffers OR registry (mupdf); if
+// neither, returns fail.  Sets win->buffer_id and triggers the same
+// display refresh as cmd_view_set's text/mupdf short-circuits.
+
+void LimnCommand::cmd_buffer_show(const QString& id, const QJsonObject& msg) {
+    const QString buffer_id = msg.value("buffer-id").toString();
+    QString win_id          = msg.value("win-id").toString();
+    if (buffer_id.isEmpty()) {
+        bridge->send_fail(id, "missing 'buffer-id'");
+        return;
+    }
+    if (win_id.isEmpty()) win_id = "w1";   // common-case sugar
+
+    LimnWindow* win = windows ? windows->get(win_id) : nullptr;
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+
+    const bool is_text  = text_buffers.contains(buffer_id);
+    const bool is_mupdf = (registry && registry->lookup(buffer_id) != nullptr);
+    if (!is_text && !is_mupdf) {
+        bridge->send_fail(id, QString("unknown buffer-id: %1").arg(buffer_id));
+        return;
+    }
+
+    win->buffer_id = buffer_id;
+    const bool is_active = (windows->focused_id() == win_id);
+
+    if (is_active && main_widget) {
+        if (is_text) {
+            sync_text_widget(buffer_id);
+            main_widget->show_text_view();
+        } else {
+            // mupdf: re-attach the document to the live DV.  Mirrors
+            // the win-focus code path (cheap re-lookup via DocumentMgr).
+            Document* target_doc = registry->lookup(buffer_id);
+            if (target_doc) {
+                main_widget->open_document(target_doc->get_path());
+                DocumentView* dv = main_widget->document_view();
+                if (dv) {
+                    dv->set_zoom_level(win->zoom, true, true);
+                    dv->goto_page(win->page);
+                    dv->set_offsets(win->offset_x, win->offset_y, true);
+                }
+            }
+            rebuild_overlay_raster(overlay_raster.width(),
+                                    overlay_raster.height());
+            if (main_widget->opengl_widget()) {
+                main_widget->opengl_widget()->update();
+            }
+        }
+    }
+
+    bridge->send_ok(id);
+}
+
 // ─── SPEC v0.5 §5.3 後段 — text-engine 編輯 primitives ─────────────────
 //
 // 共通約定：
@@ -2569,6 +2639,32 @@ void LimnCommand::cmd_test_inject_ime_commit(const QString& id, const QJsonObjec
         input_ev.insert("frame-id", "f1");
         input_ev.insert("text", updated);
         bridge->push_event("minibuffer-input", input_ev);
+    } else if (!text.isEmpty()) {
+        // v0.39 W16 honest fix — when the minibuffer is closed and the
+        // focused window points at a text-engine buffer, deliver the
+        // commit there.  This is what fcitx5/IBus would do via Qt's
+        // inputMethodEvent on a real X11 display; in headless Xvfb,
+        // xdotool can't actually generate CJK keysyms (X11 has no
+        // keysym for them and Xvfb's default keymap doesn't include
+        // a Unicode keysym path) — so we couldn't pump CJK through
+        // the regular key-event pipeline.  Going via test/inject-
+        // ime-commit lands at the same `text_buffers[buf].insert`
+        // call the IME path uses in production; the W16 driver gets
+        // back to testing buffer/insert + buffer/save UTF-8 round-
+        // trip without needing X11 to do something it can't.
+        const QString fid = windows ? windows->focused_id() : QString();
+        LimnWindow* fw    = (windows && !fid.isEmpty())
+                              ? windows->get(fid) : nullptr;
+        if (fw && text_buffers.contains(fw->buffer_id)) {
+            GapBuffer& buf = text_buffers[fw->buffer_id];
+            int&       cur = text_cursors[fw->buffer_id];
+            buf.insert(cur, text);
+            cur += text.length();
+            if (main_widget) sync_text_widget(fw->buffer_id);
+            QJsonObject changed_ev;
+            changed_ev.insert("buffer-id", fw->buffer_id);
+            bridge->push_event("text-changed", changed_ev);
+        }
     }
 
     bridge->push_event("ime-commit", ev);
@@ -2675,8 +2771,48 @@ void LimnCommand::cmd_test_grab_window(const QString& id, const QJsonObject& msg
     // not yet be reflected in the backing store.
     QCoreApplication::processEvents();
 
-    QPixmap pm = target->grab();
-    QImage img = pm.toImage().convertToFormat(QImage::Format_ARGB32);
+    // v0.39 W05 honest fix — was QWidget::grab() on main_widget.  In a
+    // headless Xvfb container, grab() on a QWidget that hosts a
+    // QOpenGLWidget child does NOT include the GL widget's painted
+    // contents (well-known Qt issue: grab() walks the QWidget paint
+    // pipeline, which on a non-active GL context paints nothing for
+    // the GL child).  Result: every grab returned the same chrome-bar
+    // + empty viewport image regardless of PDF state.  Dark-mode
+    // toggle, page navigation, zoom — all visually indistinguishable
+    // in the captured PNG.  W05 had to skip its pixel evidence check
+    // for that reason.
+    //
+    // Replace with a server-side mupdf render of the focused window's
+    // current page, with dark-mode + rotation applied.  This is
+    // deterministic, doesn't depend on the GL context being live, and
+    // legitimately changes when the user toggles dark-mode (which is
+    // what W05 wants to verify).  Falls back to the old grab() path
+    // when no PDF document is loaded (text-engine buffer, fresh
+    // session) — in that case the chrome bar IS the entire visual.
+    QImage img;
+    {
+        const QString fid = windows ? windows->focused_id() : QString();
+        LimnWindow* fw    = (windows && !fid.isEmpty()) ? windows->get(fid)
+                                                       : nullptr;
+        Document* doc = nullptr;
+        if (fw && !fw->buffer_id.isEmpty() && registry) {
+            doc = registry->lookup(fw->buffer_id);
+        }
+        if (doc) {
+            // Pick a DPI that yields a reasonable image (large enough
+            // to detect changes, small enough not to balloon the wire).
+            // 96 DPI matches a typical "fit-to-page" on a 720p viewport.
+            img = LimnMupdf::render_page_with_view_state(
+                doc, fw ? fw->page : 0, 96,
+                fw ? fw->dark_mode : false,
+                fw ? fw->rotation  : 0);
+        }
+        if (img.isNull()) {
+            // No doc (or render failed) — fall back to widget grab.
+            QPixmap pm = target->grab();
+            img = pm.toImage().convertToFormat(QImage::Format_ARGB32);
+        }
+    }
 
     // Encode to base64-PNG.
     QByteArray png_bytes;

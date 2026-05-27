@@ -25,15 +25,20 @@
     (check "A.1 CJK file open"
            (and bid t)
            (format nil "bid=~a" bid))
-    ;; v0.39: xdotool's `type` for CJK relies on X11 XSendKeyEvent
-    ;; which strips Unicode in headless Xvfb — no IME, no
-    ;; Latin-1-equivalent keysym for CJK glyphs.  That's an X11
-    ;; quirk, NOT a Limn editing-pipeline gap.  Use the kill-ring
-    ;; path (same wire C-y goes through) to prove buffer/insert +
-    ;; buffer/save survive multi-byte UTF-8 unchanged.
-    (limn/kill:kill-new "新增中文段落")
-    (sleep 0.1)
-    (xdotool "key" "--clearmodifiers" "ctrl+y")
+    ;; v0.39 W16 honest: xdotool's `type` can't deliver CJK in
+    ;; headless Xvfb — X11 has no keysyms for CJK glyphs and
+    ;; Xvfb's default keymap doesn't include a Unicode keysym
+    ;; bridge (xdo_enter_text_window returns "Invalid multi-byte
+    ;; sequence encountered"). In production, fcitx5 / IBus
+    ;; receives the keypress and delivers the composed result to
+    ;; Qt via inputMethodEvent. The C++ side now handles that as
+    ;; test/inject-ime-commit (extended in v0.39 to insert into the
+    ;; focused text buffer when the minibuffer is closed). Going
+    ;; through this wire cmd lands at the SAME text_buffers.insert
+    ;; call the real IME path uses in production — tests the full
+    ;; Qt input → buffer/save UTF-8 pipeline minus only the X11
+    ;; layer (which fundamentally can't carry CJK in Xvfb).
+    (limn:call "test/inject-ime-commit" :|text| "新增中文段落")
     (sleep 0.4)
     (handler-case (limn/file:save-buffer bid) (error () nil))
     (sleep 0.3)
