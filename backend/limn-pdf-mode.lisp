@@ -1524,8 +1524,9 @@
       ;; v0.37 Phase D: file + session ops
       (%def km "o"        (intern "FIND-FILE"       :cl-user)) ; vim :e analog
       (%def km "q"        (intern "PDF-CLOSE"       :cl-user)) ; vim q
-      ;; v0.37 Phase D: M-x equivalent — vim :
-      (%def km ":"        (intern "EXECUTE-COMMAND" :cl-user))
+      ;; Note: ":" is intentionally NOT bound in pdf-mode — it should
+      ;; pass through as a literal character.  M-x (global keymap) is
+      ;; the command-palette; M-: (global keymap) evaluates a lisp form.
 
       ;; Register the mode (or update its keymap if already registered,
       ;; but respect user-overridden bindings).
@@ -1562,7 +1563,6 @@
                                 ("?"   pdf-isearch-backward)
                                 ("o"   find-file)
                                 ("q"   pdf-close)
-                                (":"   execute-command)
                                 ;; v0.39 W13
                                 ("M-w" pdf-copy-region-as-kill)))
                 (let* ((spec (first entry))

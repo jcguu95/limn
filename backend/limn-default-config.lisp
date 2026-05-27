@@ -84,6 +84,42 @@
                        ";; reload-init-file: ~a ERRORED: ~a~%" path e)
                nil)))))))
 
+  ;; ── M-: eval-expression (Emacs convention) ──────────────────────
+  ;; Read a Lisp form string from the minibuffer, eval it, and echo the
+  ;; result.  Mirrors Emacs M-: (eval-expression).  Errors are caught
+  ;; and shown in the echo area so a typo won't kill the session.
+  (limn/cmd:defcommand cl-user::eval-expression ()
+    (lambda ()
+      "Read and evaluate a Lisp form from the minibuffer."
+      (let* ((reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+             (read-fn (and reader (boundp reader) (symbol-value reader)))
+             (input (and read-fn (funcall read-fn "Eval: "))))
+        (when (and (stringp input) (plusp (length input)))
+          (handler-case
+              (let* ((form   (read-from-string input))
+                     (result (eval form)))
+                ;; Echo result to *standard-output* (repl) and, when the
+                ;; message/echo wire is available, to the echo area.
+                (format t "~&=> ~s~%" result)
+                (let* ((limn-pkg (find-package '#:limn))
+                       (call-sym (and limn-pkg (find-symbol "CALL" limn-pkg))))
+                  (when (and call-sym (fboundp call-sym))
+                    (handler-case
+                        (funcall (symbol-function call-sym)
+                                 "message/echo"
+                                 :|text| (format nil "=> ~s" result))
+                      (error () nil)))))
+            (error (e)
+              (format *error-output* "~&eval-expression error: ~a~%" e)
+              (let* ((limn-pkg (find-package '#:limn))
+                     (call-sym (and limn-pkg (find-symbol "CALL" limn-pkg))))
+                (when (and call-sym (fboundp call-sym))
+                  (handler-case
+                      (funcall (symbol-function call-sym)
+                               "message/echo"
+                               :|text| (format nil "Error: ~a" e))
+                    (error () nil))))))))))
+
   ;; ── v0.38 B15: edit commands discoverable via M-x ────────────────
   ;; query-replace + query-replace-regexp existed since v0.34/v0.36 but
   ;; weren't registered as defcommands, so M-x completion didn't see
@@ -123,6 +159,14 @@
      (handler-case (limn/cmd:call-interactively (find-symbol "EXECUTE-COMMAND" :cl-user))
        (error (e)
          (format *error-output* ";; M-x errored: ~a~%" e)))))
+
+  ;; M-: → eval-expression (Emacs convention: eval a Lisp form).
+  (limn/keys:define-key
+   global-keymap "M-:"
+   (lambda (ev) (declare (ignore ev))
+     (handler-case (limn/cmd:call-interactively (find-symbol "EVAL-EXPRESSION" :cl-user))
+       (error (e)
+         (format *error-output* ";; M-: errored: ~a~%" e)))))
 
   ;; M-r → reload-init-file (hot-reload).  Chose M-r rather than C-c
   ;; C-l (Emacs convention) because C-c is a prefix in most modes.
