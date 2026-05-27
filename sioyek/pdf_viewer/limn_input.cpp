@@ -12,9 +12,21 @@
 namespace {
 
 QString key_to_string(QKeyEvent* ev) {
-    // Prefer the printable text when available (covers letters & symbols).
     QString t = ev->text();
-    if (!t.isEmpty() && t.at(0).isPrint() && !t.at(0).isSpace()) return t;
+
+    // macOS Option key: Option+letter activates the keyboard layout's
+    // Option layer, so ev->text() reports the produced character
+    // (Option+x → "≈", Option+w → "∑", Option+Shift+; → "Ú"), not the
+    // physical letter.  Emacs-style "M-x" bindings would never match
+    // because the wire spec becomes "M-≈".  When Alt is held, bypass
+    // the text-based fast path and resolve via ev->key() below so the
+    // canonical character (x, w, ;, etc.) reaches the keymap.
+    const bool alt_held = ev->modifiers() & Qt::AltModifier;
+
+    // Prefer the printable text when available (covers letters & symbols).
+    if (!alt_held && !t.isEmpty() && t.at(0).isPrint() && !t.at(0).isSpace()) {
+        return t;
+    }
 
     // v0.39 B10 — xdotool type "abc\ndef" feeds the LF byte (0x0A)
     // directly: ev->text() is "\n", which !isPrint() so it falls past
@@ -51,7 +63,48 @@ QString key_to_string(QKeyEvent* ev) {
         return QString(QChar(ev->key()));
     }
 
+    // ASCII punctuation — needed for Alt-held bindings like "M-:" / "M-;"
+    // where the text-based path is bypassed.  Shift on US layout swaps
+    // ;↔: , < / .↔> etc.  Since modifiers_to_array strips Shift for
+    // printable single-char keys (case_encodes_shift), we must encode
+    // the shifted variant here.  Some Qt platforms report the shifted
+    // form as a distinct Qt::Key (Qt::Key_Colon for ":"), others use
+    // the base key + ShiftModifier — handle both.
+    const bool shift = ev->modifiers() & Qt::ShiftModifier;
     switch (ev->key()) {
+        case Qt::Key_Semicolon:    return shift ? ":" : ";";
+        case Qt::Key_Colon:        return ":";
+        case Qt::Key_Comma:        return shift ? "<" : ",";
+        case Qt::Key_Less:         return "<";
+        case Qt::Key_Period:       return shift ? ">" : ".";
+        case Qt::Key_Greater:      return ">";
+        case Qt::Key_Slash:        return shift ? "?" : "/";
+        case Qt::Key_Question:     return "?";
+        case Qt::Key_Apostrophe:   return shift ? "\"" : "'";
+        case Qt::Key_QuoteDbl:     return "\"";
+        case Qt::Key_Minus:        return shift ? "_" : "-";
+        case Qt::Key_Underscore:   return "_";
+        case Qt::Key_Equal:        return shift ? "+" : "=";
+        case Qt::Key_Plus:         return "+";
+        case Qt::Key_BracketLeft:  return shift ? "{" : "[";
+        case Qt::Key_BraceLeft:    return "{";
+        case Qt::Key_BracketRight: return shift ? "}" : "]";
+        case Qt::Key_BraceRight:   return "}";
+        case Qt::Key_Backslash:    return shift ? "|" : "\\";
+        case Qt::Key_Bar:          return "|";
+        case Qt::Key_QuoteLeft:    return shift ? "~" : "`";
+        case Qt::Key_AsciiTilde:   return "~";
+        case Qt::Key_Exclam:       return "!";
+        case Qt::Key_At:           return "@";
+        case Qt::Key_NumberSign:   return "#";
+        case Qt::Key_Dollar:       return "$";
+        case Qt::Key_Percent:      return "%";
+        case Qt::Key_AsciiCircum:  return "^";
+        case Qt::Key_Ampersand:    return "&";
+        case Qt::Key_Asterisk:     return "*";
+        case Qt::Key_ParenLeft:    return "(";
+        case Qt::Key_ParenRight:   return ")";
+
         case Qt::Key_Return:    return "RET";
         case Qt::Key_Enter:     return "RET";
         case Qt::Key_Escape:    return "ESC";
