@@ -139,7 +139,9 @@
                 "process-coding-v035.lisp"
                 ;; v0.36 tests — indent + query-replace
                 "indent-v036.lisp"
-                "query-replace-v036.lisp"))
+                "query-replace-v036.lisp"
+                ;; v0.38 tests
+                "key-spec-v038.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

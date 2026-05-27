@@ -1,0 +1,50 @@
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
+; compilation finished in 0:00:00.006
+; compiling file "/limn/backend/limn.lisp" (written 27 MAY 2026 12:22:54 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
+; compilation finished in 0:00:00.035
+
+; file: /limn/backend/limn-pdf-mode.lisp
+; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
+;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+; in: DEFUN LIMN/PDF-MODE::%CURRENT-PDF-PATH
+;     (GETHASH BID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+
+; file: /limn/backend/limn-file.lisp
+; in: DEFUN LIMN/FILE:BUFFER-WIRE-ID
+;     (GETHASH LIMN/FILE::BUF-ID LIMN/FILE::*BUFS*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/FILE::*BUFS*
+; 
+; compilation unit finished
+;   Undefined variables:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH* LIMN/FILE::*BUFS*
+;   caught 3 WARNING conditions
+;   printed 6 notes
+
+── W01 j×30 連續翻頁 ──
+  state-00 = (0 . 0)
+  after  5 × j: state = (0 . 0.5d0)
+  after 10 × j: state = (0 . 1)
+  after 15 × j: state = (0 . 1.5d0)
+  after 20 × j: state = (0 . 2)
+  after 25 × j: state = (0 . 2.5d0)
+  after 30 × j: state = (0 . 3)
+  ✓ A.1 every 5-step snapshot differs from previous (j actually moves)   [snapshots: ((0 . 0) (0 . 0.5d0) (0 . 1) (0 . 1.5d0) (0 . 2) (0 . 2.5d0) (0 . 3))]
+  ✓ A.2 final state differs from initial after 30 j   [init=(0 . 0)  final=(0 . 3)]
+  ✓ A.3 gg returns to page 0 (or offset 0)   [after gg: (0 . 0)]
+
+── 變奏: 用 l 取代 j ──
+  ✓ B.1 l×10 also moves state   [init=(0 . 0)  after-10-l=(5 . 3960)]
+
+── W01 result: 4 / 4 pass ──

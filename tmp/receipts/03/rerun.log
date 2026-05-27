@@ -1,0 +1,50 @@
+; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
+; compilation finished in 0:00:00.032
+; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
+; compilation finished in 0:00:00.005
+; compiling file "/limn/backend/limn.lisp" (written 27 MAY 2026 12:22:54 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
+; compilation finished in 0:00:00.035
+
+; file: /limn/backend/limn-pdf-mode.lisp
+; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
+;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+; in: DEFUN LIMN/PDF-MODE::%CURRENT-PDF-PATH
+;     (GETHASH BID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+
+; file: /limn/backend/limn-file.lisp
+; in: DEFUN LIMN/FILE:BUFFER-WIRE-ID
+;     (GETHASH LIMN/FILE::BUF-ID LIMN/FILE::*BUFS*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/FILE::*BUFS*
+; 
+; compilation unit finished
+;   Undefined variables:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH* LIMN/FILE::*BUFS*
+;   caught 3 WARNING conditions
+;   printed 6 notes
+
+── W03 zoom ±5 + reset ──
+  z0 = 1
+  after =×5: 3.051758050918579d0
+  ✓ A.1 = ×5 increased zoom   [1 → 3.051758050918579d0]
+  after -×5: 1
+  ✓ A.2 - ×5 brought zoom back close to baseline   [expected≈1 got 1]
+  after 0 reset: 1
+  ✓ A.3 '0' resets zoom to ~1.0   [got 1]
+
+── W03 result: 3 / 3 pass ──

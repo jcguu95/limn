@@ -37,6 +37,7 @@
    #:*pdf-half-page-step*           ; v0.37 Phase D
    #:*pdf-zoom-in-factor*
    #:*pdf-zoom-out-factor*
+   #:*pdf-default-zoom*              ; v0.38 B18
    #:*pdf-annotation-color*
    ;; §B search state
    #:*pdf-search-state* #:make-pdf-search-state
@@ -213,6 +214,14 @@
 
 #-:limn/custom-available
 (defvar *pdf-zoom-out-factor* 0.8)
+
+;; v0.38 B18: default zoom applied to newly-opened PDF buffers.
+;; NIL means: don't override the engine's natural zoom (1.0).  Set to
+;; a number (e.g. 1.5) in user init.lisp to make every PDF open at that
+;; zoom level.
+(defvar *pdf-default-zoom* nil
+  "Override zoom applied on every pdf-mode buffer-opened.  NIL = no override.
+   Set in user init.lisp, e.g. (setf limn/pdf-mode:*pdf-default-zoom* 1.5).")
 
 #+:limn/custom-available
 (limn/custom:defcustom *pdf-annotation-color* "#FFD700"
@@ -620,26 +629,34 @@
 
 (limn/pdf-mode::%defcmd pdf-goto-page "p"
   (lambda (prefix)
+    ;; v0.38 B11: with prefix N → page N; without prefix → last page.
+    ;; This matches vim convention: `5G` jumps to page 5, plain `G`
+    ;; jumps to end.  Old behavior (no prefix → page 0) was unused.
     (let* ((v (limn/pdf-mode::%focused-view))
            (pc (or (getf v :|page-count|) 1))
-           (target (limn/pdf-mode::%clamp-page (or prefix 0) pc)))
+           (default-target (max 0 (1- pc)))
+           (target (limn/pdf-mode::%clamp-page (or prefix default-target) pc)))
       (limn/pdf-mode::%page-set target))))
 
-(limn/pdf-mode::%defcmd pdf-scroll-down nil
-  (lambda ()
+;; v0.38 B13: pdf-scroll-down/up honor numeric prefix-arg.
+;; `5j` should scroll 5× the base step; plain `j` scrolls 1×.
+(limn/pdf-mode::%defcmd pdf-scroll-down "p"
+  (lambda (&optional prefix)
     (let* ((v (limn/pdf-mode::%focused-view))
            (off (or (getf v :|offset-y|) 0.0))
-           (step (/ limn/pdf-mode:*pdf-scroll-step* 30.0)))
+           (n   (or prefix 1))
+           (step (* n (/ limn/pdf-mode:*pdf-scroll-step* 30.0))))
       ;; Move within page via offset-y if engine supports it; otherwise
       ;; the wire layer ignores the field.
       (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
                                   :|offset-y| (+ off step)))))
 
-(limn/pdf-mode::%defcmd pdf-scroll-up nil
-  (lambda ()
+(limn/pdf-mode::%defcmd pdf-scroll-up "p"
+  (lambda (&optional prefix)
     (let* ((v (limn/pdf-mode::%focused-view))
            (off (or (getf v :|offset-y|) 0.0))
-           (step (/ limn/pdf-mode:*pdf-scroll-step* 30.0)))
+           (n   (or prefix 1))
+           (step (* n (/ limn/pdf-mode:*pdf-scroll-step* 30.0))))
       (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
                                   :|offset-y| (max 0.0 (- off step))))))
 
@@ -673,8 +690,13 @@
     ;; never actually toggled in any prior run.  Real path is
     ;; view/set with :|engine-params| nested object (see C++
     ;; cmd_view_set line ~709).
+    ;;
+    ;; v0.38 W05 fix (G'-2): reader was reading top-level :|dark-mode|,
+    ;; but C++ collect_view_state nests it under :|engine-params|. So
+    ;; cur always returned NIL → next always computed T → toggle was
+    ;; one-way (off→on works once, on→off never).  Read nested path.
     (let* ((v (limn/pdf-mode::%focused-view))
-           (cur (getf v :|dark-mode|))
+           (cur (getf (getf v :|engine-params|) :|dark-mode|))
            (next (if (or (null cur) (eq cur :false)) t :false)))
       (limn/pdf-mode::%limn-call "view/set"
                                   :|win-id| "w1"
@@ -682,11 +704,17 @@
 
 (limn/pdf-mode::%defcmd pdf-rotate-cw nil
   (lambda ()
+    ;; v0.38 B1 fix: was calling "bridge/engine-params" which is NOT a
+    ;; registered wire cmd (same bug as v0.37 G'-1 toggle-dark, never
+    ;; fixed for rotate-cw).  Real path is view/set with :|engine-params|
+    ;; nested object.  Also: rotation lives at engine-params/rotation,
+    ;; not top-level (same G'-2 issue as dark-mode reader).
     (let* ((v (limn/pdf-mode::%focused-view))
-           (rot (or (getf v :|rotation|) 0))
+           (rot (or (getf (getf v :|engine-params|) :|rotation|) 0))
            (next (mod (+ rot 90) 360)))
-      (limn/pdf-mode::%limn-call "bridge/engine-params"
-                                  :|win-id| "w1" :|rotation| next))))
+      (limn/pdf-mode::%limn-call "view/set"
+                                  :|win-id| "w1"
+                                  :|engine-params| (list :|rotation| next)))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §B search commands
@@ -947,6 +975,30 @@
         (limn/pdf-mode:pdf-annotations-delete-at-point
          path page off-x off-y)))))
 
+;;; v0.39 W13 — copy current PDF selection text onto the kill-ring.
+;;; Emacs convention: M-w `copy-region-as-kill`.  PDF read-only buffers
+;;; can't `kill`, only copy, so this is the only kill-family command
+;;; in pdf-mode.  Subsequent C-y / `yank` in any text-mode buffer pulls
+;;; the head of *kill-ring* and inserts at point — cross-engine paste.
+(limn/pdf-mode::%defcmd pdf-copy-region-as-kill nil
+  (lambda ()
+    (let* ((r (limn/pdf-mode::%limn-call "view/selection-get"
+                                          :|win-id| "w1"))
+           (d (limn/pdf-mode::%response-data r))
+           (txt (and d (getf d :|text|))))
+      (when (and txt (stringp txt) (plusp (length txt)))
+        (let ((kpkg (find-package '#:limn/kill)))
+          (when kpkg
+            (let ((kn (find-symbol "KILL-NEW" kpkg)))
+              (when (and kn (fboundp kn))
+                (funcall (symbol-function kn) txt)))))
+        ;; Echo confirmation so the user knows the copy landed (and
+        ;; the e2e log carries evidence). v0.37 echo helper.
+        (handler-case
+            (limn/pdf-mode::%limn-call "message/echo"
+                                        :|text| "Copied selection")
+          (error () nil))))))
+
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §D TOC
 ;;; ═════════════════════════════════════════════════════════════════════
@@ -987,19 +1039,75 @@
       ;; 1-indexed in display → 0-indexed internally
       (1- (parse-integer digits)))))
 
+;; v0.38 B14: helpers to flatten the nested TOC tree into a single list
+;; of (title page depth) tuples for completing-read.
+(defun limn/pdf-mode::%toc-flatten (items depth)
+  "Walk the TOC tree producing a flat list of (:title T :page P :depth D)
+   plists in display order (parent before its children)."
+  (let ((acc nil))
+    (dolist (it items)
+      (let ((title (getf it :|title|))
+            (page  (or (getf it :|page|) 0))
+            (kids  (getf it :|children|)))
+        (push (list :title title :page page :depth depth) acc)
+        (when (listp kids)
+          (dolist (sub (limn/pdf-mode::%toc-flatten kids (1+ depth)))
+            (push sub acc)))))
+    (nreverse acc)))
+
+(defun limn/pdf-mode::%toc-line (entry)
+  "Render one flat TOC entry as 'PAGE  INDENT TITLE  PAGE' for
+   completing-read display.  The trailing PAGE is what
+   parse-toc-line-page picks up (TITLE may itself end in digits
+   like 'Chapter 1', so we cannot rely on title-then-page parsing
+   alone — but the parse looks at the LAST run of digits, so any
+   title-internal digits are fine as long as the page comes after.
+   Leading PAGE is also displayed for quick visual scan."
+  (let* ((title (or (getf entry :title) ""))
+         (page  (or (getf entry :page) 0))
+         (depth (or (getf entry :depth) 0))
+         (display-page (1+ page))
+         (indent (with-output-to-string (s)
+                   (loop repeat (* depth 2) do (write-char #\Space s))))
+         ;; sentinel "  " separator + trailing page — parse-toc-line-page
+         ;; grabs trailing digits past any non-digit, so the title's own
+         ;; trailing digits get the prefix re-read as one number.  To
+         ;; ensure correctness we append an em-dash plus the page:
+         (suffix (format nil " — p.~a" display-page)))
+    (format nil "~a~a~a" indent title suffix)))
+
 (limn/pdf-mode::%defcmd pdf-toc nil
   (lambda ()
+    ;; v0.38 B14: open completing-read with TOC entries.  Pre-v0.38
+    ;; sent the formatted tree to a `bridge/win-float-create :|text|`
+    ;; call but that wire command ignores :|text| so the user saw
+    ;; nothing interactive.  This new impl flattens the tree, shows
+    ;; each entry "  P | Title" via completing-read, then parses out
+    ;; the page and jumps.
+    ;;
+    ;; v0.39 W04 fix: `buffer/toc` returns the items array directly
+    ;; as `data` (see cmd_buffer_toc / send_ok_array), not wrapped
+    ;; as `{items: [...]}`.  Pre-fix used `(getf d :|items|)` which
+    ;; on the actual response (a list of TOC plists) either errored
+    ;; with malformed-property-list or silently returned NIL — either
+    ;; way `items` was nil, `(when (listp items) ...)` skipped, and
+    ;; the user pressing `t` saw nothing happen because completing-
+    ;; read never opened.  Was the entire reason W04 A.1 failed.
     (let* ((bid (limn/pdf-mode::%focused-buffer-id))
            (r (and bid (limn/pdf-mode::%limn-call "buffer/toc"
                                                     :|buffer-id| bid)))
-           (d (limn/pdf-mode::%response-data r))
-           (items (and d (getf d :|items|))))
+           (items (limn/pdf-mode::%response-data r)))
       (when (listp items)
-        (let ((text (limn/pdf-mode:format-toc-tree items)))
-          (limn/pdf-mode::%limn-call
-           "bridge/win-float-create"
-           :|name| limn/pdf-mode:*pdf-toc-buffer-name*
-           :|text| text))))))
+        (let* ((flat (limn/pdf-mode::%toc-flatten items 0))
+               (lines (mapcar #'limn/pdf-mode::%toc-line flat))
+               (completing (find-symbol "COMPLETING-READ" '#:limn/completion))
+               (pick (and completing (fboundp completing)
+                          (funcall (symbol-function completing)
+                                   "TOC: " lines :require-match t))))
+          (when (and pick (stringp pick) (plusp (length pick)))
+            (let ((p (limn/pdf-mode:parse-toc-line-page pick)))
+              (when (integerp p)
+                (limn/pdf-mode::%page-set p)))))))))
 
 (limn/pdf-mode::%defcmd pdf-toc-jump-at-point nil
   (lambda (&optional line)
@@ -1239,7 +1347,18 @@
     (handler-case
         (limn/pdf-mode:pdf-mode-update-modeline
          :buffer-id buffer-id :path path)
-      (error () nil))))
+      (error () nil))
+    ;; v0.38 B18: apply *pdf-default-zoom* if set in user init.lisp.
+    ;; NOTE: this defun is in cl-user package (see in-package at top of
+    ;; file), so bare *pdf-default-zoom* would resolve to cl-user's
+    ;; symbol — must qualify with limn/pdf-mode: prefix.
+    (let ((z limn/pdf-mode:*pdf-default-zoom*))
+      (when (and z (numberp z))
+        (handler-case
+            (limn/pdf-mode::%limn-call "view/set"
+                                        :|win-id| "w1"
+                                        :|zoom| z)
+          (error () nil))))))
 
 (defun limn/pdf-mode:pdf-mode-on-buffer-closed (&key buffer-id)
   "Called before a PDF buffer closes: save last-position, clear search state."
@@ -1361,7 +1480,15 @@
       (%def km "p"        (intern "PDF-PREV-PAGE"   :cl-user))
       (%def km "J"        (intern "PDF-NEXT-PAGE"   :cl-user))
       (%def km "K"        (intern "PDF-PREV-PAGE"   :cl-user))
-      (%def km "G"        (intern "PDF-LAST-PAGE"   :cl-user))
+      ;; v0.38: b = prev-page (less convention).  NB: do NOT bind SPC —
+      ;; SPC is the Doom-style leader key (limn/keys:*leader-key*).
+      ;; Pre-fix W22/W23/W25 broke when pdf-mode-map's SPC binding shadowed
+      ;; *leader-keymap* dispatch.
+      (%def km "b"        (intern "PDF-PREV-PAGE"   :cl-user))
+      ;; v0.38 B11: vim convention — G alone → last page; NG → page N.
+      ;; pdf-goto-page now defaults to last page when prefix is nil, so
+      ;; binding it on G gives both behaviors via one command.
+      (%def km "G"        (intern "PDF-GOTO-PAGE"   :cl-user))
       (%def km "g g"      (intern "PDF-FIRST-PAGE"  :cl-user))
       ;; zoom
       (%def km "+"        (intern "PDF-ZOOM-IN"     :cl-user))
@@ -1389,6 +1516,9 @@
       ;; annotation
       (%def km "h"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
+      ;; v0.39 W13 — M-w copies the current PDF selection text onto
+      ;; the kill-ring so a follow-up C-y in any text buffer pastes it.
+      (%def km "M-w"      (intern "PDF-COPY-REGION-AS-KILL" :cl-user))
       ;; TOC
       (%def km "t"        (intern "PDF-TOC" :cl-user))
       ;; v0.37 Phase D: file + session ops
@@ -1412,8 +1542,9 @@
                                 ("<down>" pdf-scroll-down)
                                 ("<up>" pdf-scroll-up)
                                 ("n" pdf-next-page) ("p" pdf-prev-page)
+                                ("b" pdf-prev-page)
                                 ("J" pdf-next-page) ("K" pdf-prev-page)
-                                ("G" pdf-last-page) ("g g" pdf-first-page)
+                                ("G" pdf-goto-page) ("g g" pdf-first-page)
                                 ("+" pdf-zoom-in)   ("=" pdf-zoom-in)
                                 ("-" pdf-zoom-out)  ("0" pdf-zoom-reset)
                                 ("W" pdf-fit-width)
@@ -1431,7 +1562,9 @@
                                 ("?"   pdf-isearch-backward)
                                 ("o"   find-file)
                                 ("q"   pdf-close)
-                                (":"   execute-command)))
+                                (":"   execute-command)
+                                ;; v0.39 W13
+                                ("M-w" pdf-copy-region-as-kill)))
                 (let* ((spec (first entry))
                        (cmd (second entry))
                        (parts

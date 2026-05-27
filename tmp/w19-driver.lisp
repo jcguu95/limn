@@ -1,0 +1,38 @@
+;;;; W19 — Query-replace-regexp 互動
+(in-package :cl-user)
+(require :sb-posix) (require :sb-bsd-sockets)
+(defparameter *bdir* (or (sb-posix:getenv "LIMN_BACKEND_DIR") "/limn/backend/"))
+(load (concatenate 'string *bdir* "tests/e2e/load-limn-system.lisp"))
+(defun xdotool (&rest args) (zerop (sb-ext:process-exit-code (sb-ext:run-program "xdotool" args :search t :wait t :output nil :error nil))))
+(defun wait-for-window (n) (let ((d (+ (get-universal-time) 5))) (loop (when (zerop (sb-ext:process-exit-code (sb-ext:run-program "xdotool" (list "search" "--name" n) :search t :wait t :output nil))) (return t)) (when (> (get-universal-time) d) (return nil)) (sleep 0.1))))
+(ensure-directories-exist "/host-tmp/receipts/19/")
+(defparameter *path* (format nil "/tmp/w19-~a.txt" (sb-posix:getpid)))
+(defparameter *results* nil)
+(defun check (l ok &optional (d "")) (push (cons l ok) *results*) (format t "  ~a ~a~a~%" (if ok "✓" "✗") l (if (string= d "") "" (format nil "   [~a]" d))))
+
+(format t "~%── W19 query-replace-regexp 互動 ──~%")
+(with-open-file (s *path* :direction :output :if-exists :supersede)
+  (write-string "foo0 foo1 foo2 foo3 foo4 foo5 foo6 foo7 foo8 foo9" s))
+
+(let* ((sock (format nil "/tmp/limn-w19-~a" (sb-posix:getpid))) (limn-bin "/limn/sioyek/limn")
+       (proc (sb-ext:run-program limn-bin (list "--test-mode" "--socket" sock) :wait nil :search nil :output "/tmp/limn-w19.log" :if-output-exists :supersede :error :output)))
+  (declare (ignore proc))
+  (loop repeat 100 until (probe-file sock) do (sleep 0.05))
+  (limn:start sock) (wait-for-window "Limn") (sleep 0.5)
+  (let ((bid (limn/file:find-file *path*)))
+    (check "A.1 file open" bid)
+    (let ((found-qrr (find-symbol "QUERY-REPLACE-REGEXP" :cl-user)))
+      ;; v0.38: defcommand 把實作存進 command struct，不會 fbind 到
+      ;; cl-user symbol。"interned" 是 defcommand 副效果但 sym 本身
+      ;; 沒被 fset。檢查 symbol 存在即可，不需 fboundp。
+      (check "A.2 query-replace-regexp 在 :cl-user package"
+             (and found-qrr t)
+             (format nil "sym=~a" found-qrr))
+      (check "A.3 query-replace-regexp 在 defcommand registry"
+             (and found-qrr (limn/cmd:find-command found-qrr))
+             (format nil "in-registry=~a" (and found-qrr (limn/cmd:find-command found-qrr))))))
+  (ignore-errors (delete-file *path*))
+  (ignore-errors (sb-ext:run-program "pkill" '("-9" "-f" "/limn/sioyek/limn") :search t :wait t)))
+(let* ((rev (reverse *results*)) (pass (count-if #'cdr rev)) (total (length rev)))
+  (format t "~%── W19 result: ~a / ~a pass ──~%" pass total)
+  (sb-ext:exit :code (if (= pass total) 0 1)))

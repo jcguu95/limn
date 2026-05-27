@@ -18,7 +18,10 @@
            #:*file-type-alist* #:*default-directory*
            #:*read-file-fn* #:*write-file-fn*
            #:*file-exists-p-fn* #:*engine-load-fn*
-           #:*buffer-set-content-fn* #:*minibuffer-yes-no-fn*))
+           #:*buffer-set-content-fn* #:*minibuffer-yes-no-fn*
+           #:*open-text-engine-fn* #:*fetch-wire-content-fn*
+           #:*show-buffer-fn*
+           #:buffer-wire-id))
 
 (in-package #:limn/file)
 
@@ -85,11 +88,64 @@
 (defvar *minibuffer-yes-no-fn*
   (lambda (prompt) (declare (ignore prompt)) nil))
 
+;;; v0.39 B10 — text-engine bridge.  Pre-v0.39, find-file created a fbuf
+;;; in *bufs* but never told C++ that a text buffer existed.  As a result
+;;; xdotool keystrokes fell on whatever window happened to be focused
+;;; (usually still the empty PDF view) and self-insert wrote to a buffer
+;;; that nobody was reading from on save.  These two hooks let the
+;;; runtime bridge inject the wire calls (bridge/engine-load engine=text
+;;; + buffer/load-file + text-mode activate) without making limn/file
+;;; depend on limn:call directly — unit tests still bind both to no-op.
+(defvar *open-text-engine-fn*
+  (lambda (path content)
+    (declare (ignore path content))
+    nil)
+  "Hook called when find-file opens a non-PDF (text) buffer.  Receives
+   the absolute path and the decoded content already cached on the Lisp
+   side.  Should perform the C++-side setup (bridge/engine-load
+   engine=text, buffer/load-file to register the path, activate
+   text-mode on w1) and return the wire-side buffer-id (string) so
+   subsequent save-buffer calls can fetch live content back, or NIL if
+   no wire side is available (unit-tier).")
+
+(defvar *fetch-wire-content-fn*
+  (lambda (wire-id)
+    (declare (ignore wire-id))
+    nil)
+  "Hook called by save-buffer when an fbuf has a wire-id.  Should
+   return the current text content (string) of the C++-side buffer so
+   we write the user's edits to disk instead of the stale Lisp-cached
+   open-time snapshot.  Returns NIL if unavailable, in which case
+   save-buffer falls back to the cached fbuf-content.")
+
+(defvar *show-buffer-fn*
+  (lambda (wire-id)
+    (declare (ignore wire-id))
+    nil)
+  "v0.39 W17 — hook called by find-file when reopening an already-open
+   path.  Should ask C++ to switch the visible window to WIRE-ID (the
+   existing C++ text_buffers tid).  Without this, the Lisp-side fbuf
+   id was returned but the C++ widget kept showing whatever buffer
+   was loaded last, so cross-buffer operations (kill from A then yank
+   in B then come back to verify A) couldn't actually re-focus A.
+   Returns whatever the wire call returns (typically the response
+   plist); callers don't read it.")
+
 (defstruct fbuf
   id
   path
   content
-  (modified-p nil))
+  (modified-p nil)
+  ;; v0.39 B10 — C++ text_buffers id (e.g. "t1") for text-engine buffers.
+  ;; NIL for PDF buffers and for unit-tier opens (where no wire is wired).
+  (wire-id nil))
+
+(defun buffer-wire-id (buf-id)
+  "C++ text_buffers id for BUF-ID, or NIL.  Mirrors visited-file-name in
+   shape — exposed so callers (chrome modeline, REPL inspection) can
+   chase the wire side without poking at the fbuf struct directly."
+  (let ((b (gethash buf-id *bufs*)))
+    (and b (fbuf-wire-id b))))
 
 (defvar *bufs*    (make-hash-table :test 'equal))   ; buf-id → fbuf
 (defvar *by-path* (make-hash-table :test 'equal))   ; path → buf-id
@@ -147,30 +203,60 @@
 (defun find-file (path)
   "Open the file at PATH. If a buffer for that (normalized) path
    already exists, return its buf-id without re-reading. Otherwise
-   read content, create a buffer, fire *find-file-hook*."
+   read content (or create empty buffer if file does not exist) and
+   fire *find-file-hook*.
+
+   v0.38 B8: matches Emacs semantics — for a non-existent text path,
+   open a fresh buffer with empty content + path visited, so the
+   user can type and `save-buffer` materializes the file.  Pre-v0.38
+   the call raised an error which made `C-x C-f new-file` unusable.
+   PDF paths still error when missing (no point opening a 'new PDF'
+   buffer)."
   (let* ((abs (%normalize path))
          (existing (gethash abs *by-path*)))
     (if existing
-        existing
-        (progn
-          (unless (funcall *file-exists-p-fn* abs)
-            (error "limn/file: file does not exist: ~s" abs))
-          (let* ((kind  (file-type abs))
-                 (id    (%fresh-id))
-                 (raw   (if (eq kind :pdf)
-                            nil
-                            (funcall *read-file-fn* abs)))
-                 (content (if (eq kind :pdf)
-                              ""
-                              (%decode-file-content raw abs id))))
-            (when (eq kind :pdf)
+        ;; v0.39 W17 — re-opening an already-known path: ask C++ to
+        ;; switch the visible window back to this buffer.  Without
+        ;; this, find-file('A') after find-file('B') returned A's
+        ;; fbuf-id but the widget stayed on B, breaking the cross-
+        ;; buffer kill/yank dogfood pattern.  Wrapped so unit-tier
+        ;; (no wire) stays a no-op via the default no-op hook.
+        (let ((wire (let ((b (gethash existing *bufs*)))
+                      (and b (fbuf-wire-id b)))))
+          (when wire
+            (handler-case (funcall *show-buffer-fn* wire)
+              (error () nil)))
+          existing)
+        (let* ((file-exists-p (funcall *file-exists-p-fn* abs))
+               (kind  (file-type abs)))
+          (when (and (not file-exists-p) (eq kind :pdf))
+            (error "limn/file: PDF file does not exist: ~s" abs))
+          (let* ((id    (%fresh-id))
+                 (raw   (when (and file-exists-p (not (eq kind :pdf)))
+                          (funcall *read-file-fn* abs)))
+                 (content (cond
+                            ((eq kind :pdf) "")
+                            ((not file-exists-p) "")          ; new file: empty
+                            (t (%decode-file-content raw abs id)))))
+            (when (and file-exists-p (eq kind :pdf))
               (handler-case (funcall *engine-load-fn* abs id)
                 (error () nil)))
             (funcall *buffer-set-content-fn* id content)
-            (let ((b (make-fbuf :id id :path abs :content content
-                                :modified-p nil)))
-              (setf (gethash id  *bufs*)    b
-                    (gethash abs *by-path*) id))
+            ;; v0.39 B10 — text-engine bridge.  For text kind, ask the
+            ;; runtime bridge to do bridge/engine-load engine=text +
+            ;; buffer/load-file so C++ knows about this buffer and
+            ;; xdotool keystrokes route to it via text-mode.  The hook
+            ;; returns the C++ wire-id (or NIL in unit-tier where no
+            ;; wire is bound).  Wrapped in handler-case so a wire error
+            ;; never poisons the Lisp-side fbuf registration.
+            (let ((wire (when (not (eq kind :pdf))
+                          (handler-case
+                              (funcall *open-text-engine-fn* abs content)
+                            (error () nil)))))
+              (let ((b (make-fbuf :id id :path abs :content content
+                                  :modified-p nil :wire-id wire)))
+                (setf (gethash id  *bufs*)    b
+                      (gethash abs *by-path*) id)))
             (%run-hooks-safely *find-file-hook* id abs)
             id)))))
 
@@ -228,6 +314,19 @@
          (target (or path (fbuf-path b))))
     (unless target
       (error "limn/file: no path to save buffer ~s" buf-id))
+    ;; v0.39 B10 — for text-engine buffers with a wire-id, the user has
+    ;; been typing into the C++ GapBuffer; the Lisp-side fbuf-content is
+    ;; the stale open-time snapshot.  Fetch live content first so the
+    ;; rest of the save pipeline (hooks, *require-final-newline*,
+    ;; *encode-buffer-content*) sees what the user actually edited.
+    ;; If the fetch hook returns NIL (unit-tier or wire error), keep
+    ;; the cached content — backwards-compatible with v0.38 tests.
+    (when (fbuf-wire-id b)
+      (let ((live (handler-case
+                      (funcall *fetch-wire-content-fn* (fbuf-wire-id b))
+                    (error () nil))))
+        (when (stringp live)
+          (setf (fbuf-content b) live))))
     ;; before-save hooks: errors propagate (cancels save)
     (dolist (h *before-save-hook*)
       (funcall h buf-id))

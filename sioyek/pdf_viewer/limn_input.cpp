@@ -16,6 +16,21 @@ QString key_to_string(QKeyEvent* ev) {
     QString t = ev->text();
     if (!t.isEmpty() && t.at(0).isPrint() && !t.at(0).isSpace()) return t;
 
+    // v0.39 B10 — xdotool type "abc\ndef" feeds the LF byte (0x0A)
+    // directly: ev->text() is "\n", which !isPrint() so it falls past
+    // the early return above, and ev->key() is the raw latin1 code 10
+    // (NOT Qt::Key_Return = 0x01000004). The default switch branch
+    // then emits "<key-10>" which no keymap binds, so RET disappears.
+    // Map the raw control chars to their named equivalents BEFORE the
+    // letter/digit/switch maze gets a chance to mis-classify them.
+    if (!t.isEmpty()) {
+        const QChar c = t.at(0);
+        if (c == QLatin1Char('\n') || c == QLatin1Char('\r')) return "RET";
+        if (c == QLatin1Char('\t'))                            return "TAB";
+        if (c == QLatin1Char('\b'))                            return "BS";
+        if (c == QLatin1Char(0x1B))                            return "ESC";
+    }
+
     // Letter / digit keys with a modifier produce non-printable text:
     // Ctrl-d gives ASCII 0x04, not "d". Without this fallback the bridge
     // would report key="<key-68>" mods=["ctrl"] and the user's "C-d"

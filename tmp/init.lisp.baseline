@@ -1,0 +1,10 @@
+;;;; /tmp/.limn/init.lisp — v0.38 dogfood session baseline
+;;;; Session-scoped; not the user's real init.
+
+(in-package :cl-user)
+
+;; minimal hook to prove it loaded
+(when (find-package :limn)
+  (let ((msg-fn (find-symbol "MESSAGE" :limn)))
+    (when msg-fn
+      (funcall msg-fn "[v038-init] baseline init.lisp loaded"))))

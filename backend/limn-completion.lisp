@@ -83,11 +83,35 @@
 
 ;;; ─── completing-read ──────────────────────────────────────────────
 
+(defun %try-live-minibuffer-read (prompt)
+  "v0.38: if the runtime has installed a real *minibuffer-read* (i.e. a
+   live session), use it.  Returns the typed string, or NIL if no
+   live reader is installed (unit-test fallback)."
+  (let* ((cmd-pkg (find-package '#:limn/cmd))
+         (mb-sym  (and cmd-pkg (find-symbol "*MINIBUFFER-READ*" cmd-pkg)))
+         (mb-fn   (and mb-sym (boundp mb-sym) (symbol-value mb-sym))))
+    (when (and mb-fn (functionp mb-fn))
+      (handler-case (funcall mb-fn prompt)
+        (error () nil)))))
+
 (defun completing-read (prompt collection
                         &key predicate require-match
                              initial-input history default
                              annotation-function)
   (setf *current-prompt* prompt)
+  ;; v0.38: in a live session, delegate to *minibuffer-read* to actually
+  ;; open the minibuffer over the bridge.  Otherwise (unit tests) fall
+  ;; through to the existing collection-matching behavior.
+  (let ((live (%try-live-minibuffer-read prompt)))
+    (when live
+      (setf *current-contents* live)
+      (when history (ignore-errors (%push-history history live)))
+      (let ((all (%candidates collection live predicate)))
+        (return-from completing-read
+          (cond
+            ((find live all :test #'equal) live)
+            ((and require-match all) (first all))
+            (t live))))))
   (let* ((input (or initial-input ""))
          (all-candidates (%candidates collection input predicate)))
     (setf *current-contents* input)

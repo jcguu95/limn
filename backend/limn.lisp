@@ -70,12 +70,29 @@
           ((string= s "super")                            "s")
           (t s))))
 
+(defun %strip-redundant-shift (mods key)
+  "v0.38 B12: drop \"shift\" from MODS when KEY is already an uppercase
+   single letter — the case already encodes the shift in Emacs conv.
+     {key:\"G\", mods:[\"shift\"]}        → mods = ()   (lookup is \"G\")
+     {key:\"G\", mods:[\"ctrl\",\"shift\"]} → (ctrl)    (lookup is \"C-G\")
+     {key:\"5\", mods:[\"shift\"]}        → keep shift (non-letter)"
+  (if (and mods key
+           (stringp key) (= (length key) 1)
+           (let ((c (char key 0))) (and (alpha-char-p c) (upper-case-p c))))
+      (remove "shift" mods :test #'string-equal)
+      mods))
+
 (defun %event-key-spec (ev)
   "Turn a `key` event plist (key + mods array) into an Emacs-style spec.
    Modifiers are mapped: ctrl → C, alt/meta → M, shift → S, super → s.
-   e.g. {key:\"d\", mods:[\"ctrl\"]} → \"C-d\"."
+   e.g. {key:\"d\", mods:[\"ctrl\"]} → \"C-d\".
+
+   v0.38 B12: when KEY is an uppercase letter, Shift is redundant and
+   gets stripped from MODS before formatting.  Otherwise Shift+G on
+   the wire becomes \"S-G\" which fails to match the keymap binding
+   \"G\" (which is the Emacs canonical form for uppercase letters)."
   (let* ((key  (getf ev :|key|))
-         (mods (getf ev :|mods|)))
+         (mods (%strip-redundant-shift (getf ev :|mods|) key)))
     (cond
       ((null mods) key)
       (t (format nil "~{~a-~}~a"
@@ -135,7 +152,30 @@
            (mb      (and mb-fn (funcall mb-fn win-id)))
            (mode-result (%mode-stack-lookup mb sequence lookup-seq))
            (global-result (and km (funcall lookup-seq km sequence)))
-           (result        (or mode-result global-result))
+           ;; v0.38 B7-leader fix: when sequence starts with *leader-key*
+           ;; (default "SPC"), consult *leader-keymap* with the remainder.
+           ;; Pre-v0.38 *leader-keymap* was populated by (map! :leader ...)
+           ;; but NOTHING ever looked at it — so user's leader bindings
+           ;; silently no-op'd at runtime.
+           (leader-result
+             (when (and (boundp 'limn/keys:*leader-key*)
+                        limn/keys:*leader-key*
+                        (boundp 'limn/keys:*leader-keymap*)
+                        sequence
+                        (string= (first sequence) limn/keys:*leader-key*))
+               (let ((rest-seq (rest sequence)))
+                 (if (null rest-seq)
+                     ;; SPC alone: act as prefix if *leader-keymap* has
+                     ;; any entries.  keymap-bindings is unexported;
+                     ;; use ::-internal access.
+                     (let* ((kbf (find-symbol "KEYMAP-BINDINGS" '#:limn/keys))
+                            (kb  (and kbf limn/keys:*leader-keymap*
+                                      (funcall (symbol-function kbf)
+                                                limn/keys:*leader-keymap*))))
+                       (when (and kb (plusp (hash-table-count kb))) :prefix))
+                     (funcall lookup-seq
+                              limn/keys:*leader-keymap* rest-seq)))))
+           (result        (or mode-result global-result leader-result))
            ;; Bind prefix-arg if accumulated; gather-args reads it
            ;; via :interactive "p". Reset accumulator regardless.
            (acc-int (when (plusp (length *prefix-arg-acc*))
@@ -146,19 +186,22 @@
          (limn/keys:set-key-prefix sequence))
         ((functionp result)
          (limn/keys:set-key-prefix '())
-         (let ((cmd-pkg (find-package :limn/cmd)))
-           (if (and acc-int cmd-pkg)
-               (let ((slot (find-symbol "*PREFIX-ARG*" cmd-pkg)))
-                 (if slot
-                     (progv (list slot) (list acc-int)
-                       (handler-case (funcall result ev)
-                         (error (e) (format *error-output*
-                                            "limn: binding for ~{~a~^ ~} errored: ~a~%"
-                                            sequence e))))
-                     (handler-case (funcall result ev)
-                       (error (e) (format *error-output*
-                                          "limn: binding for ~{~a~^ ~} errored: ~a~%"
-                                          sequence e)))))
+         (let* ((cmd-pkg (find-package :limn/cmd))
+                (slot    (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+           ;; v0.38: always progv *prefix-arg*, whether or not user typed
+           ;; a prefix.  acc-int = typed value or NIL.  Commands using
+           ;; "p" spec that expect numeric default (e.g. scroll 1×) write
+           ;; (or prefix 1).  Commands wanting vim-style "no prefix →
+           ;; sentinel" (e.g. pdf-goto-page → last) write (or prefix end).
+           ;; Pre-v0.38 only progv'd when acc-int was set, leaving NO-prefix
+           ;; calls to see *prefix-arg*'s default of 1 — which made
+           ;; pdf-goto-page mis-route bare 'G' to page 1 (B11 follow-up).
+           (if slot
+               (progv (list slot) (list acc-int)
+                 (handler-case (funcall result ev)
+                   (error (e) (format *error-output*
+                                      "limn: binding for ~{~a~^ ~} errored: ~a~%"
+                                      sequence e))))
                (handler-case (funcall result ev)
                  (error (e) (format *error-output*
                                     "limn: binding for ~{~a~^ ~} errored: ~a~%"
@@ -372,6 +415,15 @@
                         (find-symbol "INSTALL-DEFAULT-BINDINGS"
                                      :limn/runtime))))
       (when install (funcall install *global-keymap*)))
+    ;; v0.38 B5 fix: install M-x / M-r / which-key defaults.  This was
+    ;; exported by limn/default-config since v0.37 Phase B but never
+    ;; called from start, so M-letter keystrokes never had bindings to
+    ;; dispatch into (W27/W28 dogfood finding).
+    (let ((install-defaults (and (find-package :limn/default-config)
+                                   (find-symbol "INSTALL-DEFAULTS"
+                                                :limn/default-config))))
+      (when (and install-defaults (fboundp install-defaults))
+        (funcall (symbol-function install-defaults) *global-keymap*)))
     (%install-key-handler)
     (%install-buffer-handlers)
     ;; Register the default engine→mode mapping and bootstrap mode-buffers
@@ -406,6 +458,11 @@
     ;; downstream callers (update-region-overlay, deactivate-mark, etc.)
     ;; see actual cursor positions.
     (%install-cursor-vtables)
+    ;; v0.39 B10 — install limn/file text-engine bridge.  Pre-v0.39 the
+    ;; text path of find-file never told C++ anything, so xdotool keys
+    ;; routed to the wrong widget and self-insert vanished.  See
+    ;; backend/limn-file.lisp commentary above the hook defvars.
+    (%install-file-text-bridge)
     ;; Spawn a background pump thread so events the user generates in the
     ;; Qt window fire their bindings while the REPL is at the prompt. Tests
     ;; with mock clients can call STOP-PUMP-THREAD if they don't want it.
@@ -434,6 +491,92 @@
                 (s (find-symbol "*BUFFER-SET-CURSOR-FN*" p)))
             (when (and g (boundp g)) (set g get-fn))
             (when (and s (boundp s)) (set s set-fn))))))))
+
+(defun %install-file-text-bridge ()
+  "Bind limn/file:*open-text-engine-fn* / *fetch-wire-content-fn* to
+   real-wire implementations.  Decoupled from limn/file so unit tests
+   keep their no-op defaults (which the with-file-env fixture
+   re-binds).  Idempotent — safe to call from every limn:start.
+
+   *open-text-engine-fn* path content
+     1. bridge/engine-load engine=text → fresh C++ text_buffers tid
+     2. if PATH names an existing file: buffer/load-file to populate
+        the GapBuffer and register buffer_paths[tid] for buffer/save
+     3. cache tid in limn/text:*current-text-buffer* (the self-insert
+        hot path uses this; the buffer-opened pump-thread event also
+        sets it, but synchronously now avoids a race window)
+     4. activate text-mode on w1's mode-buffer so %dispatch-key
+        routes printable keys into self-insert-command
+     5. return tid (or NIL on any wire failure — caller stays usable
+        as a pure-Lisp fbuf even without C++)"
+  (let ((open-fn
+          (lambda (path content)
+            (declare (ignore content))
+            (ignore-errors
+              (let* ((r (call "bridge/engine-load"
+                              :|win-id| "w1" :|engine| "text"
+                              :|path| (or path "")))
+                     (ok (eq (getf r :|ok|) t))
+                     (tid (and ok (getf (getf r :|data|) :|buffer-id|))))
+                (when (and tid (stringp path) (plusp (length path)))
+                  ;; buffer/load-file fails on non-existent files; B8
+                  ;; lets find-file proceed for new files, so swallow.
+                  (ignore-errors
+                    (call "buffer/load-file"
+                          :|buffer-id| tid :|path| path)))
+                (when tid
+                  ;; Sync limn/text cache up-front; the async
+                  ;; event/buffer-opened hook does the same but the
+                  ;; pump thread may not have processed it yet by the
+                  ;; time the driver fires its first xdotool key.
+                  (let* ((tpkg (find-package '#:limn/text))
+                         (sym  (and tpkg (find-symbol "*CURRENT-TEXT-BUFFER*"
+                                                       tpkg))))
+                    (when (and sym (boundp sym))
+                      (set sym tid)))
+                  ;; Activate text-mode on w1's mode-buffer.
+                  (let* ((rt (find-package '#:limn/runtime))
+                         (mb-fn (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW"
+                                                      rt))))
+                    (when (and mb-fn (fboundp mb-fn))
+                      (let ((mb (funcall (symbol-function mb-fn) "w1"))
+                            (sym-tm (find-symbol "TEXT-MODE" :cl-user)))
+                        (when (and mb sym-tm)
+                          (ignore-errors
+                            (limn/mode:activate mb sym-tm)))))))
+                tid))))
+        (fetch-fn
+          (lambda (wire-id)
+            (ignore-errors
+              (let* ((r (call "buffer/text" :|buffer-id| wire-id))
+                     (ok (eq (getf r :|ok|) t)))
+                (and ok (getf (getf r :|data|) :|text|))))))
+        ;; v0.39 W17 — switch the visible window to an already-open
+        ;; buffer.  Called by limn/file:find-file when the path is
+        ;; already cached in *by-path*.  Also activates text-mode on
+        ;; the mode-buffer + caches *current-text-buffer* so the
+        ;; next keystroke routes self-insert/yank/kill to this buf.
+        (show-fn
+          (lambda (wire-id)
+            (ignore-errors
+              (call "buffer/show" :|buffer-id| wire-id :|win-id| "w1")
+              (let* ((tpkg (find-package '#:limn/text))
+                     (sym  (and tpkg (find-symbol "*CURRENT-TEXT-BUFFER*"
+                                                   tpkg))))
+                (when (and sym (boundp sym))
+                  (set sym wire-id)))
+              (let* ((rt (find-package '#:limn/runtime))
+                     (mb-fn (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW"
+                                                  rt))))
+                (when (and mb-fn (fboundp mb-fn))
+                  (let ((mb (funcall (symbol-function mb-fn) "w1"))
+                        (sym-tm (find-symbol "TEXT-MODE" :cl-user)))
+                    (when (and mb sym-tm)
+                      (ignore-errors
+                        (limn/mode:activate mb sym-tm))))))))))
+    (setf limn/file:*open-text-engine-fn*   open-fn
+          limn/file:*fetch-wire-content-fn* fetch-fn
+          limn/file:*show-buffer-fn*        show-fn)))
 
 (defun stop ()
   (when *session*

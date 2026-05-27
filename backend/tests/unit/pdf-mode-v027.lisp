@@ -316,11 +316,16 @@
                             (offset-y 0.0) (offset-x 0.0)
                             (buffer-id "b1") (dark-mode :false)
                             (rotation 0))
+  ;; v0.38 W05/B1: dark-mode + rotation both nest under :|engine-params|
+  ;; matching C++ collect_view_state shape (ep.insert dark-mode/rotation).
+  ;; Pre-v0.38 mock placed both at top level which silently masked the
+  ;; G'-2 (dark-mode reader) and B1 (rotation reader) bugs.
   (cons "view/get"
         (%make-ok (list :|page| page :|zoom| zoom :|page-count| page-count
                          :|offset-x| offset-x :|offset-y| offset-y
-                         :|buffer-id| buffer-id :|dark-mode| dark-mode
-                         :|rotation| rotation))))
+                         :|buffer-id| buffer-id
+                         :|engine-params| (list :|dark-mode| dark-mode
+                                                  :|rotation|  rotation)))))
 
 (deftest v027-a-next-page-sends-view-set
   "pdf-next-page 應該透過 view/set 把 page +1。"
@@ -394,6 +399,78 @@
                   (assert-equal 5 (getf args :|page|)
                                 "prefix 5 → page 5"))))))))))
 
+;; v0.38 B11: pdf-goto-page without prefix → last page (vim G semantics)
+(deftest v038-b11-goto-page-no-prefix-goes-to-last
+  "pdf-goto-page with prefix=NIL should land on last page (page-count - 1)."
+  (with-mock-bridge (:responses (list (%fake-view-get :page 0 :page-count 6)))
+    (let* ((cmd-pkg (find-package '#:limn/cmd))
+           (pa-var (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+      (when pa-var
+        (progv (list pa-var) (list nil)
+          (let ((r (%call-cmd "PDF-GOTO-PAGE")))
+            (unless (eq r :missing)
+              (let ((args (%mock-call-of "view/set")))
+                (assert-true args "view/set wire call should fire")
+                (when args
+                  (assert-equal 5 (getf args :|page|)
+                                "no prefix on a 6-page doc → page 5 (last)"))))))))))
+
+(deftest v038-b11-G-binding-points-to-pdf-goto-page
+  "Key 'G' in pdf-mode-map should resolve to pdf-goto-page (not pdf-last-page)."
+  (let ((b (%lookup-binding "G")))
+    (assert-true b "G should have a binding")
+    (when b
+      ;; binding is either a symbol command or a function — check it's
+      ;; the goto-page command (interned name) not last-page
+      (let ((name (and (symbolp b) (symbol-name b))))
+        (when name
+          (assert-equal "PDF-GOTO-PAGE" name "G → PDF-GOTO-PAGE"))))))
+
+;; v0.38 B13: numeric prefix-arg multiplies scroll step.
+(deftest v038-b13-scroll-down-prefix-multiplies-step
+  "5j should scroll 5× the base step."
+  (with-mock-bridge (:responses (list (%fake-view-get :offset-y 0.0)))
+    (let* ((cmd-pkg (find-package '#:limn/cmd))
+           (pa-var (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+      (when pa-var
+        (progv (list pa-var) (list 5)
+          (let ((r (%call-cmd "PDF-SCROLL-DOWN")))
+            (unless (eq r :missing)
+              (let ((args (%mock-call-of "view/set")))
+                (when args
+                  ;; step = 5 * (3/30) = 0.5 ; offset-y = 0 + 0.5 = 0.5
+                  (assert-equal 0.5 (float (getf args :|offset-y|))
+                                "scroll-down 5× → offset-y 0 + 5*(3/30) = 0.5"))))))))))
+
+(deftest v038-b13-scroll-down-no-prefix-default-1x
+  "Plain j (no prefix) should scroll 1× base step."
+  (with-mock-bridge (:responses (list (%fake-view-get :offset-y 0.0)))
+    (let* ((cmd-pkg (find-package '#:limn/cmd))
+           (pa-var (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+      (when pa-var
+        (progv (list pa-var) (list nil)
+          (let ((r (%call-cmd "PDF-SCROLL-DOWN")))
+            (unless (eq r :missing)
+              (let ((args (%mock-call-of "view/set")))
+                (when args
+                  ;; step = 1 * (3/30) = 0.1
+                  (assert-equal 0.1 (float (getf args :|offset-y|))
+                                "plain j → 1× step = 0.1"))))))))))
+
+(deftest v038-b13-scroll-up-prefix-multiplies-step
+  "5k starting at offset 1.0 → offset 0.5."
+  (with-mock-bridge (:responses (list (%fake-view-get :offset-y 1.0)))
+    (let* ((cmd-pkg (find-package '#:limn/cmd))
+           (pa-var (and cmd-pkg (find-symbol "*PREFIX-ARG*" cmd-pkg))))
+      (when pa-var
+        (progv (list pa-var) (list 5)
+          (let ((r (%call-cmd "PDF-SCROLL-UP")))
+            (unless (eq r :missing)
+              (let ((args (%mock-call-of "view/set")))
+                (when args
+                  (assert-equal 0.5 (float (getf args :|offset-y|))
+                                "scroll-up 5× → 1.0 - 0.5 = 0.5"))))))))))
+
 (deftest v027-a-zoom-in-multiplies-by-factor
   (with-mock-bridge (:responses (list (%fake-view-get :zoom 1.0)))
     (let ((r (%call-cmd "PDF-ZOOM-IN")))
@@ -432,8 +509,62 @@
                          (%mock-call-of "view/set"))
                      "toggle-dark 應該發出 wire call")))))
 
+;; v0.38 W05 (G'-2) regression: reader was reading top-level :|dark-mode|
+;; but C++ collect_view_state nests it under :|engine-params|.  Reader
+;; always saw NIL → next=T every time → toggle was one-way.
+(deftest v038-w05-toggle-dark-reads-nested-and-toggles-off
+  "pdf-toggle-dark 看 :|engine-params|.|dark-mode|, T → :false (G'-2 regression)。"
+  (with-mock-bridge (:responses (list (%fake-view-get :dark-mode t)))
+    (let ((r (%call-cmd "PDF-TOGGLE-DARK")))
+      (unless (eq r :missing)
+        (let ((args (%mock-call-of "view/set")))
+          (assert-true args "view/set 應被發出")
+          (when args
+            (let ((ep (getf args :|engine-params|)))
+              (assert-true ep "view/set 應帶 :|engine-params| nested object")
+              (assert-equal :false (getf ep :|dark-mode|)
+                            "dark-mode=T 該 toggle 成 :false（G'-2 fix）"))))))))
+
+(deftest v038-w05-toggle-dark-toggles-on-from-false
+  "pdf-toggle-dark :false → T（toggle 的 on→off 方向是新加的）。"
+  (with-mock-bridge (:responses (list (%fake-view-get :dark-mode :false)))
+    (let ((r (%call-cmd "PDF-TOGGLE-DARK")))
+      (unless (eq r :missing)
+        (let* ((args (%mock-call-of "view/set"))
+               (ep   (and args (getf args :|engine-params|))))
+          (assert-true ep "view/set :|engine-params| present")
+          (assert-equal t (getf ep :|dark-mode|)
+                        "dark-mode=:false 該 toggle 成 T"))))))
+
+;; v0.38 B1: strengthen rotate-cw assertions — pre-fix accepted either
+;; "bridge/engine-params" (non-existent wire cmd) OR "view/set" so the
+;; test couldn't catch the wrong-wire bug.  Pin to view/set + nested.
+(deftest v038-b1-rotate-cw-sends-view-set-engine-params-rotation
+  "pdf-rotate-cw should send view/set with :|engine-params| :|rotation| 90 when starting at 0."
+  (with-mock-bridge (:responses (list (%fake-view-get :rotation 0)))
+    (let ((r (%call-cmd "PDF-ROTATE-CW")))
+      (unless (eq r :missing)
+        (let* ((args (%mock-call-of "view/set"))
+               (ep   (and args (getf args :|engine-params|))))
+          (assert-true args "view/set wire call should fire")
+          (assert-true ep "view/set should carry :|engine-params|")
+          (when ep
+            (assert-equal 90 (getf ep :|rotation|)
+                          "rotation 0 → 90 after one cw step")))))))
+
+(deftest v038-b1-rotate-cw-wraps-270-to-0
+  "pdf-rotate-cw should mod 360: 270 → 0."
+  (with-mock-bridge (:responses (list (%fake-view-get :rotation 270)))
+    (let ((r (%call-cmd "PDF-ROTATE-CW")))
+      (unless (eq r :missing)
+        (let* ((args (%mock-call-of "view/set"))
+               (ep   (and args (getf args :|engine-params|))))
+          (when ep
+            (assert-equal 0 (getf ep :|rotation|)
+                          "rotation 270 + 90 = 360 mod 360 = 0")))))))
+
 (deftest v027-a-rotate-cw-adds-90
-  "pdf-rotate-cw 應該把 rotation += 90 (mod 360)。"
+  "pdf-rotate-cw 應該把 rotation += 90 (mod 360) (kept for back-compat — does NOT pin wire shape)."
   (with-mock-bridge (:responses (list (%fake-view-get :rotation 0)))
     (let ((r (%call-cmd "PDF-ROTATE-CW")))
       (unless (eq r :missing)
@@ -958,6 +1089,40 @@
                          (%mock-call-of "bridge/win-float-create")
                          (%mock-call-of "buffer/insert"))
                      "PDF-TOC 應該呼叫 buffer/toc + 開浮動 window")))))
+
+;; v0.38 B14: pdf-toc should feed flattened entries to completing-read
+;; instead of dumping the tree to stdout (W04 dogfood finding).
+(deftest v038-b14-toc-flatten-depth-first-preorder
+  "%toc-flatten walks the TOC tree in depth-first preorder, recording depth."
+  (let* ((pkg (find-package '#:limn/pdf-mode))
+         (fn (and pkg (find-symbol "%TOC-FLATTEN" pkg)))
+         (tree '((:|title| "A" :|page| 0
+                  :|children| ((:|title| "A.1" :|page| 1)
+                               (:|title| "A.2" :|page| 2)))
+                 (:|title| "B" :|page| 3))))
+    (when (and fn (fboundp fn))
+      (let ((flat (funcall (symbol-function fn) tree 0)))
+        (assert-equal 4 (length flat) "4 entries flat")
+        (assert-equal "A" (getf (first flat) :title))
+        (assert-equal 0   (getf (first flat) :depth) "A is depth 0")
+        (assert-equal "A.1" (getf (second flat) :title))
+        (assert-equal 1   (getf (second flat) :depth) "A.1 is depth 1")
+        (assert-equal "A.2" (getf (third flat) :title))
+        (assert-equal "B" (getf (fourth flat) :title))
+        (assert-equal 0   (getf (fourth flat) :depth) "B back to depth 0")))))
+
+(deftest v038-b14-toc-line-is-parseable-by-parse-toc-line-page
+  "%toc-line output should be acceptable input to parse-toc-line-page."
+  (let* ((pkg (find-package '#:limn/pdf-mode))
+         (line-fn (and pkg (find-symbol "%TOC-LINE" pkg)))
+         (parse-fn (and pkg (find-symbol "PARSE-TOC-LINE-PAGE" pkg))))
+    (when (and line-fn (fboundp line-fn)
+               parse-fn (fboundp parse-fn))
+      (let* ((entry '(:title "Chapter 1" :page 4 :depth 1))
+             (line  (funcall (symbol-function line-fn) entry))
+             (page  (funcall (symbol-function parse-fn) line)))
+        (assert-equal 4 page
+                      "%toc-line of page 4 → parse-toc-line-page returns 4")))))
 
 
 ;;; ══════════════════════════════════════════════════════════════════════
@@ -2092,6 +2257,42 @@
                    :buffer-id nil :path nil :engine nil)
           "hook 收 nil 不該 crash")))))
 
+;; v0.38 B18: *pdf-default-zoom* applied on every pdf-mode buffer-opened.
+(deftest v038-b18-default-zoom-nil-skips-view-set
+  "When *pdf-default-zoom* is NIL, no view/set :|zoom| call should be made on buffer-opened."
+  (with-mock-bridge ()
+    (let* ((pkg (find-package '#:limn/pdf-mode))
+           (hook (and pkg (find-symbol "PDF-MODE-ON-BUFFER-OPENED" pkg)))
+           (zoom-var (and pkg (find-symbol "*PDF-DEFAULT-ZOOM*" pkg))))
+      (when (and hook (fboundp hook) zoom-var (boundp zoom-var))
+        (progv (list zoom-var) (list nil)
+          (funcall (symbol-function hook)
+                   :buffer-id "b1" :path "/x.pdf" :engine "mupdf")
+          (let ((vs-calls
+                  (remove-if-not
+                   (lambda (c) (and (consp c)
+                                     (equal (car c) "view/set")
+                                     (member :|zoom| (cdr c))))
+                   *mock-call-log*)))
+            (assert-true (null vs-calls)
+                         "nil *pdf-default-zoom* → no view/set :zoom call")))))))
+
+(deftest v038-b18-default-zoom-set-applies-on-buffer-opened
+  "When *pdf-default-zoom* is 1.5, buffer-opened should send view/set :|zoom| 1.5."
+  (with-mock-bridge ()
+    (let* ((pkg (find-package '#:limn/pdf-mode))
+           (hook (and pkg (find-symbol "PDF-MODE-ON-BUFFER-OPENED" pkg)))
+           (zoom-var (and pkg (find-symbol "*PDF-DEFAULT-ZOOM*" pkg))))
+      (when (and hook (fboundp hook) zoom-var (boundp zoom-var))
+        (progv (list zoom-var) (list 1.5)
+          (funcall (symbol-function hook)
+                   :buffer-id "b1" :path "/x.pdf" :engine "mupdf")
+          (let ((args (%mock-call-of "view/set")))
+            (assert-true args "view/set should have fired")
+            (when args
+              (assert-equal 1.5 (getf args :|zoom|)
+                            "view/set :zoom == *pdf-default-zoom*"))))))))
+
 (deftest v027-m-goto-beyond-page-count-clamps
   "5G on a 3-page doc → 跳到最後一頁 (page=2)，不是 5（也不是 crash）。"
   (with-mock-bridge (:responses (list (%fake-view-get :page 0 :page-count 3)))
@@ -2796,3 +2997,68 @@
                      "*limn-call-fn* bound")
         (assert-true (and now-var (boundp now-var))
                      "*now-fn* bound")))))
+
+;;; ── v0.39 W04 — pdf-toc unwraps response correctly ───────────────────
+;;;
+;;; The C++ side of buffer/toc emits the TOC items as the response data
+;;; directly (an array of plists), NOT wrapped as {items: [...]}.  Pre-
+;;; v0.39 pdf-toc tried `(getf data :items)` which on a malformed plist
+;;; (the items array iterated as a property list) either signalled
+;;; SIMPLE-TYPE-ERROR or silently returned NIL — depending on parity.
+;;; Either way `items` was nil, completing-read never opened, and `t`
+;;; in pdf-mode appeared to do nothing.  This was the actual cause of
+;;; W04 A.1 failing — the "deadlock" diagnosis from v0.38 was a
+;;; misread; there was never any contention.
+
+(deftest v039-w04-pdf-toc-uses-data-as-items-array
+  "pdf-toc should consume the response data as the items array itself
+   — verify completing-read sees a non-empty `collection` argument
+   when the mock returns the canonical array-of-plists shape."
+  (%ensure-pdf-mode-installed)
+  (let* ((sample-toc (list (list :|children| nil :|page| 0
+                                  :|title| "1. Intro")
+                            (list :|children| nil :|page| 2
+                                  :|title| "2. Body")
+                            (list :|children| nil :|page| 5
+                                  :|title| "3. Outro")))
+         (collection-seen nil)
+         (orig-completing
+           (and (find-package '#:limn/completion)
+                (find-symbol "COMPLETING-READ" '#:limn/completion))))
+    (when orig-completing
+      ;; Stub completing-read so it captures `collection` without
+      ;; actually blocking on minibuffer-read.
+      (let ((orig-fn (and (fboundp orig-completing)
+                          (symbol-function orig-completing))))
+        (unwind-protect
+             (progn
+               (setf (fdefinition orig-completing)
+                     (lambda (prompt collection &rest opts)
+                       (declare (ignore prompt opts))
+                       (setf collection-seen collection)
+                       nil))
+               (with-mock-bridge
+                   (:responses
+                    (list (cons "buffer/toc" (%make-ok sample-toc))
+                          (cons "view/get"  (%make-ok
+                                              (list :|buffer-id| "b1"
+                                                    :|page| 0)))))
+                 (%call-cmd "PDF-TOC"))
+               (assert-true collection-seen
+                            "completing-read received a non-empty collection")
+               (when collection-seen
+                 (assert-eql 3 (length collection-seen)
+                             "3 TOC lines forwarded to completing-read")))
+          (when orig-fn
+            (setf (fdefinition orig-completing) orig-fn)))))))
+
+(deftest v039-w04-pdf-toc-no-items-is-safe-noop
+  "pdf-toc with empty TOC: should not crash; completing-read not invoked
+   (since (listp NIL) is t, %toc-flatten on NIL produces an empty list
+   and completing-read gets an empty collection — which is fine)."
+  (%ensure-pdf-mode-installed)
+  (with-mock-bridge (:responses (list (cons "buffer/toc"  (%make-ok nil))
+                                       (cons "view/get"   (%make-ok
+                                                            (list :|buffer-id| "b1")))))
+    (assert-no-error (%call-cmd "PDF-TOC")
+                     "pdf-toc with empty TOC is a no-op, not an error")))

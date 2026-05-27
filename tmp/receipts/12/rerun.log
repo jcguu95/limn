@@ -1,0 +1,50 @@
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
+; compilation finished in 0:00:00.031
+; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
+; compilation finished in 0:00:00.005
+; compiling file "/limn/backend/limn.lisp" (written 27 MAY 2026 12:22:54 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
+; compilation finished in 0:00:00.035
+
+; file: /limn/backend/limn-pdf-mode.lisp
+; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
+;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+; in: DEFUN LIMN/PDF-MODE::%CURRENT-PDF-PATH
+;     (GETHASH BID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+
+; file: /limn/backend/limn-file.lisp
+; in: DEFUN LIMN/FILE:BUFFER-WIRE-ID
+;     (GETHASH LIMN/FILE::BUF-ID LIMN/FILE::*BUFS*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/FILE::*BUFS*
+; 
+; compilation unit finished
+;   Undefined variables:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH* LIMN/FILE::*BUFS*
+;   caught 3 WARNING conditions
+;   printed 6 notes
+
+── W12 sidecar manual destruction ──
+  3 highlights → overlay count = 3
+  ✓ A.1 baseline: 3 highlights present   [overlays=3]
+  sidecar files before nuke: 1
+  deleted 1 sidecar files
+  ✓ A.2 sidecars existed before nuke   [1 files]
+  ✓ A.3 reopen after sidecar nuke does not crash   [ok]
+  ✓ A.4 after nuke + reopen, 0 highlights   [overlays=0]
+  ✓ A.5 limn process still alive (wire responds)
+
+── W12 result: 5 / 5 pass ──

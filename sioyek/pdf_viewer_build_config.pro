@@ -149,4 +149,16 @@ unix:!mac:!android {
     LIBS += -lmupdf
     LIBS += -lz -lm -ldl
     LIBS += -lharfbuzz -lfreetype -ljpeg -lopenjp2 -ljbig2dec -lgumbo
+
+    # v0.39 B6 — opt-in AddressSanitizer build for the stack-smashing
+    # hunt.  Enabled when LIMN_ASAN=1 in the env at qmake time; off by
+    # default so production / dogfood builds stay fast and don't pull
+    # libasan.  ASAN catches the corrupt-write at the source line that
+    # writes, not where the canary fires later — exactly what gdb's
+    # slowdown was hiding.
+    !isEmpty($$(LIMN_ASAN)) {
+        QMAKE_CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -g
+        QMAKE_CFLAGS   += -fsanitize=address -fno-omit-frame-pointer -g
+        QMAKE_LFLAGS   += -fsanitize=address
+    }
 }

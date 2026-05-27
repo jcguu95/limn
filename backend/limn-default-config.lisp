@@ -82,7 +82,24 @@
              (error (e)
                (format *error-output*
                        ";; reload-init-file: ~a ERRORED: ~a~%" path e)
-               nil))))))))
+               nil)))))))
+
+  ;; ── v0.38 B15: edit commands discoverable via M-x ────────────────
+  ;; query-replace + query-replace-regexp existed since v0.34/v0.36 but
+  ;; weren't registered as defcommands, so M-x completion didn't see
+  ;; them (W18/W19 dogfood finding).  The interactive wrappers live in
+  ;; limn-query-replace; we just register them here so they survive
+  ;; clear-commands cycles.
+  (let ((qr-pkg (find-package '#:limn/query-replace)))
+    (when qr-pkg
+      (let ((qr-i  (find-symbol "%QR-INTERACTIVE"  qr-pkg))
+            (qrr-i (find-symbol "%QRR-INTERACTIVE" qr-pkg)))
+        (when (and qr-i (fboundp qr-i))
+          (limn/cmd:defcommand cl-user::query-replace ()
+            (lambda () (funcall (symbol-function qr-i)))))
+        (when (and qrr-i (fboundp qrr-i))
+          (limn/cmd:defcommand cl-user::query-replace-regexp ()
+            (lambda () (funcall (symbol-function qrr-i)))))))))
 
 ;; Register at load time.  (install-defaults below re-calls this so any
 ;; clear-commands between bring-up + start gets undone.)

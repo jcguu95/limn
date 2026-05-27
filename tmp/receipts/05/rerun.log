@@ -1,0 +1,50 @@
+; compilation unit finished
+;   Undefined variable:
+;     *LIMN-PROCESS*
+;   caught 4 WARNING conditions
+
+; file: /limn/backend/repl-helpers.lisp
+; in: DEFUN BANNER
+;     (PROCESS-PID *LIMN-PROCESS*)
+; 
+; caught WARNING:
+;   undefined variable: COMMON-LISP-USER::*LIMN-PROCESS*
+
+;     (AND (BOUNDP '*LIMN-PROCESS*) *LIMN-PROCESS*)
+; 
+; caught WARNING:
+;   undefined variable: COMMON-LISP-USER::*LIMN-PROCESS*
+
+;     (FORMAT T "   socket: ~a~%" *LIMN-SOCKET-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: COMMON-LISP-USER::*LIMN-SOCKET-PATH*
+; 
+; compilation unit finished
+;   Undefined variables:
+;     *LIMN-PROCESS* *LIMN-SOCKET-PATH*
+;   caught 3 WARNING conditions
+
+── W05 dark-mode toggle ×3 ──
+XGetWindowProperty[_NET_WM_DESKTOP] failed (code=1)
+  step-00 captured (137369 bytes, lum=250.1, cm=normal, src=mupdf), dark=FALSE
+  ✓ A.1 baseline win->dark_mode is off (state)   [dark=FALSE]
+  ✓ A.2 baseline GL widget color_mode is 'normal' (production state)   [gl-color-mode=normal]
+  ✓ A.3 baseline frame has bright avg luminance (light render)   [lum=250.1 via mupdf]
+  → xdotool key d (step 01)
+  step-01 captured (lum=4.9, cm=dark, src=mupdf), dark=T
+  ✓ B.01 win->dark_mode state is T   [dark=T (want T)]
+  ✓ B.01 GL color_mode is 'dark' (production shader input)   [gl-color-mode=dark (want dark)]
+  ✓ B.01 avg-lum moved ≥ 100 (pixel evidence via mupdf)   [prev=250.1 now=4.9 delta=245.1]
+  → xdotool key d (step 02)
+  step-02 captured (lum=250.1, cm=normal, src=mupdf), dark=FALSE
+  ✓ B.02 win->dark_mode state is FALSE   [dark=FALSE (want FALSE)]
+  ✓ B.02 GL color_mode is 'normal' (production shader input)   [gl-color-mode=normal (want normal)]
+  ✓ B.02 avg-lum moved ≥ 100 (pixel evidence via mupdf)   [prev=4.9 now=250.1 delta=245.1]
+  → xdotool key d (step 03)
+  step-03 captured (lum=4.9, cm=dark, src=mupdf), dark=T
+  ✓ B.03 win->dark_mode state is T   [dark=T (want T)]
+  ✓ B.03 GL color_mode is 'dark' (production shader input)   [gl-color-mode=dark (want dark)]
+  ✓ B.03 avg-lum moved ≥ 100 (pixel evidence via mupdf)   [prev=250.1 now=4.9 delta=245.1]
+
+── W05 result: 12 / 12 pass ──

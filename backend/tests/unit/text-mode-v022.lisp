@@ -208,6 +208,73 @@
                      (funcall kp-fn km)
                      "text-mode keymap parent === fundamental-mode keymap"))))))
 
+;;; ── v0.39 W13 / W17 keybindings ──────────────────────────────────────
+;;;
+;;; The text-mode keymap learned five Emacs bindings in v0.39: C-a / C-e
+;;; (mirror <home>/<end>; W17 driver needed C-e to move past EOL before
+;;; C-w), C-SPC set-mark, C-w kill-region, C-y yank.  Without these the
+;;; cross-buffer kill/yank dogfood was structurally broken.
+
+(defun %binding (km spec)
+  "Look up SPEC (space-separated key sequence) in keymap KM, returning
+   the bound action or NIL."
+  (let ((parts (loop for i = 0 then (1+ j)
+                     for j = (position #\Space spec :start i)
+                     collect (subseq spec i j)
+                     while j)))
+    (limn/keys:lookup-sequence km parts)))
+
+(deftest v039-w17-text-mode-binds-c-a-c-e
+  "C-a / C-e in text-mode invoke move-beginning-of-line / move-end-of-line
+   (the W17 driver's C-e hit nothing pre-fix and cursor stayed at 0)."
+  (%install-text-mode)
+  (let ((km (limn/mode:mode-keymap (limn/mode:find-mode 'text-mode))))
+    (assert-true km "text-mode keymap exists")
+    (when km
+      (assert-true (%binding km "C-a") "C-a is bound in text-mode")
+      (assert-true (%binding km "C-e") "C-e is bound in text-mode"))))
+
+(deftest v039-w17-text-mode-binds-mark-and-kill
+  "C-SPC / C-w / C-y exist in text-mode."
+  (%install-text-mode)
+  (let ((km (limn/mode:mode-keymap (limn/mode:find-mode 'text-mode))))
+    (when km
+      (assert-true (%binding km "C-SPC") "C-SPC bound")
+      (assert-true (%binding km "C-w")   "C-w bound")
+      (assert-true (%binding km "C-y")   "C-y bound"))))
+
+(deftest v039-w13-w17-defcommands-registered
+  "set-mark-command / kill-region / yank are real defcommands so M-x
+   discovers them and the dispatch wrapper resolves them."
+  (let ((find-cmd (find-symbol "FIND-COMMAND" :limn/cmd)))
+    (assert-true find-cmd)
+    (when find-cmd
+      (assert-true (funcall find-cmd (intern "SET-MARK-COMMAND" :cl-user))
+                   "set-mark-command in defcommand registry")
+      (assert-true (funcall find-cmd (intern "KILL-REGION" :cl-user))
+                   "kill-region in defcommand registry")
+      (assert-true (funcall find-cmd (intern "YANK" :cl-user))
+                   "yank in defcommand registry"))))
+
+(deftest v039-w13-pdf-mode-binds-m-w
+  "pdf-mode's M-w invokes pdf-copy-region-as-kill (W13 dogfood — copy
+   PDF selection text onto *kill-ring* for a subsequent C-y paste)."
+  (%install-text-mode)
+  (let* ((install (find-symbol "INSTALL" :limn/pdf-mode))
+         (pm-sym  (intern "PDF-MODE" :cl-user)))
+    (when install (funcall install))
+    (let* ((pm (limn/mode:find-mode pm-sym))
+           (km (and pm (limn/mode:mode-keymap pm))))
+      (assert-true pm "pdf-mode found")
+      (when km
+        (assert-true (%binding km "M-w") "M-w bound in pdf-mode")
+        (let ((cmd-sym (find-symbol "PDF-COPY-REGION-AS-KILL" :cl-user))
+              (find-cmd (find-symbol "FIND-COMMAND" :limn/cmd)))
+          (assert-true cmd-sym "pdf-copy-region-as-kill interned")
+          (when (and cmd-sym find-cmd)
+            (assert-true (funcall find-cmd cmd-sym)
+                         "pdf-copy-region-as-kill is a defcommand")))))))
+
 ;;; ── B9. find-file wire behaviour ──────────────────────────────────────
 ;;;
 ;;; The "find-file does engine-load + load-file" contract requires a

@@ -82,7 +82,7 @@
                     collect `(limn/keys:define-key
                                  ,km-sym
                                  (%maybe-prefix ,pre-sym ,key)
-                                 ,action))
+                                 (%wrap-action ,action)))
             ,km-sym))))))
 
 (defun %maybe-prefix (pre key)
@@ -90,3 +90,28 @@
   (if (or (null pre) (zerop (length pre)))
       key
       (concatenate 'string pre " " key)))
+
+(defun %wrap-action (action)
+  "v0.38 B7 fix: keymap entries are expected to be functions taking
+   one event arg.  map! used to store ACTION verbatim, so when user
+   passed a quoted symbol like 'my-fn, the symbol landed in the
+   keymap and %dispatch-key's (functionp result) check rejected it
+   silently.  This wrapper coerces:
+     - functions/closures      → returned as-is
+     - command symbols (in defcommand registry) → call-interactively
+     - fboundp symbols          → funcall
+     - anything else            → return as-is (let define-key error)"
+  (cond
+    ((functionp action) action)
+    ((and (symbolp action)
+          (find-package '#:limn/cmd)
+          (let ((find (find-symbol "FIND-COMMAND" '#:limn/cmd)))
+            (and find (fboundp find) (funcall (symbol-function find) action))))
+     (let ((call-i (find-symbol "CALL-INTERACTIVELY" '#:limn/cmd))
+           (sym    action))
+       (lambda (ev) (declare (ignore ev))
+         (funcall (symbol-function call-i) sym))))
+    ((and (symbolp action) (fboundp action))
+     (let ((sym action))
+       (lambda (ev) (declare (ignore ev)) (funcall sym))))
+    (t action)))

@@ -1,0 +1,50 @@
+; compiling file "/limn/backend/limn-query-replace.lisp" (written 26 MAY 2026 02:21:07 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-query-replace-tmp2K9J0HSR.fasl
+; compilation finished in 0:00:00.031
+; compiling file "/limn/backend/limn-default-config.lisp" (written 26 MAY 2026 02:21:24 PM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-default-config-tmpP44I4E0Y.fasl
+; compilation finished in 0:00:00.005
+; compiling file "/limn/backend/limn.lisp" (written 27 MAY 2026 12:22:54 AM):
+
+; wrote /root/.cache/common-lisp/sbcl-2.6.3-linux-arm64/limn/backend/limn-tmp63LQ7EX6.fasl
+; compilation finished in 0:00:00.035
+
+; file: /limn/backend/limn-pdf-mode.lisp
+; in: DEFUN LIMN/PDF-MODE::%BOOKMARK-PATH-FOR-BUFFER
+;     (GETHASH BUFFER-ID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+; in: DEFUN LIMN/PDF-MODE::%CURRENT-PDF-PATH
+;     (GETHASH BID LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/PDF-MODE::*BUFFER-ID-TO-PATH*
+
+
+; file: /limn/backend/limn-file.lisp
+; in: DEFUN LIMN/FILE:BUFFER-WIRE-ID
+;     (GETHASH LIMN/FILE::BUF-ID LIMN/FILE::*BUFS*)
+; 
+; caught WARNING:
+;   undefined variable: LIMN/FILE::*BUFS*
+; 
+; compilation unit finished
+;   Undefined variables:
+;     LIMN/PDF-MODE::*BUFFER-ID-TO-PATH* LIMN/FILE::*BUFS*
+;   caught 3 WARNING conditions
+;   printed 6 notes
+
+── W07 isearch (incremental?) ──
+  after 'f': minibuffer="f" overlays=0
+  ✓ A.1 typing 'f' incrementally updates overlays (or not)   [overlays=0 (note: pre-RET overlay state)]
+  after 'fig': minibuffer="fig" overlays=0
+  ✓ A.2 minibuffer reads 'fig'   [text="fig"]
+  ✓ A.3 backspace + type leaves 'fiure' in minibuffer   [text="fiure"]
+  after RET: overlays=0
+  ✓ A.4 RET commits search (numeric overlay count)   [overlays=0]
+
+── W07 result: 4 / 4 pass ──

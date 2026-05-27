@@ -417,3 +417,68 @@
   (with-buffer (buf)
     (let ((r (send! "buffer/render" :|buffer-id| buf :|page| 0 :|dpi| 2400)))
       (assert-true (member (getf r :|ok|) '(t :false)) "responded"))))
+
+;;; ─── v0.39 W20 — buffer/list ──────────────────────────────────────────────
+;;;
+;;; Pre-v0.39 buffer/list didn't exist; the dogfood W20 driver called it and
+;;; the wire returned err.  Now: enumerates mupdf buffers from `registry`
+;;; plus text-engine buffers from `text_buffers`, each as
+;;; { buffer-id, path, engine, kind }.
+
+(deftest test-buffer-list-includes-chrome-by-default
+  "Fresh session ships *minibuffer* / *echo-area* / *messages* text buffers;
+   buffer/list should report them with engine=text kind=chrome."
+  (let* ((r (send! "buffer/list"))
+         (entries (getf r :|data|)))
+    (assert-ok r)
+    (assert-true (listp entries) "data is a list of entries")
+    (let ((chrome-ids (loop for e in entries
+                            when (and (equal (getf e :|engine|) "text")
+                                      (equal (getf e :|kind|)   "chrome"))
+                              collect (getf e :|buffer-id|))))
+      (assert-true (find "*minibuffer*" chrome-ids :test #'equal)
+                   "*minibuffer* in list")
+      (assert-true (find "*echo-area*"  chrome-ids :test #'equal)
+                   "*echo-area* in list")
+      (assert-true (find "*messages*"   chrome-ids :test #'equal)
+                   "*messages* in list"))))
+
+(deftest test-buffer-list-reports-mupdf-buffer
+  "After bridge/engine-load engine=mupdf, the loaded PDF must show up in
+   buffer/list with engine=mupdf kind=file and the original path."
+  (with-buffer (buf)
+    (let* ((r (send! "buffer/list"))
+           (entries (getf r :|data|))
+           (mine (find-if (lambda (e) (equal (getf e :|buffer-id|) buf))
+                          entries)))
+      (assert-true mine "the just-opened buffer is in the list")
+      (assert-equal "mupdf" (getf mine :|engine|) "engine=mupdf")
+      (assert-equal "file"  (getf mine :|kind|)   "kind=file")
+      (assert-true (and (stringp (getf mine :|path|))
+                        (plusp (length (getf mine :|path|))))
+                   "path is a non-empty string"))))
+
+(deftest test-buffer-list-reports-text-engine-buffer-with-path
+  "After bridge/engine-load engine=text + buffer/load-file, the text buffer
+   should appear with engine=text kind=file and the path it was loaded from
+   (this is the assertion the W20 dogfood driver makes)."
+  (let* ((tmp "/tmp/test-buffer-list-text.txt"))
+    (with-open-file (s tmp :direction :output :if-exists :supersede)
+      (write-string "hi" s))
+    (unwind-protect
+         (let* ((eng (send! "bridge/engine-load"
+                            :|win-id| "w1" :|engine| "text" :|path| ""))
+                (tid (getf (getf eng :|data|) :|buffer-id|)))
+           (send! "buffer/load-file" :|buffer-id| tid :|path| tmp)
+           (let* ((r (send! "buffer/list"))
+                  (entries (getf r :|data|))
+                  (mine (find-if (lambda (e)
+                                   (equal (getf e :|buffer-id|) tid))
+                                 entries)))
+             (assert-true mine "text buffer in list")
+             (assert-equal "text" (getf mine :|engine|))
+             (assert-equal "file" (getf mine :|kind|))
+             (assert-equal tmp    (getf mine :|path|))
+             ;; clean up
+             (send! "buffer/close" :|buffer-id| tid)))
+      (ignore-errors (delete-file tmp)))))
