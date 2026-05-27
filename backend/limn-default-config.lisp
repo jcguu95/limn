@@ -85,40 +85,35 @@
                nil)))))))
 
   ;; ── M-: eval-expression (Emacs convention) ──────────────────────
-  ;; Read a Lisp form string from the minibuffer, eval it, and echo the
-  ;; result.  Mirrors Emacs M-: (eval-expression).  Errors are caught
-  ;; and shown in the echo area so a typo won't kill the session.
-  (limn/cmd:defcommand cl-user::eval-expression ()
-    (lambda ()
-      "Read and evaluate a Lisp form from the minibuffer."
-      (let* ((reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
-             (read-fn (and reader (boundp reader) (symbol-value reader)))
-             (input (and read-fn (funcall read-fn "Eval: "))))
-        (when (and (stringp input) (plusp (length input)))
-          (handler-case
-              (let* ((form   (read-from-string input))
-                     (result (eval form)))
-                ;; Echo result to *standard-output* (repl) and, when the
-                ;; message/echo wire is available, to the echo area.
-                (format t "~&=> ~s~%" result)
-                (let* ((limn-pkg (find-package '#:limn))
-                       (call-sym (and limn-pkg (find-symbol "CALL" limn-pkg))))
-                  (when (and call-sym (fboundp call-sym))
-                    (handler-case
-                        (funcall (symbol-function call-sym)
-                                 "message/echo"
-                                 :|text| (format nil "=> ~s" result))
-                      (error () nil)))))
-            (error (e)
-              (format *error-output* "~&eval-expression error: ~a~%" e)
+  ;; Read a Lisp form string from the minibuffer via the "s" interactive
+  ;; spec (same path as all string-reading commands), eval it, and echo
+  ;; the result.  Mirrors Emacs M-: (eval-expression).  Errors are caught
+  ;; and shown so a bad expression never kills the session.
+  (limn/cmd:defcommand cl-user::eval-expression (:interactive "sEval: ")
+    (lambda (input)
+      (when (and (stringp input) (plusp (length input)))
+        (handler-case
+            (let* ((form   (read-from-string input))
+                   (result (eval form)))
+              (format t "~&=> ~s~%" result)
               (let* ((limn-pkg (find-package '#:limn))
                      (call-sym (and limn-pkg (find-symbol "CALL" limn-pkg))))
                 (when (and call-sym (fboundp call-sym))
                   (handler-case
                       (funcall (symbol-function call-sym)
                                "message/echo"
-                               :|text| (format nil "Error: ~a" e))
-                    (error () nil))))))))))
+                               :|text| (format nil "=> ~s" result))
+                    (error () nil)))))
+          (error (e)
+            (format *error-output* "~&eval-expression error: ~a~%" e)
+            (let* ((limn-pkg (find-package '#:limn))
+                   (call-sym (and limn-pkg (find-symbol "CALL" limn-pkg))))
+              (when (and call-sym (fboundp call-sym))
+                (handler-case
+                    (funcall (symbol-function call-sym)
+                             "message/echo"
+                             :|text| (format nil "Error: ~a" e))
+                  (error () nil)))))))))
 
   ;; ── v0.38 B15: edit commands discoverable via M-x ────────────────
   ;; query-replace + query-replace-regexp existed since v0.34/v0.36 but
