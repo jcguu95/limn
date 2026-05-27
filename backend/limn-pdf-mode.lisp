@@ -35,6 +35,7 @@
    ;; §A vars
    #:*pdf-scroll-step*
    #:*pdf-half-page-step*           ; v0.37 Phase D
+   #:*pdf-page-step*                ; v0.39 (C-f / C-b)
    #:*pdf-zoom-in-factor*
    #:*pdf-zoom-out-factor*
    #:*pdf-default-zoom*              ; v0.38 B18
@@ -191,13 +192,14 @@
       (push :limn/custom-available *features*))))
 
 #+:limn/custom-available
-(limn/custom:defcustom *pdf-scroll-step* 3
-  "Number of lines (approx) to scroll on j/k."
-  :type 'integer :group 'pdf-mode)
+(limn/custom:defcustom *pdf-scroll-step* 0.1
+  "Fraction of the visible screen height to scroll on j/k (0.0–1.0).
+   Uses view/scroll :dy so it is correct at any zoom level."
+  :type 'float :group 'pdf-mode)
 
 #-:limn/custom-available
-(defvar *pdf-scroll-step* 3
-  "Lines to scroll on j/k.")
+(defvar *pdf-scroll-step* 0.1
+  "Screen-fraction to scroll on j/k (0.0–1.0). Passed to view/scroll :dy.")
 
 #+:limn/custom-available
 (limn/custom:defcustom *pdf-zoom-in-factor* 1.25
@@ -639,26 +641,22 @@
       (limn/pdf-mode::%page-set target))))
 
 ;; v0.38 B13: pdf-scroll-down/up honor numeric prefix-arg.
-;; `5j` should scroll 5× the base step; plain `j` scrolls 1×.
+;; `5j` scrolls 5× the base step; plain `j` scrolls 1×.
+;;
+;; v0.39: switched from view/set :offset-y (raw document coords — step 0.1
+;; doc-unit while pages are ~840 units tall → effectively no movement) to
+;; view/scroll :dy (screen fraction, zoom-invariant).
 (limn/pdf-mode::%defcmd pdf-scroll-down "p"
   (lambda (&optional prefix)
-    (let* ((v (limn/pdf-mode::%focused-view))
-           (off (or (getf v :|offset-y|) 0.0))
-           (n   (or prefix 1))
-           (step (* n (/ limn/pdf-mode:*pdf-scroll-step* 30.0))))
-      ;; Move within page via offset-y if engine supports it; otherwise
-      ;; the wire layer ignores the field.
-      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
-                                  :|offset-y| (+ off step)))))
+    (let* ((n    (or prefix 1))
+           (step (* n limn/pdf-mode:*pdf-scroll-step*)))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dy| step))))
 
 (limn/pdf-mode::%defcmd pdf-scroll-up "p"
   (lambda (&optional prefix)
-    (let* ((v (limn/pdf-mode::%focused-view))
-           (off (or (getf v :|offset-y|) 0.0))
-           (n   (or prefix 1))
-           (step (* n (/ limn/pdf-mode:*pdf-scroll-step* 30.0))))
-      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
-                                  :|offset-y| (max 0.0 (- off step))))))
+    (let* ((n    (or prefix 1))
+           (step (* n limn/pdf-mode:*pdf-scroll-step*)))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dy| (- step)))))
 
 (limn/pdf-mode::%defcmd pdf-zoom-in nil
   (lambda ()
@@ -845,30 +843,52 @@
 
 ;;; v0.37 Phase D: half-page scroll (vim C-d / C-u).  Uses offset-y
 ;;; deltas the same way pdf-scroll-down does, but with a larger step.
-;;; Half-page = 0.5 in page-norm coords (whole page = 1.0).
+;;; v0.39: now uses view/scroll :dy (screen fraction) like pdf-scroll-down.
 
 (defvar limn/pdf-mode:*pdf-half-page-step* 0.5
-  "Page-norm units to scroll for pdf-half-page-down / pdf-half-page-up.
-   Vim default is half the visible window height; 0.5 of page-norm is
-   the analog when fit-to-page is the default zoom.")
+  "Screen fraction to scroll for C-d / C-u (0.0–1.0).
+   0.5 = half the visible screen, matching vim's default behaviour.
+   v0.39: passed directly to view/scroll :dy (was broken view/set :offset-y).")
 
 (limn/pdf-mode::%defcmd pdf-half-page-down nil
   (lambda ()
-    (let* ((v (limn/pdf-mode::%focused-view))
-           (off (or (getf v :|offset-y|) 0.0)))
-      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
-                                  :|offset-y|
-                                  (+ off limn/pdf-mode:*pdf-half-page-step*)))))
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+                                :|dy| limn/pdf-mode:*pdf-half-page-step*)))
 
 (limn/pdf-mode::%defcmd pdf-half-page-up nil
   (lambda ()
-    (let* ((v (limn/pdf-mode::%focused-view))
-           (off (or (getf v :|offset-y|) 0.0)))
-      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
-                                  :|offset-y|
-                                  (max 0.0
-                                       (- off
-                                          limn/pdf-mode:*pdf-half-page-step*))))))
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+                                :|dy| (- limn/pdf-mode:*pdf-half-page-step*))))
+
+;;; v0.39: full-page scroll (vim C-f / C-b).  One whole visible screen.
+
+(defvar limn/pdf-mode:*pdf-page-step* 1.0
+  "Screen fraction to scroll for C-f / C-b (full page = 1.0).")
+
+(limn/pdf-mode::%defcmd pdf-page-down nil
+  (lambda ()
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+                                :|dy| limn/pdf-mode:*pdf-page-step*)))
+
+(limn/pdf-mode::%defcmd pdf-page-up nil
+  (lambda ()
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+                                :|dy| (- limn/pdf-mode:*pdf-page-step*))))
+
+;;; v0.39: horizontal scroll (vim h / l).  Same step as j/k but on :dx.
+;;; Honors numeric prefix-arg.
+
+(limn/pdf-mode::%defcmd pdf-scroll-left "p"
+  (lambda (&optional prefix)
+    (let* ((n    (or prefix 1))
+           (step (* n limn/pdf-mode:*pdf-scroll-step*)))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dx| (- step)))))
+
+(limn/pdf-mode::%defcmd pdf-scroll-right "p"
+  (lambda (&optional prefix)
+    (let* ((n    (or prefix 1))
+           (step (* n limn/pdf-mode:*pdf-scroll-step*)))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dx| step))))
 
 ;;; v0.37 Phase D: close the focused PDF buffer (vim q).  Routes to
 ;;; buffer/close on the focused buffer-id.
@@ -1471,11 +1491,19 @@
 
     ;; Build keymap fresh.
     (let ((km (limn/keys:make-keymap)))
-      ;; navigation
-      (%def km "j"        (intern "PDF-SCROLL-DOWN" :cl-user))
-      (%def km "k"        (intern "PDF-SCROLL-UP"   :cl-user))
-      (%def km "<down>"   (intern "PDF-SCROLL-DOWN" :cl-user))
-      (%def km "<up>"     (intern "PDF-SCROLL-UP"   :cl-user))
+      ;; ── navigation: vim hjkl + arrow keys ─────────────────────────
+      ;; v0.39: hjkl are pure scroll (screen-fraction via view/scroll).
+      ;; The old "h = highlight, l = next-page" sioyek defaults were
+      ;; dropped — they shadowed vim conventions and surprised dogfooders.
+      (%def km "h"        (intern "PDF-SCROLL-LEFT"  :cl-user))
+      (%def km "j"        (intern "PDF-SCROLL-DOWN"  :cl-user))
+      (%def km "k"        (intern "PDF-SCROLL-UP"    :cl-user))
+      (%def km "l"        (intern "PDF-SCROLL-RIGHT" :cl-user))
+      (%def km "<left>"   (intern "PDF-SCROLL-LEFT"  :cl-user))
+      (%def km "<down>"   (intern "PDF-SCROLL-DOWN"  :cl-user))
+      (%def km "<up>"     (intern "PDF-SCROLL-UP"    :cl-user))
+      (%def km "<right>"  (intern "PDF-SCROLL-RIGHT" :cl-user))
+      ;; page-level navigation
       (%def km "n"        (intern "PDF-NEXT-PAGE"   :cl-user))
       (%def km "p"        (intern "PDF-PREV-PAGE"   :cl-user))
       (%def km "J"        (intern "PDF-NEXT-PAGE"   :cl-user))
@@ -1501,8 +1529,9 @@
       ;; v0.37 Phase D: half-page (vim C-d / C-u)
       (%def km "C-d"      (intern "PDF-HALF-PAGE-DOWN" :cl-user))
       (%def km "C-u"      (intern "PDF-HALF-PAGE-UP"   :cl-user))
-      ;; v0.37 Phase D: vim l = next page (h is kept as highlight-selection)
-      (%def km "l"        (intern "PDF-NEXT-PAGE" :cl-user))
+      ;; v0.39: full-page (vim C-f / C-b)
+      (%def km "C-f"      (intern "PDF-PAGE-DOWN"   :cl-user))
+      (%def km "C-b"      (intern "PDF-PAGE-UP"     :cl-user))
       ;; search
       (%def km "/"        (intern "PDF-ISEARCH-FORWARD"  :cl-user))
       (%def km "?"        (intern "PDF-ISEARCH-BACKWARD" :cl-user)) ; v0.37 Phase D
@@ -1513,8 +1542,8 @@
       ;; remaining after C-g).  pdf-isearch-quit is idempotent so binding
       ;; it here is safe even when no search is active.
       (%def km "C-g"      (intern "PDF-ISEARCH-QUIT" :cl-user))
-      ;; annotation
-      (%def km "h"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
+      ;; annotation — H stays as annotate (M-h is left free for users
+      ;; who want to bind highlight-selection somewhere out of hjkl's way).
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
       ;; v0.39 W13 — M-w copies the current PDF selection text onto
       ;; the kill-ring so a follow-up C-y in any text buffer pastes it.
@@ -1539,9 +1568,13 @@
               ;; First install: existing-km is empty → copy our km in.
               ;; Reinstall: existing-km has user overrides → merge defaults
               ;; only for keys without a binding.
-              (dolist (entry '(("j" pdf-scroll-down) ("k" pdf-scroll-up)
-                                ("<down>" pdf-scroll-down)
-                                ("<up>" pdf-scroll-up)
+              (dolist (entry '(;; v0.39: vim-style hjkl scroll
+                                ("h" pdf-scroll-left)  ("j" pdf-scroll-down)
+                                ("k" pdf-scroll-up)    ("l" pdf-scroll-right)
+                                ("<left>"  pdf-scroll-left)
+                                ("<down>"  pdf-scroll-down)
+                                ("<up>"    pdf-scroll-up)
+                                ("<right>" pdf-scroll-right)
                                 ("n" pdf-next-page) ("p" pdf-prev-page)
                                 ("b" pdf-prev-page)
                                 ("J" pdf-next-page) ("K" pdf-prev-page)
@@ -1552,15 +1585,16 @@
                                 ("d" pdf-toggle-dark)
                                 ("r" pdf-rotate-cw)
                                 ("/" pdf-isearch-forward)
+                                ("?" pdf-isearch-backward)
                                 ("C-g" pdf-isearch-quit)
-                                ("h" pdf-highlight-selection)
                                 ("H" pdf-annotate-selection)
                                 ("t" pdf-toc)
                                 ;; v0.37 Phase D additions
                                 ("C-d" pdf-half-page-down)
                                 ("C-u" pdf-half-page-up)
-                                ("l"   pdf-next-page)
-                                ("?"   pdf-isearch-backward)
+                                ;; v0.39: full-page (vim C-f / C-b)
+                                ("C-f" pdf-page-down)
+                                ("C-b" pdf-page-up)
                                 ("o"   find-file)
                                 ("q"   pdf-close)
                                 ;; v0.39 W13

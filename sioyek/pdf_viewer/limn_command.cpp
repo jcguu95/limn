@@ -120,6 +120,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     // view/*
     if (cmd == "view/set")              { cmd_view_set             (id, msg); return; }
     if (cmd == "view/get")              { cmd_view_get             (id, msg); return; }
+    if (cmd == "view/scroll")           { cmd_view_scroll          (id, msg); return; }  // v0.39
     if (cmd == "view/overlays")         { cmd_view_overlays        (id, msg); return; }
     if (cmd == "view/selection-set")    { cmd_view_selection_set   (id, msg); return; }
     if (cmd == "view/selection-get")    { cmd_view_selection_get   (id, msg); return; }
@@ -1553,6 +1554,107 @@ void LimnCommand::cmd_view_get(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
+    bridge->send_ok(id, collect_view_state(win_id));
+}
+
+// ─── view/scroll ──────────────────────────────────────────────────────
+// v0.39: scroll by a fraction of the visible screen so callers never need
+// to know document coordinates or zoom level.
+//
+// Fields:
+//   :win-id  (string, required)
+//   :dy      (double) fraction of screen height — positive=down, negative=up
+//   :dx      (double) fraction of screen width  — positive=right (optional)
+//
+// Active window: applies immediately to the live DocumentView using
+//   delta = dy * (view_height / zoom)
+// Fallback (headless/zero-size window): uses current page height as a proxy
+//   so the win snapshot stays consistent with what would happen at a real size.
+
+void LimnCommand::cmd_view_scroll(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    if (!msg.contains("dy") && !msg.contains("dx")) {
+        bridge->send_fail(id, "view/scroll requires at least :dy or :dx");
+        return;
+    }
+
+    const double dy = msg.value("dy").toDouble(0.0);
+    const double dx = msg.value("dx").toDouble(0.0);
+
+    const bool is_active = (windows->focused_id() == win_id);
+    DocumentView* dv = (main_widget && is_active) ? main_widget->document_view() : nullptr;
+
+    // Compute effective screen dimensions in document space.
+    // When the Qt widget has real size (active window with visible Qt
+    // surface), use view_height/zoom — matches what move_screens does
+    // natively in document_view.cpp.  When the widget is zero-sized
+    // (headless / offscreen / pre-show), fall back to page height as a
+    // sensible proxy so callers still get a perceptible scroll delta.
+    const float zoom   = dv ? dv->get_zoom_level() : (win->zoom > 0.0f ? win->zoom : 1.0f);
+    const float view_h = dv ? static_cast<float>(dv->get_view_height()) : 0.0f;
+    const float view_w = dv ? static_cast<float>(dv->get_view_width())  : 0.0f;
+
+    float screen_h = (zoom > 0.0f && view_h > 0.0f) ? view_h / zoom : 0.0f;
+    float screen_w = (zoom > 0.0f && view_w > 0.0f) ? view_w / zoom : 0.0f;
+
+    if (screen_h <= 0.0f || screen_w <= 0.0f) {
+        Document* doc = (!win->buffer_id.isEmpty()) ? registry->lookup(win->buffer_id) : nullptr;
+        const float page_h = (doc && doc->num_pages() > 0)
+                              ? doc->get_page_height(std::max(0, win->page)) : 800.0f;
+        if (screen_h <= 0.0f) screen_h = page_h;
+        if (screen_w <= 0.0f) screen_w = page_h;  // square-ish proxy
+    }
+
+    // Compute new offsets.
+    //
+    // Sign conventions (wire API — what callers see):
+    //   :dy > 0  scroll down (reveal content below)
+    //   :dx > 0  scroll right (reveal content to the right)
+    //
+    // sioyek's internal offset coords are asymmetric (see absolute_to_window_pos
+    // in document_view.cpp): window_pos.y = (vpos.y - offset.y) * zoom + center
+    //                       window_pos.x = (vpos.x + offset.x) * zoom + center
+    // So "reveal content below" = increase offset_y (consistent with dy sign),
+    // but "reveal content to the right" = DECREASE offset_x.  Negate dx here
+    // so the wire API stays symmetric — callers don't have to know about the
+    // sioyek quirk.
+    const float cur_y = (is_active && dv) ? dv->get_offset_y() : win->offset_y;
+    const float cur_x = (is_active && dv) ? dv->get_offset_x() : win->offset_x;
+    float new_y = cur_y + static_cast<float>(dy) * screen_h;
+    float new_x = cur_x - static_cast<float>(dx) * screen_w;
+
+    // Don't pre-clamp at 0 — sioyek's set_offsets(force=false) below knows the
+    // real valid range (min/max_y_offset, min/max_x_offset) and clamps
+    // correctly, including for zoomed-in views where the valid x range can
+    // include negative values.  A naïve clamp at 0 made horizontal scroll feel
+    // walled-off early in v0.39 dogfood III.
+
+    win->offset_y = new_y;
+    win->offset_x = new_x;
+
+    // If active, push to DocumentView so the screen actually moves.
+    // force=false lets set_offsets clamp to the document's natural bounds;
+    // the clamped value flows back via dv->get_offset_y in collect_view_state.
+    // Also have to (a) rebuild the overlay raster — selection/overlay pixel
+    // rects move with the scroll — and (b) request an opengl repaint, just
+    // like cmd_view_set does.  Without (b) the offset updates internally but
+    // the screen stays frozen until the next unrelated paint trigger.
+    if (is_active && dv) {
+        dv->set_offsets(new_x, new_y, false);
+        int rw = 1200, rh = 900;
+        if (auto* gl = main_widget->opengl_widget()) {
+            if (gl->width()  > 0) rw = gl->width();
+            if (gl->height() > 0) rh = gl->height();
+        }
+        rebuild_overlay_raster(rw, rh);
+        if (auto* gl = main_widget->opengl_widget()) gl->update();
+    }
+
     bridge->send_ok(id, collect_view_state(win_id));
 }
 

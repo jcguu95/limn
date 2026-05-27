@@ -62,6 +62,7 @@ private:
     // ─── view/* ───────────────────────────────────────────────────────
     void cmd_view_set             (const QString& id, const QJsonObject& msg);
     void cmd_view_get             (const QString& id, const QJsonObject& msg);
+    void cmd_view_scroll          (const QString& id, const QJsonObject& msg);  // v0.39
     void cmd_view_overlays        (const QString& id, const QJsonObject& msg);
     // v0.15.1 visual selection (page-relative norm coords; per-window)
     void cmd_view_selection_set   (const QString& id, const QJsonObject& msg);
