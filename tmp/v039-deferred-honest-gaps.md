@@ -1,5 +1,17 @@
 # v0.39 — deferred honesty gaps (for future sessions)
 
+> **Note**: this is a v0.39-scoped narrative of what got deferred
+> during the honest-fix audit.  The CANONICAL cross-version place
+> for these items going forward is [`ISSUES.md`](../ISSUES.md) at
+> the repo root.  Items here map to:
+>
+>   - Gap 1 (W05 / GL shader)  →  ISSUES.md `I-1`
+>   - Gap 2 (W16 / X11 CJK)    →  ISSUES.md `I-2`
+>   - Gap 3 (W17 / keystroke)  →  ISSUES.md `I-3`
+>
+> Future sprints should update `ISSUES.md`, not this file.
+
+
 v0.39 ended at 30/30 PASS, 106/106 assertions.  Every dogfood
 workflow exercises real production code.  But there are **three
 deferred honesty gaps** where the test is structurally weaker than
