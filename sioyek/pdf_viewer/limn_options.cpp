@@ -23,11 +23,10 @@ LimnOptions LimnOptions::parse(const QStringList& args) {
             }
         } else if (a.startsWith("--socket=")) {
             o.socket_path = a.mid(QString("--socket=").size());
-        } else if (!a.startsWith("--")) {
-            // first positional → initial document
-            if (o.initial_path.isEmpty()) o.initial_path = a;
         }
-        // unknown flags silently ignored (Qt may inject its own)
+        // Unknown flags and any positional args are silently ignored
+        // (Qt injects its own flags; positionals are no longer supported —
+        // open documents via the bridge's buffer/open command instead).
     }
     return o;
 }

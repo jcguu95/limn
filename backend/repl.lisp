@@ -6,9 +6,14 @@
 ;;;; Env vars:
 ;;;;   HEADLESS=0       open a visible Qt window (default: 1, offscreen)
 ;;;;   LIMN_BIN         override binary path
-;;;;   LIMN_INITIAL     initial PDF/file to open on launch
 ;;;;   LIMN_NO_SPAWN=1  load all modules then exit cleanly — no binary needed
 ;;;;                    (used by smoke tests and CI)
+;;;;
+;;;; To open a PDF, use (o "/path/to.pdf") at the REPL prompt. The old
+;;;; LIMN_INITIAL env var was removed in v0.39 because it routed through
+;;;; the legacy MainWidget::open_document instead of the bridge's
+;;;; buffer/open path — no buffer-opened event ever fired, so pdf-mode
+;;;; was never installed for the window and j/k did nothing.
 
 (in-package #:cl-user)
 
@@ -87,10 +92,8 @@
     (sb-posix:setenv "QT_QPA_PLATFORM" "minimal" 1))
   (let* ((sock    (format nil "/tmp/limn-repl-~a" (sb-posix:getpid)))
          (bin     (default-limn-bin))
-         (initial (sb-ext:posix-getenv "LIMN_INITIAL"))
          (args    (append (when (headless-p) (list "--headless"))
-                          (list "--test-mode" "--socket" sock)
-                          (when initial (list initial)))))
+                          (list "--test-mode" "--socket" sock))))
     (unless (probe-file bin)
       (format *error-output* "✗ limn binary not found: ~a~%" bin)
       (sb-ext:exit :code 2))
