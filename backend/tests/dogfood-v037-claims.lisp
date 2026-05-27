@@ -238,13 +238,14 @@
          (km (and mode-obj (limn/mode:mode-keymap mode-obj))))
     (functionp (and km (limn/keys:lookup-sequence km '("q"))))))
 
-(claim ": key bound to execute-command"
+(claim ": key NOT bound in pdf-mode (passes through as literal)"
   (let* ((mb-fn (find-symbol "MODE-BUFFER-FOR-WINDOW" :limn/runtime))
          (mb (and mb-fn (funcall mb-fn "w1")))
          (major (and mb (limn/mode:major-mode mb)))
          (mode-obj (and major (limn/mode:find-mode major)))
          (km (and mode-obj (limn/mode:mode-keymap mode-obj))))
-    (functionp (and km (limn/keys:lookup-sequence km '(":"))))))
+    ;; : must NOT be bound — M-x is the command-palette key.
+    (null (and km (limn/keys:lookup-sequence km '(":"))))))
 
 (claim "? key bound to pdf-isearch-backward"
   (let* ((mb-fn (find-symbol "MODE-BUFFER-FOR-WINDOW" :limn/runtime))

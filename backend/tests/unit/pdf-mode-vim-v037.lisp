@@ -68,7 +68,7 @@
              (km   (and mode (funcall (symbol-function mode-keymap) mode))))
         (assert-true km "pdf-mode has a keymap")
         (when km
-          (dolist (spec '("C-d" "C-u" "l" "?" "o" "q" ":"))
+          (dolist (spec '("C-d" "C-u" "l" "?" "o" "q"))
             (check (functionp (limn/keys:lookup-sequence km (list spec)))
                    (format nil "binding present for ~s" spec)
                    nil)))))))
