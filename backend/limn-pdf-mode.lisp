@@ -294,6 +294,7 @@
    return state object. Empty query stored but no wire call."
   (when (and query (> (length query) 0))
     (setf *pdf-last-search-query* query)
+    (setf *pdf-filter-depth* 0)             ; fresh search resets filter colors
     (let* ((r (%limn-call "buffer/search"
                            :|buffer-id| buffer-id
                            :|query| query
@@ -316,6 +317,7 @@
 (defun pdf-search-reset ()
   "Clear search state for the current window and remove overlays."
   (%set-search-state nil)
+  (setf *pdf-filter-depth* 0)
   (%limn-call "view/overlays" :|win-id| *current-win-id* :|layers| '()))
 
 (defun pdf-search-advance (state)
@@ -337,13 +339,22 @@
                    (length hits))))))
   state)
 
-(defun pdf-search-overlay-payload (state)
+(defun pdf-search-overlay-payload (state &optional color)
   "Generate overlays plist list. Current hit = opacity 0.6;
-   others = 0.25. Multi-rect hits each get their own overlay entry."
-  (when (and state (pdf-search-state-hits state))
-    (let ((current-idx (pdf-search-state-current-index state))
-          (acc nil)
-          (i 0))
+   others = 0.25. Multi-rect hits each get their own overlay entry.
+   COLOR defaults to yellow at depth 0; when *pdf-filter-depth* > 0
+   (after one or more M-n / M-f) it auto-picks from
+   *pdf-filter-colors* so subsequent n/p navigation keeps the
+   narrowed color instead of reverting to yellow."
+  (let ((effective-color
+          (or color
+              (if (zerop *pdf-filter-depth*)
+                  "#FFD700"
+                  (%pdf-filter-color (1- *pdf-filter-depth*))))))
+    (when (and state (pdf-search-state-hits state))
+      (let ((current-idx (pdf-search-state-current-index state))
+            (acc nil)
+            (i 0))
       (dolist (hit (pdf-search-state-hits state))
         (let* ((page (getf hit :|page|))
                (rects (getf hit :|rects|))
@@ -352,11 +363,32 @@
             (push (list :|type| "rect"
                          :|page| page
                          :|rect| rect
-                         :|color| "#FFD700"
+                         :|color| effective-color
                          :|opacity| op)
                   acc)))
         (incf i))
-      (nreverse acc))))
+      (nreverse acc)))))
+
+;; v0.39.11 A4 follow-up: track filter depth so successive M-n / M-f
+;; rotate colors (mild rainbow).  Reset whenever a fresh / search runs.
+(defvar *pdf-filter-depth* 0
+  "How many M-n / M-f filters have been chained on top of the latest /
+   search.  Reset by pdf-search-execute and pdf-search-reset.
+   Per-window via a hash-table would be tidier, but the current
+   single-window dogfood doesn't need it; promote later if needed.")
+
+(defparameter *pdf-filter-colors*
+  #("#00DDFF"   ; cyan — first narrow
+    "#FF66CC"   ; magenta — second
+    "#66FF66"   ; mint
+    "#FFAA00"   ; orange
+    "#AA66FF"  ) ; violet
+  "Color cycle for narrowed-result overlays.")
+
+(defun %pdf-filter-color (&optional depth)
+  (aref *pdf-filter-colors*
+        (mod (or depth *pdf-filter-depth*)
+             (length *pdf-filter-colors*))))
 
 ;;; --- v0.39.11 A1: match counter -----------------------------------
 
@@ -372,14 +404,20 @@
                   (length hits)))))))
 
 (defun %refresh-search-modeline ()
-  "Re-emit modeline/set with the current counter in :|right|.  Called
-   after every search-state mutation so the counter tracks the
-   user's position.  Sets :|right| to \"\" when no search is active
-   (clears stale counter)."
-  (let ((counter (pdf-format-search-counter)))
-    (handler-case
-        (%limn-call "modeline/set" :|right| (or counter ""))
-      (error () nil))))
+  "Re-emit the full modeline so the search counter (\"N / T\") appears
+   in BOTH :|left| (embedded — guaranteed visible regardless of Qt's
+   modeline column layout) and :|right|.  Called after every
+   search-state mutation."
+  (handler-case
+      (let* ((bid (and (find-package :limn/pdf-mode)
+                       (find-symbol "%FOCUSED-BUFFER-ID" :limn/pdf-mode)))
+             (path-fn (and (find-package :limn/pdf-mode)
+                           (find-symbol "*BUFFER-ID-TO-PATH*" :limn/pdf-mode)))
+             (bid-v (and bid (fboundp bid) (funcall (symbol-function bid))))
+             (path (and bid-v path-fn (boundp path-fn)
+                        (gethash bid-v (symbol-value path-fn)))))
+        (pdf-mode-update-modeline :buffer-id bid-v :path path))
+    (error () nil)))
 
 ;;; --- v0.39.11 A4: narrow + fuzzy filters --------------------------
 
@@ -951,17 +989,33 @@
         (setf query limn/pdf-mode:*pdf-last-search-query*))
       (when (and (stringp query) (> (length query) 0))
         (let* ((buf (limn/pdf-mode::%focused-buffer-id))
+               (v   (limn/pdf-mode::%focused-view))
+               (cur-page (or (getf v :|page|) 0))
                (state (limn/pdf-mode:pdf-search-execute buf query)))
           (when state
+            ;; v0.39.11 follow-up: start from the user's CURRENT page
+            ;; (find first hit whose page >= cur-page); fall back to
+            ;; first hit if everything is behind us.  This stops the
+            ;; jarring "jump back to page 0" behaviour the user hit
+            ;; in dogfood.
+            (let* ((hits (limn/pdf-mode:pdf-search-state-hits state))
+                   (forward-idx
+                     (and (consp hits)
+                          (loop for h in hits
+                                for i from 0
+                                when (let ((p (getf h :|page|)))
+                                       (and (integerp p) (>= p cur-page)))
+                                  return i)))
+                   (start-idx (or forward-idx 0)))
+              (when (consp hits)
+                (setf (limn/pdf-mode:pdf-search-state-current-index state)
+                      start-idx)
+                (let* ((hit (nth start-idx hits))
+                       (p   (getf hit :|page|)))
+                  (when (integerp p) (limn/pdf-mode::%page-set p)))))
             (limn/pdf-mode::%limn-call
              "view/overlays" :|win-id| "w1"
              :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
-            ;; Jump view to first hit page if any.
-            (let ((hits (limn/pdf-mode:pdf-search-state-hits state)))
-              (when (and hits (consp hits))
-                (let ((p (getf (first hits) :|page|)))
-                  (when (integerp p)
-                    (limn/pdf-mode::%page-set p)))))
             (limn/pdf-mode::%refresh-search-modeline)))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-next nil
@@ -1155,11 +1209,13 @@
                                              :|text| "No matches after filter")
                 (error () nil)))
              (t
+              (incf limn/pdf-mode::*pdf-filter-depth*)
               (setf (limn/pdf-mode:pdf-search-state-hits s) new-hits
                     (limn/pdf-mode:pdf-search-state-current-index s) 0)
               (limn/pdf-mode::%limn-call
                "view/overlays" :|win-id| "w1"
-               :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+               :|layers| (limn/pdf-mode:pdf-search-overlay-payload
+                          s (limn/pdf-mode::%pdf-filter-color)))
               (let ((p (getf (first new-hits) :|page|)))
                 (when (integerp p) (limn/pdf-mode::%page-set p)))))
            (limn/pdf-mode::%refresh-search-modeline)))))))
@@ -1190,11 +1246,13 @@
                                              :|text| "No matches after filter")
                 (error () nil)))
              (t
+              (incf limn/pdf-mode::*pdf-filter-depth*)
               (setf (limn/pdf-mode:pdf-search-state-hits s) new-hits
                     (limn/pdf-mode:pdf-search-state-current-index s) 0)
               (limn/pdf-mode::%limn-call
                "view/overlays" :|win-id| "w1"
-               :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+               :|layers| (limn/pdf-mode:pdf-search-overlay-payload
+                          s (limn/pdf-mode::%pdf-filter-color)))
               (let ((p (getf (first new-hits) :|page|)))
                 (when (integerp p) (limn/pdf-mode::%page-set p)))))
            (limn/pdf-mode::%refresh-search-modeline)))))))
@@ -1676,12 +1734,19 @@
 ;;; §F modeline
 ;;; ═════════════════════════════════════════════════════════════════════
 
-(defun limn/pdf-mode:pdf-format-modeline (path page page-count zoom)
-  "Format \"PDF: name [P/T] Z%\". Page is 1-indexed in display."
+(defun limn/pdf-mode:pdf-format-modeline (path page page-count zoom
+                                          &optional counter)
+  "Format \"PDF: name [P/T] Z%  [N / T-matches]\". Page is 1-indexed.
+   COUNTER is the optional search-match string (\"3 / 17\") shown only
+   when a search is active.  Embedded in the left slot so it always
+   renders, regardless of whether Qt's modeline layout shows :right."
   (let ((basename (file-namestring (pathname path)))
         (zoom-pct (round (* 100 zoom))))
-    (format nil "PDF: ~a   [~a / ~a]   ~a%"
-            basename (1+ page) page-count zoom-pct)))
+    (if (and counter (stringp counter) (plusp (length counter)))
+        (format nil "PDF: ~a   [~a / ~a]   ~a%   match ~a"
+                basename (1+ page) page-count zoom-pct counter)
+        (format nil "PDF: ~a   [~a / ~a]   ~a%"
+                basename (1+ page) page-count zoom-pct))))
 
 (defun limn/pdf-mode:pdf-mode-update-modeline (&key buffer-id path)
   (declare (ignore buffer-id))
@@ -1689,10 +1754,13 @@
          (page (or (getf v :|page|) 0))
          (pc (or (getf v :|page-count|) 1))
          (zoom (or (getf v :|zoom|) 1.0))
+         (counter (limn/pdf-mode:pdf-format-search-counter))
          (label (limn/pdf-mode:pdf-format-modeline
                   (or path "/tmp/unknown.pdf")
-                  page pc zoom)))
-    (limn/pdf-mode::%limn-call "modeline/set" :|left| label)))
+                  page pc zoom counter)))
+    (limn/pdf-mode::%limn-call "modeline/set"
+                                :|left|  label
+                                :|right| (or counter ""))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §M mouse-driven text selection
