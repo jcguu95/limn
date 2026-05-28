@@ -3249,7 +3249,22 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         const QString type  = l.value("type").toString();
         const int     page  = l.value("page").toInt(-1);
         if (page < 0 || page >= doc->num_pages()) continue;
-        if (page != current_page) continue;            // v0.14 page filter
+        // v0.39.11: for rect overlays in DV-live mode we no longer
+        // filter by current_page.  Like the selection block below,
+        // rect coords carry their own :page and the DV transform
+        // produces correct widget pixels for that page even when
+        // current_page is stale (the same staleness that bit selections
+        // post j/k scroll bit multi-page search results too).
+        // Off-screen rects map to coords outside the raster and Qt
+        // clips them — nothing visible, nothing wrong.
+        //
+        // line / text overlays and the dv_live=false rect fallback
+        // still rely on norm_to_pixel (no page transform), so they
+        // keep the original page filter to avoid smearing across pages.
+        const bool dv_live_for_filter =
+            dv->get_view_width() > 0 && dv->get_view_height() > 0;
+        if (!(type == "rect" && dv_live_for_filter)
+            && page != current_page) continue;
 
         // v0.25: "face" field overrides "color" — resolve foreground from registry
         QString colstr = l.value("color").toString();
