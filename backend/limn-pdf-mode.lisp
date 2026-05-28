@@ -1797,10 +1797,14 @@
                        (error () nil))))
           ;; v0.39: mouse-driven text selection.
           ;; Left-click clears old selection; left-drag extends it.
-          (funcall (symbol-function add) "mouse-click"
+          ;; NB: hook names must use the "event/" prefix — that is what
+          ;; limn/dispatch:event-hook-name returns, and what the pump
+          ;; thread fires.  Bare "mouse-click" / "mouse-drag" never
+          ;; matched; that was the root cause of the feature not working.
+          (funcall (symbol-function add) "event/mouse-click"
                    (lambda (ev)
                      (handler-case (%on-mouse-click ev) (error () nil))))
-          (funcall (symbol-function add) "mouse-drag"
+          (funcall (symbol-function add) "event/mouse-drag"
                    (lambda (ev)
                      (handler-case (%on-mouse-drag ev) (error () nil)))))))
 
