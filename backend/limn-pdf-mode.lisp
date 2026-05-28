@@ -337,13 +337,18 @@
 
 (defun pdf-search-execute (buffer-id query &key case-sensitive)
   "Fresh / search: wire round-trip + reset filter depth + clear
-   overlay history.  M-n uses %do-search-wire directly so it can
-   preserve history."
+   overlay history + seed the narrow-line context with this search's
+   hit lines (so the FIRST M-n can intersect).  M-n uses
+   %do-search-wire directly so it can preserve history."
   (when (and query (> (length query) 0))
     (setf *pdf-last-search-query* query)
     (setf *pdf-filter-depth* 0)             ; fresh search resets filter colors
     (%set-overlay-history nil)               ; fresh search clears prior colors
     (let ((state (%do-search-wire buffer-id query :case-sensitive case-sensitive)))
+      ;; Seed narrow context from this search's hit lines.
+      (when state
+        (%set-narrow-lines
+         (%lines-from-hits (pdf-search-state-hits state))))
       ;; v0.25 search-history integration (§T)
       (let ((add (find-symbol "ADD-TO-HISTORY" :limn/history)))
         (when (and add (fboundp add))
@@ -357,6 +362,7 @@
   (%set-search-state nil)
   (setf *pdf-filter-depth* 0)
   (%set-overlay-history nil)
+  (%set-narrow-lines nil)
   (%limn-call "view/overlays" :|win-id| *current-win-id* :|layers| '()))
 
 (defun pdf-search-advance (state)
@@ -454,6 +460,81 @@
               :|win-id| *current-win-id*
               :|layers| (%composite-overlay-layers
                           (pdf-search-overlay-payload state color))))
+
+;; v0.39.15 line-narrow context — what makes M-n actually narrow.
+;;
+;; Each successful / or M-n stores the (page . normalised-line-text)
+;; pairs of its hits' lines into *pdf-narrow-lines*.  The NEXT M-n
+;; issues a fresh buffer/search but then keeps only those new hits
+;; whose (page, line) is in the stored set; the set is then tightened
+;; to those surviving hits.  Successive M-n therefore tighten
+;; recursively: M-n init after / path keeps only "init" occurrences
+;; on lines that contained "path"; another M-n return keeps only
+;; "return" occurrences on lines that contained both.
+;;
+;; Paragraph-level narrow would need block info from MuPDF that the
+;; current :texts wire field doesn't carry — line is what we have
+;; today and matches the user's "如果 paragraph 很麻煩，那我們就先做
+;; line" instruction.
+(defvar *pdf-narrow-lines* (make-hash-table :test #'equal)
+  "win-id → list of (page . normalised-line-text) tuples representing
+   the intersected line set across the current / + M-n chain.")
+
+(defun %narrow-lines () (gethash *current-win-id* *pdf-narrow-lines*))
+(defun %set-narrow-lines (v)
+  (if v (setf (gethash *current-win-id* *pdf-narrow-lines*) v)
+        (remhash *current-win-id* *pdf-narrow-lines*))
+  v)
+
+(defun %normalise-line-text (s)
+  "Lowercase + trim + collapse internal whitespace runs."
+  (when (stringp s)
+    (let* ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) s))
+           (lower (string-downcase trimmed))
+           (out (make-string-output-stream))
+           (prev-space nil))
+      (loop for ch across lower
+            do (cond
+                 ((or (char= ch #\Space) (char= ch #\Tab)
+                      (char= ch #\Newline) (char= ch #\Return))
+                  (unless prev-space
+                    (write-char #\Space out)
+                    (setf prev-space t)))
+                 (t (write-char ch out) (setf prev-space nil))))
+      (get-output-stream-string out))))
+
+(defun %lines-from-hits (hits)
+  "Extract the unique (page . normalised-line-text) tuples from HITS."
+  (let ((seen (make-hash-table :test #'equal))
+        (acc nil))
+    (dolist (h hits)
+      (let* ((page (getf h :|page|))
+             (raw  (or (getf h :|text|)
+                       (and (consp (getf h :|texts|))
+                            (first (getf h :|texts|)))))
+             (norm (and raw (%normalise-line-text raw)))
+             (key  (and (integerp page) norm
+                        (and (plusp (length norm)) (cons page norm)))))
+        (when (and key (not (gethash key seen)))
+          (setf (gethash key seen) t)
+          (push key acc))))
+    (nreverse acc)))
+
+(defun %hits-in-narrow-set (hits narrow-set)
+  "Keep only hits whose (page, line-text) is in NARROW-SET.
+   NARROW-SET is a list of (page . norm-text) cons cells; we look up
+   via a transient hash for O(N+M)."
+  (let ((tbl (make-hash-table :test #'equal)))
+    (dolist (e narrow-set) (setf (gethash e tbl) t))
+    (loop for h in hits
+          for page = (getf h :|page|)
+          for raw  = (or (getf h :|text|)
+                         (and (consp (getf h :|texts|))
+                              (first (getf h :|texts|))))
+          for norm = (and raw (%normalise-line-text raw))
+          when (and (integerp page) norm
+                    (gethash (cons page norm) tbl))
+            collect h)))
 
 ;; v0.39.11 A4 follow-up: track filter depth so successive M-n / M-f
 ;; rotate colors (mild rainbow).  Reset whenever a fresh / search runs.
@@ -1296,11 +1377,15 @@
 (limn/pdf-mode::%defcmd pdf-isearch-narrow nil
   ;; v0.39.12 follow-up: re-SEARCH rather than filter.  Previous
   ;; behaviour kept the original rects (the "the" boxes) and just
-  ;; relabelled them with a new color, which left the new substring
-  ;; visually unmarked.  Now M-n issues a fresh buffer/search for
-  ;; the new substring, replaces the hit list, increments the filter
-  ;; depth so successive M-n cycle through colors, and auto-selects
-  ;; the current hit so M-w copy / visual feedback both work.
+  ;; v0.39.15 line-narrow:
+  ;;   M-n issues a fresh buffer/search for the new query, then keeps
+  ;;   only the new hits whose LINE was also a line of the prior
+  ;;   search.  Recursively tightens — three M-n in a row leaves only
+  ;;   the lines where all three queries appeared.
+  ;;
+  ;;   The prior search's overlay payload is pushed onto
+  ;;   *pdf-search-overlay-history* so its color stays visible under
+  ;;   the new color (cumulative rainbow per user spec).
   (lambda ()
     (let* ((s (limn/pdf-mode::%search-state))
            (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
@@ -1317,53 +1402,62 @@
                 (buf (limn/pdf-mode::%focused-buffer-id))
                 (v   (limn/pdf-mode::%focused-view))
                 (cur-page (or (getf v :|page|) 0))
-                ;; Snapshot CURRENT color's payload + the existing
-                ;; history BEFORE we mutate state.  The post-search
-                ;; restore prepends the snapshot to the prior history
-                ;; so successive M-n keep stacking colors.
                 (prior-payload
                   (limn/pdf-mode:pdf-search-overlay-payload s))
                 (prior-history (limn/pdf-mode::%overlay-history))
+                (prior-narrow  (limn/pdf-mode::%narrow-lines))
                 (next-depth (1+ limn/pdf-mode::*pdf-filter-depth*)))
            (cond
              ((or (not (stringp needle)) (zerop (length needle))) nil)
              (t
-              (let ((new-state
-                      (limn/pdf-mode::%do-search-wire buf needle)))
-                ;; Restore history with the prior color prepended so it
-                ;; renders too; bump depth so the new color picks up
-                ;; from the cycle.
+              (let* ((new-state
+                       (limn/pdf-mode::%do-search-wire buf needle))
+                     (raw-new-hits
+                       (and new-state
+                            (limn/pdf-mode:pdf-search-state-hits new-state)))
+                     ;; Intersect by line.  When prior-narrow is empty
+                     ;; (shouldn't happen if pdf-search-execute seeded
+                     ;; it, but defensive), behave like the previous
+                     ;; "fresh re-search" semantic.
+                     (kept (if (consp prior-narrow)
+                               (limn/pdf-mode::%hits-in-narrow-set
+                                raw-new-hits prior-narrow)
+                               raw-new-hits)))
+                ;; History + depth bump happen regardless of result
+                ;; count so prior colors stay visible even on no-match.
                 (limn/pdf-mode::%set-overlay-history
                  (cons prior-payload prior-history))
                 (setf limn/pdf-mode::*pdf-filter-depth* next-depth)
                 (cond
-                  ((or (not new-state)
-                       (not (consp (limn/pdf-mode:pdf-search-state-hits
-                                    new-state))))
-                   ;; No new matches → still emit the (history-only)
-                   ;; layer stack so prior colors remain visible.
+                  ((null kept)
                    (limn/pdf-mode::%emit-search-overlays nil)
                    (handler-case
                        (limn/pdf-mode::%limn-call
                         "message/echo"
-                        :|text| (format nil "No matches for ~s" needle))
+                        :|text| (format nil
+                                        "No matches for ~s on the same lines"
+                                        needle))
                      (error () nil)))
                   (t
-                   ;; Land on the first hit at/after current page —
-                   ;; matches the new pdf-isearch-forward semantic.
-                   (let* ((hits (limn/pdf-mode:pdf-search-state-hits
-                                  new-state))
-                          (start
-                            (or (loop for h in hits for i from 0
-                                      when (let ((p (getf h :|page|)))
-                                             (and (integerp p)
-                                                  (>= p cur-page)))
-                                        return i)
-                                0)))
+                   ;; Tighten narrow context to the surviving hits'
+                   ;; lines so the NEXT M-n narrows further.
+                   (limn/pdf-mode::%set-narrow-lines
+                    (limn/pdf-mode::%lines-from-hits kept))
+                   ;; Replace state hits with the kept subset and pick
+                   ;; the first hit at/after the current page.
+                   (setf (limn/pdf-mode:pdf-search-state-hits new-state)
+                         kept)
+                   (let ((start
+                           (or (loop for h in kept for i from 0
+                                     when (let ((p (getf h :|page|)))
+                                            (and (integerp p)
+                                                 (>= p cur-page)))
+                                       return i)
+                               0)))
                      (setf (limn/pdf-mode:pdf-search-state-current-index
                             new-state)
                            start)
-                     (let* ((hit (nth start hits))
+                     (let* ((hit (nth start kept))
                             (p   (getf hit :|page|)))
                        (when (integerp p)
                          (limn/pdf-mode::%page-set p))))
@@ -1371,47 +1465,9 @@
                    (limn/pdf-mode::%select-current-hit new-state))))
               (limn/pdf-mode::%refresh-search-modeline)))))))))
 
-(limn/pdf-mode::%defcmd pdf-isearch-fuzzy nil
-  (lambda ()
-    (let* ((s (limn/pdf-mode::%search-state))
-           (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
-           (read-fn (and reader (boundp reader) (symbol-value reader))))
-      (cond
-        ((not s)
-         (handler-case
-             (limn/pdf-mode::%limn-call "message/echo"
-                                        :|text| "No active search to fuzzy-filter")
-           (error () nil)))
-        ((not read-fn) nil)
-        (t
-         (let* ((q (funcall read-fn "Fuzzy: "))
-                (new-hits
-                  (and (stringp q) (plusp (length q))
-                       (limn/pdf-mode:pdf-search-rank-fuzzy s q))))
-           (cond
-             ((null new-hits)
-              ;; Filter dropped everything — preserve prior color stack
-              ;; (so original / yellow stays visible), don't add new color.
-              (limn/pdf-mode::%emit-search-overlays nil)
-              (handler-case
-                  (limn/pdf-mode::%limn-call "message/echo"
-                                             :|text| "No matches after filter")
-                (error () nil)))
-             (t
-              ;; Push the prior color's payload onto history so it stays
-              ;; visible underneath the new (fuzzy-ranked) cyan/etc.
-              (let ((prior-payload
-                      (limn/pdf-mode:pdf-search-overlay-payload s)))
-                (limn/pdf-mode::%set-overlay-history
-                 (cons prior-payload (limn/pdf-mode::%overlay-history))))
-              (incf limn/pdf-mode::*pdf-filter-depth*)
-              (setf (limn/pdf-mode:pdf-search-state-hits s) new-hits
-                    (limn/pdf-mode:pdf-search-state-current-index s) 0)
-              (limn/pdf-mode::%emit-search-overlays s)
-              (let ((p (getf (first new-hits) :|page|)))
-                (when (integerp p) (limn/pdf-mode::%page-set p)))
-              (limn/pdf-mode::%select-current-hit s)))
-           (limn/pdf-mode::%refresh-search-modeline)))))))
+;; v0.39.15: pdf-isearch-fuzzy removed per user feedback ("先移除掉.
+;; 我覺得這個應該有更好的做法").  M-f keybinding also dropped from
+;; the install block.
 
 ;;; v0.37 Phase D: half-page scroll (vim C-d / C-u).  Uses offset-y
 ;;; deltas the same way pdf-scroll-down does, but with a larger step.
@@ -2200,9 +2256,8 @@
       ;; remaining after C-g).  pdf-isearch-quit is idempotent so binding
       ;; it here is safe even when no search is active.
       (%def km "C-g"      (intern "PDF-ISEARCH-QUIT" :cl-user))
-      ;; v0.39.11 A4: filter the current search hits.
+      ;; v0.39.15 A: line-narrow only (M-f / fuzzy was removed).
       (%def km "M-n"      (intern "PDF-ISEARCH-NARROW" :cl-user))
-      (%def km "M-f"      (intern "PDF-ISEARCH-FUZZY"  :cl-user))
       ;; annotation — H stays as annotate (M-h is left free for users
       ;; who want to bind highlight-selection somewhere out of hjkl's way).
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
@@ -2249,7 +2304,6 @@
                                 ("?" pdf-isearch-backward)
                                 ("C-g" pdf-isearch-quit)
                                 ("M-n" pdf-isearch-narrow)
-                                ("M-f" pdf-isearch-fuzzy)
                                 ("H" pdf-annotate-selection)
                                 ("t" pdf-toc)
                                 ;; v0.37 Phase D additions
