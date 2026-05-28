@@ -243,8 +243,40 @@
   (hits        nil)             ; list of (:|page| P :|rects| ((x0 y0 x1 y1)...))
   (current-index 0 :type integer))
 
+;; v0.39: per-window search state. Keyed by win-id string so that
+;; multiple frames showing the same buffer each have their own
+;; independent search cursor. *current-win-id* is a dynamic variable
+;; that %wrap-cmd binds from the incoming key event's :win-id field;
+;; all search helpers read/write through the accessors below.
+(defvar *pdf-search-states* (make-hash-table :test #'equal)
+  "win-id → pdf-search-state.  Replaces the old single *pdf-search-state*.")
+
+(defvar *current-win-id* "w1"
+  "Dynamic variable holding the win-id of the window that fired the
+   current key event.  Bound by %wrap-cmd from ev's :win-id field.")
+
+(defun %search-state ()
+  "Return the active search state for the current window."
+  (gethash *current-win-id* *pdf-search-states*))
+
+(defun %set-search-state (state)
+  "Set (or clear, if STATE is nil) the search state for the current window."
+  (if state
+      (setf (gethash *current-win-id* *pdf-search-states*) state)
+      (remhash *current-win-id* *pdf-search-states*))
+  state)
+
+;; Keep the old name as a compatibility alias that reads the focused win.
+(defun %compat-search-state ()
+  "Return *pdf-search-state* equivalent for the current focused window."
+  (%search-state))
+
+;;; --- public export alias (old code that uses *pdf-search-state* directly) --
+;;; Nothing outside this file should access *pdf-search-state* directly;
+;;; internal helpers all use %search-state / %set-search-state now.
 (defvar *pdf-search-state* nil
-  "Currently active search state (one slot — single search at a time).")
+  "DEPRECATED: old single-slot global.  Kept for external callers only.
+   Actual state is in *pdf-search-states* keyed by win-id.")
 
 (defvar *pdf-last-search-query* nil
   "Last query string used for / (Emacs convention: empty input replays).")
@@ -263,23 +295,23 @@
                            :|case-sensitive| (if case-sensitive t :false)))
            (d (%response-data r))
            (hits (and d (getf d :|hits|))))
-      (setf *pdf-search-state*
-            (make-pdf-search-state :buffer-id buffer-id
-                                    :query query
-                                    :hits (or hits '())
-                                    :current-index 0))
+      (%set-search-state
+       (make-pdf-search-state :buffer-id buffer-id
+                               :query query
+                               :hits (or hits '())
+                               :current-index 0))
       ;; v0.25 search-history integration (§T)
       (let ((add (find-symbol "ADD-TO-HISTORY" :limn/history)))
         (when (and add (fboundp add))
           (handler-case
               (funcall (symbol-function add) '*search-history* query)
             (error () nil))))
-      *pdf-search-state*)))
+      (%search-state))))
 
 (defun pdf-search-reset ()
-  "Clear *pdf-search-state* and emit empty overlays."
-  (setf *pdf-search-state* nil)
-  (%limn-call "view/overlays" :|win-id| "w1" :|layers| '()))
+  "Clear search state for the current window and remove overlays."
+  (%set-search-state nil)
+  (%limn-call "view/overlays" :|win-id| *current-win-id* :|layers| '()))
 
 (defun pdf-search-advance (state)
   "Move current-index forward (wrap). Safe on empty/nil hits."
@@ -741,7 +773,7 @@
 
 (limn/pdf-mode::%defcmd pdf-isearch-next nil
   (lambda ()
-    (let ((s limn/pdf-mode:*pdf-search-state*))
+    (let ((s (limn/pdf-mode::%search-state)))
       (when s
         (let* ((hits (limn/pdf-mode:pdf-search-state-hits s))
                (old-idx (limn/pdf-mode:pdf-search-state-current-index s)))
@@ -765,7 +797,7 @@
 
 (limn/pdf-mode::%defcmd pdf-isearch-prev nil
   (lambda ()
-    (let ((s limn/pdf-mode:*pdf-search-state*))
+    (let ((s (limn/pdf-mode::%search-state)))
       (when s
         (limn/pdf-mode:pdf-search-retreat s)
         (let* ((hits (limn/pdf-mode:pdf-search-state-hits s)))
@@ -840,6 +872,61 @@
             (let* ((p (getf (nth (1- (length hits)) hits) :|page|)))
               (when (integerp p)
                 (limn/pdf-mode::%page-set p)))))))))
+
+;;; v0.39: smart n / p — walk search hits when a search is active,
+;;; otherwise fall back to next-page / prev-page.  This lets n/p serve
+;;; double duty: normal page navigation most of the time, and forward/
+;;; backward result navigation immediately after a / or ? search.
+;;; pdf-isearch-quit (C-g) clears *pdf-search-state*, restoring plain
+;;; page-navigation semantics.
+
+(limn/pdf-mode::%defcmd pdf-n nil
+  (lambda ()
+    (let ((s (limn/pdf-mode::%search-state)))
+      (if (and s (consp (limn/pdf-mode:pdf-search-state-hits s)))
+          ;; ── search active: advance to next hit ──────────────────────
+          (let* ((hits    (limn/pdf-mode:pdf-search-state-hits s))
+                 (old-idx (limn/pdf-mode:pdf-search-state-current-index s)))
+            (limn/pdf-mode:pdf-search-advance s)
+            (let ((new-idx (limn/pdf-mode:pdf-search-state-current-index s)))
+              (when (and (= old-idx (1- (length hits)))
+                         (= new-idx 0))
+                (limn/pdf-mode::%limn-call
+                 "message/echo" :|text| limn/pdf-mode:*pdf-wrapped-message*)))
+            (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s) hits))
+                   (p   (getf hit :|page|)))
+              (when (integerp p) (limn/pdf-mode::%page-set p)))
+            (limn/pdf-mode::%limn-call
+             "view/overlays" :|win-id| "w1"
+             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))
+          ;; ── no active search: next page ─────────────────────────────
+          (let* ((v  (limn/pdf-mode::%focused-view))
+                 (p  (or (getf v :|page|) 0))
+                 (pc (or (getf v :|page-count|) 1)))
+            (limn/pdf-mode::%page-set
+             (limn/pdf-mode::%clamp-page (1+ p) pc)))))))
+
+(limn/pdf-mode::%defcmd pdf-p nil
+  (lambda ()
+    (let ((s (limn/pdf-mode::%search-state)))
+      (if (and s (consp (limn/pdf-mode:pdf-search-state-hits s)))
+          ;; ── search active: retreat to previous hit ──────────────────
+          (progn
+            (limn/pdf-mode:pdf-search-retreat s)
+            (let* ((hits (limn/pdf-mode:pdf-search-state-hits s))
+                   (hit  (nth (limn/pdf-mode:pdf-search-state-current-index s)
+                               hits))
+                   (p    (getf hit :|page|)))
+              (when (integerp p) (limn/pdf-mode::%page-set p)))
+            (limn/pdf-mode::%limn-call
+             "view/overlays" :|win-id| "w1"
+             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))
+          ;; ── no active search: previous page ─────────────────────────
+          (let* ((v  (limn/pdf-mode::%focused-view))
+                 (p  (or (getf v :|page|) 0))
+                 (pc (or (getf v :|page-count|) 1)))
+            (limn/pdf-mode::%page-set
+             (limn/pdf-mode::%clamp-page (1- p) pc)))))))
 
 ;;; v0.37 Phase D: half-page scroll (vim C-d / C-u).  Uses offset-y
 ;;; deltas the same way pdf-scroll-down does, but with a larger step.
@@ -1330,6 +1417,64 @@
     (limn/pdf-mode::%limn-call "modeline/set" :|left| label)))
 
 ;;; ═════════════════════════════════════════════════════════════════════
+;;; §M mouse-driven text selection
+;;;
+;;; Left-button press  → remember anchor (handled via mouse-click hook).
+;;; Left-button move   → update selection via view/selection-set
+;;;                      (mouse-drag carries anchor + delta in page-norm).
+;;; M-w                → copy selected text to kill ring (existing binding).
+;;; C-g / next click   → clear selection (view/selection-clear).
+;;;
+;;; Coordinate convention: mouse-click / mouse-drag events from C++ carry
+;;; page-normalized x/y (0.0–1.0) — the same space view/selection-set
+;;; expects, so no coordinate conversion is needed here.
+;;; ═════════════════════════════════════════════════════════════════════
+
+(defun limn/pdf-mode::%on-mouse-click (ev)
+  "Hook handler for 'mouse-click' events.
+   Left click: clear any previous selection, store anchor for potential drag."
+  (let ((button (getf ev :|button|))
+        (page   (getf ev :|page|)))
+    (when (and (eql button 1) (integerp page) (>= page 0))
+      ;; Clear previous selection so a plain click always resets it.
+      (handler-case
+          (limn/pdf-mode::%limn-call
+           "view/selection-clear" :|win-id| "w1")
+        (error () nil)))))
+
+(defun limn/pdf-mode::%on-mouse-drag (ev)
+  "Hook handler for 'mouse-drag' events.
+   Left-button drag: extend the text selection from anchor to current pos."
+  (let ((button (getf ev :|button|))
+        (page   (getf ev :|page|))
+        (ax     (getf ev :|x|))
+        (ay     (getf ev :|y|))
+        (dx     (getf ev :|dx|))
+        (dy     (getf ev :|dy|)))
+    (when (and (eql button 1)
+               (integerp page) (>= page 0)
+               (numberp ax) (numberp ay)
+               (numberp dx) (numberp dy))
+      ;; Anchor (begin) is where drag started; current pos is anchor+delta.
+      (let ((end-x (+ ax dx))
+            (end-y (+ ay dy)))
+        ;; Ensure begin is always top-left in reading order.
+        (let* ((swap-p (or (> ay end-y)
+                           (and (= ay end-y) (> ax end-x))))
+               (bx (if swap-p end-x ax))
+               (by (if swap-p end-y ay))
+               (ex (if swap-p ax end-x))
+               (ey (if swap-p ay end-y)))
+          (handler-case
+              (limn/pdf-mode::%limn-call
+               "view/selection-set"
+               :|win-id| "w1"
+               :|begin| (list :|page| page :|x| bx :|y| by)
+               :|end|   (list :|page| page :|x| ex :|y| ey)
+               :|mode|  "char")
+            (error () nil)))))))
+
+;;; ═════════════════════════════════════════════════════════════════════
 ;;; §I lifecycle hooks
 ;;; ═════════════════════════════════════════════════════════════════════
 
@@ -1391,20 +1536,22 @@
            :buffer-id buffer-id :path path)
         (error () nil))
       (remhash buffer-id limn/pdf-mode::*buffer-id-to-path*)))
-  ;; Clear search state
-  (let ((s limn/pdf-mode:*pdf-search-state*))
-    (when (and s (or (null buffer-id)
-                     (equal buffer-id
-                            (limn/pdf-mode:pdf-search-state-buffer-id s))))
-      (setf limn/pdf-mode:*pdf-search-state* nil))))
+  ;; Clear search state for any window that was searching this buffer.
+  (maphash (lambda (win-id s)
+              (when (and s (or (null buffer-id)
+                               (equal buffer-id
+                                      (limn/pdf-mode:pdf-search-state-buffer-id s))))
+                (remhash win-id limn/pdf-mode::*pdf-search-states*)))
+            limn/pdf-mode::*pdf-search-states*))
 
 (defun limn/pdf-mode:pdf-mode-on-buffer-focused (&key buffer-id)
-  "Called when focus switches to BUFFER-ID. Reset stale per-buffer state."
-  (let ((s limn/pdf-mode:*pdf-search-state*))
-    (when (and s
-               (not (equal buffer-id
-                            (limn/pdf-mode:pdf-search-state-buffer-id s))))
-      (setf limn/pdf-mode:*pdf-search-state* nil))))
+  "Called when focus switches to BUFFER-ID. Reset stale per-buffer search."
+  (maphash (lambda (win-id s)
+              (when (and s
+                         (not (equal buffer-id
+                                     (limn/pdf-mode:pdf-search-state-buffer-id s))))
+                (remhash win-id limn/pdf-mode::*pdf-search-states*)))
+            limn/pdf-mode::*pdf-search-states*))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §T last-position
@@ -1471,9 +1618,13 @@
 (in-package #:limn/pdf-mode)
 
 (defun %wrap-cmd (sym)
-  "Wrap a defcommand symbol as keymap binding lambda (mirrors text-mode)."
+  "Wrap a defcommand symbol as keymap binding lambda (mirrors text-mode).
+   v0.39: also binds *current-win-id* from the event so all commands
+   that call %search-state / %set-search-state operate on the correct
+   per-window slot (multi-frame support)."
   (lambda (ev)
-    (let ((*last-key* (getf ev :|key|)))
+    (let ((*last-key*       (getf ev :|key|))
+          (*current-win-id* (or (getf ev :|win-id|) *current-win-id*)))
       (limn/cmd:call-interactively sym))))
 
 (defun %def (km spec sym)
@@ -1503,9 +1654,12 @@
       (%def km "<down>"   (intern "PDF-SCROLL-DOWN"  :cl-user))
       (%def km "<up>"     (intern "PDF-SCROLL-UP"    :cl-user))
       (%def km "<right>"  (intern "PDF-SCROLL-RIGHT" :cl-user))
-      ;; page-level navigation
-      (%def km "n"        (intern "PDF-NEXT-PAGE"   :cl-user))
-      (%def km "p"        (intern "PDF-PREV-PAGE"   :cl-user))
+      ;; page-level navigation.
+      ;; v0.39: n/p are smart — they walk search hits when a search is
+      ;; active (*pdf-search-state* non-nil) and fall back to page
+      ;; navigation otherwise.  J/K are always page-level.
+      (%def km "n"        (intern "PDF-N"           :cl-user))
+      (%def km "p"        (intern "PDF-P"           :cl-user))
       (%def km "J"        (intern "PDF-NEXT-PAGE"   :cl-user))
       (%def km "K"        (intern "PDF-PREV-PAGE"   :cl-user))
       ;; v0.38: b = prev-page (less convention).  NB: do NOT bind SPC —
@@ -1575,7 +1729,7 @@
                                 ("<down>"  pdf-scroll-down)
                                 ("<up>"    pdf-scroll-up)
                                 ("<right>" pdf-scroll-right)
-                                ("n" pdf-next-page) ("p" pdf-prev-page)
+                                ("n" pdf-n) ("p" pdf-p)   ; v0.39 smart dispatch
                                 ("b" pdf-prev-page)
                                 ("J" pdf-next-page) ("K" pdf-prev-page)
                                 ("G" pdf-goto-page) ("g g" pdf-first-page)
@@ -1640,7 +1794,15 @@
                      (handler-case
                          (pdf-mode-on-buffer-closed
                           :buffer-id (getf ev :|buffer-id|))
-                       (error () nil)))))))
+                       (error () nil))))
+          ;; v0.39: mouse-driven text selection.
+          ;; Left-click clears old selection; left-drag extends it.
+          (funcall (symbol-function add) "mouse-click"
+                   (lambda (ev)
+                     (handler-case (%on-mouse-click ev) (error () nil))))
+          (funcall (symbol-function add) "mouse-drag"
+                   (lambda (ev)
+                     (handler-case (%on-mouse-drag ev) (error () nil)))))))
 
     (setf *installed-p* t)
     sym-pm))
