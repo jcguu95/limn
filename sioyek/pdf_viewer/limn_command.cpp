@@ -1144,7 +1144,11 @@ void LimnCommand::cmd_modeline_set(const QString& id, const QJsonObject& msg) {
     if (msg.contains("left"))   win->modeline_left   = msg.value("left").toString();
     if (msg.contains("middle")) win->modeline_middle = msg.value("middle").toString();
     if (msg.contains("right"))  win->modeline_right  = msg.value("right").toString();
-    if (auto* c = chrome_of(main_widget)) {
+    auto* c = chrome_of(main_widget);
+    fprintf(stderr,
+            "[limn-modeline] cmd_modeline_set win=%s chrome=%p L=%s\n",
+            qPrintable(win_id), (void*)c, qPrintable(win->modeline_left));
+    if (c) {
         c->set_modeline(win->modeline_left, win->modeline_middle, win->modeline_right);
     }
     bridge->send_ok(id);
