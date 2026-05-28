@@ -46,6 +46,11 @@
    #:pdf-search-state-hits #:pdf-search-state-current-index
    #:pdf-search-execute #:pdf-search-overlay-payload
    #:pdf-search-advance #:pdf-search-retreat #:pdf-search-reset
+   ;; v0.39.11 A1+A4 additions
+   #:pdf-format-search-counter
+   #:pdf-search-filter-hits
+   #:pdf-search-narrow-by-substring
+   #:pdf-search-rank-fuzzy
    #:*pdf-last-search-query* #:*pdf-wrapped-message*
    ;; §C annotation
    #:make-pdf-annotation #:pdf-annotation-p
@@ -351,6 +356,103 @@
                          :|opacity| op)
                   acc)))
         (incf i))
+      (nreverse acc))))
+
+;;; --- v0.39.11 A1: match counter -----------------------------------
+
+(defun pdf-format-search-counter (&optional state)
+  "Return string \"N / T\" (1-indexed current / total hits) for STATE
+   or the current window's state when omitted.  NIL if no active search."
+  (let ((s (or state (%search-state))))
+    (when s
+      (let ((hits (pdf-search-state-hits s)))
+        (when (and (consp hits) (plusp (length hits)))
+          (format nil "~a / ~a"
+                  (1+ (pdf-search-state-current-index s))
+                  (length hits)))))))
+
+(defun %refresh-search-modeline ()
+  "Re-emit modeline/set with the current counter in :|right|.  Called
+   after every search-state mutation so the counter tracks the
+   user's position.  Sets :|right| to \"\" when no search is active
+   (clears stale counter)."
+  (let ((counter (pdf-format-search-counter)))
+    (handler-case
+        (%limn-call "modeline/set" :|right| (or counter ""))
+      (error () nil))))
+
+;;; --- v0.39.11 A4: narrow + fuzzy filters --------------------------
+
+(defun pdf-search-filter-hits (state pred)
+  "Walk STATE's hits.  For each rect inside each hit, call (PRED page
+   rect text).  Build a new hits list keeping only rects whose PRED
+   returned non-NIL (along with their parallel :|texts| entry).  Hits
+   that lose all rects are dropped.  Returns a NEW hits list — does
+   not mutate STATE.  Order-preserving."
+  (let ((kept-hits nil))
+    (dolist (hit (pdf-search-state-hits state))
+      (let* ((page  (getf hit :|page|))
+             (rects (getf hit :|rects|))
+             (texts (getf hit :|texts|))
+             (kept-r nil)
+             (kept-t nil)
+             (i 0))
+        (dolist (r rects)
+          (let ((tx (and (consp texts) (nth i texts))))
+            (when (funcall pred page r (or tx ""))
+              (push r  kept-r)
+              (push tx kept-t)))
+          (incf i))
+        (when kept-r
+          (push (list :|page|  page
+                      :|rects| (nreverse kept-r)
+                      :|texts| (nreverse kept-t))
+                kept-hits))))
+    (nreverse kept-hits)))
+
+(defun pdf-search-narrow-by-substring (state substring)
+  "Return new hits list keeping only rects whose :|texts| line contains
+   SUBSTRING (case-insensitive)."
+  (let ((needle (string-downcase substring)))
+    (pdf-search-filter-hits
+     state
+     (lambda (page rect text)
+       (declare (ignore page rect))
+       (and (stringp text)
+            (search needle (string-downcase text)))))))
+
+(defun pdf-search-rank-fuzzy (state query)
+  "Return new hits list: rects scored by limn/search::fuzzy-score
+   against QUERY; zero-score rects dropped.  Within each hit, rects
+   are reordered best-first; the hit list itself stays in document
+   order (we don't reorder pages, to keep next/prev intuitive)."
+  (let ((q (string-downcase query))
+        (scorer (find-symbol "FUZZY-SCORE" :limn/search)))
+    (unless (and scorer (fboundp scorer))
+      (return-from pdf-search-rank-fuzzy
+        (pdf-search-state-hits state)))
+    (let ((acc nil))
+      (dolist (hit (pdf-search-state-hits state))
+        (let* ((page  (getf hit :|page|))
+               (rects (getf hit :|rects|))
+               (texts (getf hit :|texts|))
+               (scored nil))
+          (loop for r in rects
+                for i from 0
+                for tx = (and (consp texts) (nth i texts))
+                for s = (and (stringp tx)
+                             (funcall (symbol-function scorer)
+                                      q (string-downcase tx)))
+                when (and (numberp s) (plusp s))
+                  do (push (cons s (cons r tx)) scored))
+          (when scored
+            (let* ((sorted (sort scored #'> :key #'car))
+                   (kept-r (mapcar (lambda (e) (cadr e)) sorted))
+                   (kept-t (mapcar (lambda (e) (cddr e)) sorted)))
+              (push (list :|page| page
+                          :|rects| kept-r
+                          :|texts| kept-t)
+                    acc)))))
       (nreverse acc))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
@@ -859,7 +961,8 @@
               (when (and hits (consp hits))
                 (let ((p (getf (first hits) :|page|)))
                   (when (integerp p)
-                    (limn/pdf-mode::%page-set p)))))))))))
+                    (limn/pdf-mode::%page-set p)))))
+            (limn/pdf-mode::%refresh-search-modeline)))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-next nil
   (lambda ()
@@ -883,7 +986,8 @@
               (when (integerp p) (limn/pdf-mode::%page-set p))))
           (limn/pdf-mode::%limn-call
            "view/overlays" :|win-id| "w1"
-           :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))))))
+           :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+          (limn/pdf-mode::%refresh-search-modeline))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-prev nil
   (lambda ()
@@ -898,7 +1002,8 @@
               (when (integerp p) (limn/pdf-mode::%page-set p)))))
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
-         :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))))))
+         :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+        (limn/pdf-mode::%refresh-search-modeline)))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-quit nil
   (lambda ()
@@ -934,7 +1039,8 @@
                (handler-case (limn/pdf-mode::%limn-call "minibuffer/close")
                  (error () nil)))))
         (t
-         (limn/pdf-mode:pdf-search-reset))))))
+         (limn/pdf-mode:pdf-search-reset)
+         (limn/pdf-mode::%refresh-search-modeline))))))
 
 ;;; v0.37 Phase D: search backward.  Same prompt as forward but the
 ;;; result-cursor starts at the last hit (vim ? semantic).  Reuses the
@@ -961,7 +1067,8 @@
              :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
             (let* ((p (getf (nth (1- (length hits)) hits) :|page|)))
               (when (integerp p)
-                (limn/pdf-mode::%page-set p)))))))))
+                (limn/pdf-mode::%page-set p)))
+            (limn/pdf-mode::%refresh-search-modeline)))))))
 
 ;;; v0.39: smart n / p — walk search hits when a search is active,
 ;;; otherwise fall back to next-page / prev-page.  This lets n/p serve
@@ -988,7 +1095,8 @@
               (when (integerp p) (limn/pdf-mode::%page-set p)))
             (limn/pdf-mode::%limn-call
              "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))
+             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+            (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: next page ─────────────────────────────
           (let* ((v  (limn/pdf-mode::%focused-view))
                  (p  (or (getf v :|page|) 0))
@@ -1010,13 +1118,86 @@
               (when (integerp p) (limn/pdf-mode::%page-set p)))
             (limn/pdf-mode::%limn-call
              "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))
+             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+            (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: previous page ─────────────────────────
           (let* ((v  (limn/pdf-mode::%focused-view))
                  (p  (or (getf v :|page|) 0))
                  (pc (or (getf v :|page-count|) 1)))
             (limn/pdf-mode::%page-set
              (limn/pdf-mode::%clamp-page (1- p) pc)))))))
+
+;;; --- v0.39.11 A4: pdf-isearch-narrow / pdf-isearch-fuzzy commands ---
+
+(limn/pdf-mode::%defcmd pdf-isearch-narrow nil
+  (lambda ()
+    (let* ((s (limn/pdf-mode::%search-state))
+           (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+           (read-fn (and reader (boundp reader) (symbol-value reader))))
+      (cond
+        ((not s)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                        :|text| "No active search to narrow")
+           (error () nil)))
+        ((not read-fn) nil)
+        (t
+         (let* ((needle (funcall read-fn "Narrow (substring): "))
+                (new-hits
+                  (and (stringp needle) (plusp (length needle))
+                       (limn/pdf-mode:pdf-search-narrow-by-substring s needle))))
+           (cond
+             ((null new-hits)
+              (limn/pdf-mode::%limn-call
+               "view/overlays" :|win-id| "w1" :|layers| '())
+              (handler-case
+                  (limn/pdf-mode::%limn-call "message/echo"
+                                             :|text| "No matches after filter")
+                (error () nil)))
+             (t
+              (setf (limn/pdf-mode:pdf-search-state-hits s) new-hits
+                    (limn/pdf-mode:pdf-search-state-current-index s) 0)
+              (limn/pdf-mode::%limn-call
+               "view/overlays" :|win-id| "w1"
+               :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+              (let ((p (getf (first new-hits) :|page|)))
+                (when (integerp p) (limn/pdf-mode::%page-set p)))))
+           (limn/pdf-mode::%refresh-search-modeline)))))))
+
+(limn/pdf-mode::%defcmd pdf-isearch-fuzzy nil
+  (lambda ()
+    (let* ((s (limn/pdf-mode::%search-state))
+           (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+           (read-fn (and reader (boundp reader) (symbol-value reader))))
+      (cond
+        ((not s)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                        :|text| "No active search to fuzzy-filter")
+           (error () nil)))
+        ((not read-fn) nil)
+        (t
+         (let* ((q (funcall read-fn "Fuzzy: "))
+                (new-hits
+                  (and (stringp q) (plusp (length q))
+                       (limn/pdf-mode:pdf-search-rank-fuzzy s q))))
+           (cond
+             ((null new-hits)
+              (limn/pdf-mode::%limn-call
+               "view/overlays" :|win-id| "w1" :|layers| '())
+              (handler-case
+                  (limn/pdf-mode::%limn-call "message/echo"
+                                             :|text| "No matches after filter")
+                (error () nil)))
+             (t
+              (setf (limn/pdf-mode:pdf-search-state-hits s) new-hits
+                    (limn/pdf-mode:pdf-search-state-current-index s) 0)
+              (limn/pdf-mode::%limn-call
+               "view/overlays" :|win-id| "w1"
+               :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+              (let ((p (getf (first new-hits) :|page|)))
+                (when (integerp p) (limn/pdf-mode::%page-set p)))))
+           (limn/pdf-mode::%refresh-search-modeline)))))))
 
 ;;; v0.37 Phase D: half-page scroll (vim C-d / C-u).  Uses offset-y
 ;;; deltas the same way pdf-scroll-down does, but with a larger step.
@@ -1795,6 +1976,9 @@
       ;; remaining after C-g).  pdf-isearch-quit is idempotent so binding
       ;; it here is safe even when no search is active.
       (%def km "C-g"      (intern "PDF-ISEARCH-QUIT" :cl-user))
+      ;; v0.39.11 A4: filter the current search hits.
+      (%def km "M-n"      (intern "PDF-ISEARCH-NARROW" :cl-user))
+      (%def km "M-f"      (intern "PDF-ISEARCH-FUZZY"  :cl-user))
       ;; annotation — H stays as annotate (M-h is left free for users
       ;; who want to bind highlight-selection somewhere out of hjkl's way).
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
@@ -1840,6 +2024,8 @@
                                 ("/" pdf-isearch-forward)
                                 ("?" pdf-isearch-backward)
                                 ("C-g" pdf-isearch-quit)
+                                ("M-n" pdf-isearch-narrow)
+                                ("M-f" pdf-isearch-fuzzy)
                                 ("H" pdf-annotate-selection)
                                 ("t" pdf-toc)
                                 ;; v0.37 Phase D additions
