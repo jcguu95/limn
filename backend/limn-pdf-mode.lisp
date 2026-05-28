@@ -289,35 +289,74 @@
 (defvar *pdf-wrapped-message* "Wrapped"
   "Text shown in echo area when search wraps.")
 
-(defun pdf-search-execute (buffer-id query &key case-sensitive)
-  "Send buffer/search wire call, store result in *pdf-search-state*,
-   return state object. Empty query stored but no wire call."
+(defun %flatten-page-hits (page-hits)
+  "Wire `buffer/search` groups hits by page: each entry is
+     (:|page| P :|rects| (rect ...) :|texts| (text ...))
+   But n/p must navigate ONE OCCURRENCE at a time, not one page at
+   a time — otherwise a page with three 'path' matches counts as
+   a single index and %select-current-hit ends up spanning rect[0]
+   to rect[N-1], swallowing everything between the first and last
+   match on that page.
+
+   This helper rewrites the wire payload into a flat per-occurrence
+   list: each output hit carries exactly one rect (in :|rects|, so
+   pdf-search-overlay-payload's existing dolist still works) and the
+   single text excerpt for that occurrence."
+  (loop for hit in page-hits
+        for page  = (getf hit :|page|)
+        for rects = (getf hit :|rects|)
+        for texts = (getf hit :|texts|)
+        nconc (loop for r in rects
+                    for i from 0
+                    for tx = (and (consp texts) (nth i texts))
+                    collect (list :|page|  page
+                                  :|rects| (list r)
+                                  :|texts| (and tx (list tx))
+                                  :|text|  (or tx "")))))
+
+(defun %do-search-wire (buffer-id query &key case-sensitive)
+  "Wire-only helper: do the buffer/search round-trip and install a
+   new pdf-search-state with flattened hits.  Does NOT touch
+   *pdf-filter-depth* or *pdf-search-overlay-history* — the caller
+   decides whether this is a fresh / (clear both) or an M-n re-search
+   (preserve history, bump depth).  Returns the new state or NIL."
   (when (and query (> (length query) 0))
-    (setf *pdf-last-search-query* query)
-    (setf *pdf-filter-depth* 0)             ; fresh search resets filter colors
     (let* ((r (%limn-call "buffer/search"
                            :|buffer-id| buffer-id
                            :|query| query
                            :|case-sensitive| (if case-sensitive t :false)))
            (d (%response-data r))
-           (hits (and d (getf d :|hits|))))
+           (raw-hits (and d (getf d :|hits|)))
+           (flat-hits (%flatten-page-hits (or raw-hits '()))))
       (%set-search-state
        (make-pdf-search-state :buffer-id buffer-id
                                :query query
-                               :hits (or hits '())
+                               :hits flat-hits
                                :current-index 0))
+      (%search-state))))
+
+(defun pdf-search-execute (buffer-id query &key case-sensitive)
+  "Fresh / search: wire round-trip + reset filter depth + clear
+   overlay history.  M-n uses %do-search-wire directly so it can
+   preserve history."
+  (when (and query (> (length query) 0))
+    (setf *pdf-last-search-query* query)
+    (setf *pdf-filter-depth* 0)             ; fresh search resets filter colors
+    (%set-overlay-history nil)               ; fresh search clears prior colors
+    (let ((state (%do-search-wire buffer-id query :case-sensitive case-sensitive)))
       ;; v0.25 search-history integration (§T)
       (let ((add (find-symbol "ADD-TO-HISTORY" :limn/history)))
         (when (and add (fboundp add))
           (handler-case
               (funcall (symbol-function add) '*search-history* query)
             (error () nil))))
-      (%search-state))))
+      state)))
 
 (defun pdf-search-reset ()
   "Clear search state for the current window and remove overlays."
   (%set-search-state nil)
   (setf *pdf-filter-depth* 0)
+  (%set-overlay-history nil)
   (%limn-call "view/overlays" :|win-id| *current-win-id* :|layers| '()))
 
 (defun pdf-search-advance (state)
@@ -343,19 +382,19 @@
   "Generate overlays plist list.  Multi-rect hits each get their own
    overlay entry.
 
-   At filter-depth 0 (the original / search): current hit alpha 0.6,
-   others 0.25 (the default sioyek yellow look).
-   At filter-depth > 0 (after M-n / M-f): alphas drop to 0.40 /
-   0.18 so the cyan / magenta / etc. don't compete visually with
-   the underlying glyph — user reported the v0.39.11 default was
-   'too similar to a real highlight'."
+   v0.39.14 user feedback: full-strength 0.60 yellow looked like a
+   real annotation highlight and competed visually with the page
+   text.  Dropped current/other alphas across both depths.
+
+     depth 0 (/ search):   current 0.42, other 0.18
+     depth>0 (M-n / M-f):  current 0.34, other 0.15"
   (let* ((effective-color
            (or color
                (if (zerop *pdf-filter-depth*)
                    "#FFD700"
                    (%pdf-filter-color (1- *pdf-filter-depth*)))))
-         (alpha-current (if (zerop *pdf-filter-depth*) 0.60 0.40))
-         (alpha-other   (if (zerop *pdf-filter-depth*) 0.25 0.18)))
+         (alpha-current (if (zerop *pdf-filter-depth*) 0.42 0.34))
+         (alpha-other   (if (zerop *pdf-filter-depth*) 0.18 0.15)))
     (when (and state (pdf-search-state-hits state))
       (let ((current-idx (pdf-search-state-current-index state))
             (acc nil)
@@ -373,6 +412,48 @@
                   acc)))
         (incf i))
       (nreverse acc)))))
+
+;; v0.39.14 cumulative narrow — keep prior search colors visible.
+;;
+;; User wanted: `/ path` shows yellow; then `M-n init` ADDS cyan on
+;; top, with the yellow still there.  Previously M-n's view/overlays
+;; call replaced the whole layer list and the yellow disappeared.
+;;
+;; *pdf-search-overlay-history* is a per-window list of FROZEN layer-
+;; lists from prior search/narrow steps.  pdf-search-reset and a
+;; fresh `/` search clear it.  Each M-n appends the CURRENT payload
+;; (computed BEFORE the new search) into history, then runs the new
+;; search; the next view/overlays sends (history-flat ++ new-layers)
+;; so all colors stack visually.  n/p still navigates only the latest
+;; search's hits — which matches "the colored prior ones are
+;; reference, the current one is what I'm scrolling through".
+(defvar *pdf-search-overlay-history* (make-hash-table :test #'equal)
+  "win-id → list of frozen overlay layer-lists (each entry is itself
+   a plist-of-rects, i.e. the output of pdf-search-overlay-payload
+   at the moment that search was done).")
+
+(defun %overlay-history () (gethash *current-win-id* *pdf-search-overlay-history*))
+(defun %set-overlay-history (v)
+  (if v (setf (gethash *current-win-id* *pdf-search-overlay-history*) v)
+        (remhash *current-win-id* *pdf-search-overlay-history*))
+  v)
+
+(defun %composite-overlay-layers (state-payload)
+  "Concatenate (oldest→newest history) ++ state-payload.  Returns
+   the full :|layers| list to ship via view/overlays."
+  (let ((history (%overlay-history)))
+    (apply #'append
+           (append (reverse history)            ; oldest first for stacking
+                   (list (or state-payload '()))))))
+
+(defun %emit-search-overlays (state &optional color)
+  "Send composite (history + current) view/overlays for STATE.
+   Centralised so every search nav command treats the cumulative
+   layers uniformly."
+  (%limn-call "view/overlays"
+              :|win-id| *current-win-id*
+              :|layers| (%composite-overlay-layers
+                          (pdf-search-overlay-payload state color))))
 
 ;; v0.39.11 A4 follow-up: track filter depth so successive M-n / M-f
 ;; rotate colors (mild rainbow).  Reset whenever a fresh / search runs.
@@ -1048,9 +1129,7 @@
                 (let* ((hit (nth start-idx hits))
                        (p   (getf hit :|page|)))
                   (when (integerp p) (limn/pdf-mode::%page-set p)))))
-            (limn/pdf-mode::%limn-call
-             "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
+            (limn/pdf-mode::%emit-search-overlays state)
             (limn/pdf-mode::%select-current-hit state)
             (limn/pdf-mode::%refresh-search-modeline)))))))
 
@@ -1074,9 +1153,7 @@
                               hits))
                    (p (getf hit :|page|)))
               (when (integerp p) (limn/pdf-mode::%page-set p))))
-          (limn/pdf-mode::%limn-call
-           "view/overlays" :|win-id| "w1"
-           :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+          (limn/pdf-mode::%emit-search-overlays s)
           (limn/pdf-mode::%select-current-hit s)
           (limn/pdf-mode::%refresh-search-modeline))))))
 
@@ -1091,9 +1168,7 @@
                               hits))
                    (p (getf hit :|page|)))
               (when (integerp p) (limn/pdf-mode::%page-set p)))))
-        (limn/pdf-mode::%limn-call
-         "view/overlays" :|win-id| "w1"
-         :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+        (limn/pdf-mode::%emit-search-overlays s)
         (limn/pdf-mode::%select-current-hit s)
         (limn/pdf-mode::%refresh-search-modeline)))))
 
@@ -1154,9 +1229,7 @@
             ;; so the user lands on the latest match (vim ? semantic).
             (setf (limn/pdf-mode:pdf-search-state-current-index state)
                   (1- (length hits)))
-            (limn/pdf-mode::%limn-call
-             "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
+            (limn/pdf-mode::%emit-search-overlays state)
             (let* ((p (getf (nth (1- (length hits)) hits) :|page|)))
               (when (integerp p)
                 (limn/pdf-mode::%page-set p)))
@@ -1186,9 +1259,7 @@
             (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s) hits))
                    (p   (getf hit :|page|)))
               (when (integerp p) (limn/pdf-mode::%page-set p)))
-            (limn/pdf-mode::%limn-call
-             "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+            (limn/pdf-mode::%emit-search-overlays s)
             (limn/pdf-mode::%select-current-hit s)
             (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: next page ─────────────────────────────
@@ -1210,9 +1281,7 @@
                                hits))
                    (p    (getf hit :|page|)))
               (when (integerp p) (limn/pdf-mode::%page-set p)))
-            (limn/pdf-mode::%limn-call
-             "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+            (limn/pdf-mode::%emit-search-overlays s)
             (limn/pdf-mode::%select-current-hit s)
             (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: previous page ─────────────────────────
@@ -1248,22 +1317,32 @@
                 (buf (limn/pdf-mode::%focused-buffer-id))
                 (v   (limn/pdf-mode::%focused-view))
                 (cur-page (or (getf v :|page|) 0))
+                ;; Snapshot CURRENT color's payload + the existing
+                ;; history BEFORE we mutate state.  The post-search
+                ;; restore prepends the snapshot to the prior history
+                ;; so successive M-n keep stacking colors.
+                (prior-payload
+                  (limn/pdf-mode:pdf-search-overlay-payload s))
+                (prior-history (limn/pdf-mode::%overlay-history))
                 (next-depth (1+ limn/pdf-mode::*pdf-filter-depth*)))
            (cond
              ((or (not (stringp needle)) (zerop (length needle))) nil)
              (t
-              ;; Issue a fresh buffer/search.  pdf-search-execute resets
-              ;; *pdf-filter-depth* to 0, so we restore the bumped depth
-              ;; AFTER the call so colors keep cycling.
               (let ((new-state
-                      (limn/pdf-mode:pdf-search-execute buf needle)))
+                      (limn/pdf-mode::%do-search-wire buf needle)))
+                ;; Restore history with the prior color prepended so it
+                ;; renders too; bump depth so the new color picks up
+                ;; from the cycle.
+                (limn/pdf-mode::%set-overlay-history
+                 (cons prior-payload prior-history))
                 (setf limn/pdf-mode::*pdf-filter-depth* next-depth)
                 (cond
                   ((or (not new-state)
                        (not (consp (limn/pdf-mode:pdf-search-state-hits
                                     new-state))))
-                   (limn/pdf-mode::%limn-call
-                    "view/overlays" :|win-id| "w1" :|layers| '())
+                   ;; No new matches → still emit the (history-only)
+                   ;; layer stack so prior colors remain visible.
+                   (limn/pdf-mode::%emit-search-overlays nil)
                    (handler-case
                        (limn/pdf-mode::%limn-call
                         "message/echo"
@@ -1288,10 +1367,7 @@
                             (p   (getf hit :|page|)))
                        (when (integerp p)
                          (limn/pdf-mode::%page-set p))))
-                   (limn/pdf-mode::%limn-call
-                    "view/overlays" :|win-id| "w1"
-                    :|layers| (limn/pdf-mode:pdf-search-overlay-payload
-                               new-state))
+                   (limn/pdf-mode::%emit-search-overlays new-state)
                    (limn/pdf-mode::%select-current-hit new-state))))
               (limn/pdf-mode::%refresh-search-modeline)))))))))
 
@@ -1314,20 +1390,24 @@
                        (limn/pdf-mode:pdf-search-rank-fuzzy s q))))
            (cond
              ((null new-hits)
-              (limn/pdf-mode::%limn-call
-               "view/overlays" :|win-id| "w1" :|layers| '())
+              ;; Filter dropped everything — preserve prior color stack
+              ;; (so original / yellow stays visible), don't add new color.
+              (limn/pdf-mode::%emit-search-overlays nil)
               (handler-case
                   (limn/pdf-mode::%limn-call "message/echo"
                                              :|text| "No matches after filter")
                 (error () nil)))
              (t
+              ;; Push the prior color's payload onto history so it stays
+              ;; visible underneath the new (fuzzy-ranked) cyan/etc.
+              (let ((prior-payload
+                      (limn/pdf-mode:pdf-search-overlay-payload s)))
+                (limn/pdf-mode::%set-overlay-history
+                 (cons prior-payload (limn/pdf-mode::%overlay-history))))
               (incf limn/pdf-mode::*pdf-filter-depth*)
               (setf (limn/pdf-mode:pdf-search-state-hits s) new-hits
                     (limn/pdf-mode:pdf-search-state-current-index s) 0)
-              (limn/pdf-mode::%limn-call
-               "view/overlays" :|win-id| "w1"
-               :|layers| (limn/pdf-mode:pdf-search-overlay-payload
-                          s (limn/pdf-mode::%pdf-filter-color)))
+              (limn/pdf-mode::%emit-search-overlays s)
               (let ((p (getf (first new-hits) :|page|)))
                 (when (integerp p) (limn/pdf-mode::%page-set p)))
               (limn/pdf-mode::%select-current-hit s)))
