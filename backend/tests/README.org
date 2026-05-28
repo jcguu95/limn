@@ -1,69 +1,67 @@
-* Limn Test Suite
+* Limn 測試套件
 
-A complete test suite for the Limn spec, written in Common Lisp.
+完整覆蓋 Limn spec 的測試集，全部用 Common Lisp 寫成。
 
-Tests are split into two categories:
+測試分兩類：
 
-** Integration tests (=suites/=)
+** 整合測試（=suites/=）
 
-These tests connect to a running Limn process via Unix socket and
-exercise the bridge protocol. They require Limn to be running with
-=--headless --socket /tmp/limn-test=.
+這類測試會透過 Unix socket 接到一個正在跑的 Limn process，演練 bridge
+protocol。執行前 Limn 必須先以 =--headless --socket /tmp/limn-test= 起來。
 
-| Suite              | Covers                                              |
-|--------------------+-----------------------------------------------------|
-| =smoke.lisp=       | Basic sanity: can connect, fixture exists           |
-| =protocol.lisp=    | Wire protocol: ids, response shape, errors          |
-| =bridge.lisp=      | =bridge/= namespace: windows, frames, engine-load   |
-| =view.lisp=        | =view/set= and =view/get= (universal viewport ops)  |
-| =overlays.lisp=    | =view/overlays= (rect/line/text drawing primitives) |
-| =buffer.lisp=      | =buffer/= namespace: content extraction & rendering |
-| =events.lisp=      | Frontend → Backend pushed events                    |
-| =engine-spec.lisp= | Engine Interface Spec compliance                    |
-| =mupdf-engine.lisp=| mupdf-specific behaviors (dark-mode, rotation, PDF) |
-| =integration.lisp= | Multi-step flows (search+highlight, portal, undo)   |
-| =stress.lisp=      | Many requests, large payloads, malformed input      |
+| Suite              | 涵蓋範圍                                                |
+|--------------------+---------------------------------------------------------|
+| =smoke.lisp=       | 基本健全性：可連線、fixture 存在                        |
+| =protocol.lisp=    | Wire 協議：id、response 結構、錯誤處理                  |
+| =bridge.lisp=      | =bridge/= namespace：windows、frames、engine-load       |
+| =view.lisp=        | =view/set= 和 =view/get=（通用 viewport 操作）          |
+| =overlays.lisp=    | =view/overlays=（rect/line/text 繪製基本元件）          |
+| =buffer.lisp=      | =buffer/= namespace：內容抽取與渲染                     |
+| =events.lisp=      | Frontend → Backend 推送事件                             |
+| =engine-spec.lisp= | Engine Interface Spec 合規性                            |
+| =mupdf-engine.lisp=| mupdf 專屬行為（dark-mode、rotation、PDF）              |
+| =integration.lisp= | 多步驟流程（search+highlight、portal、undo）            |
+| =stress.lisp=      | 大量請求、超大 payload、畸形輸入                        |
 
-** Unit tests (=unit/=)
+** 單元測試（=unit/=）
 
-Pure Lisp tests that do NOT need a running Limn. They test the backend
-modules in =backend/=, specifying their API contract.
+純 Lisp 測試，不需要 Limn 在跑。專門測 =backend/= 內各模組的 API 契約。
 
-| Suite                    | Covers                                       |
-|--------------------------+----------------------------------------------|
-| =bridge-client.lisp=     | =limn/bridge= — JSON encode/decode, requests |
-| =keymap.lisp=            | =limn/keys= — Emacs-like keymap              |
-| =undo.lisp=              | =limn/undo= — undo tree with branches        |
-| =hooks.lisp=             | =limn/hooks= — event hook registry           |
-| =buffer-registry.lisp=   | =limn/buffer= — Lisp-side buffer tracking    |
-| =search.lisp=            | =limn/search= — search logic (uses fake data)|
+| Suite                    | 涵蓋範圍                                        |
+|--------------------------+-------------------------------------------------|
+| =bridge-client.lisp=     | =limn/bridge= — JSON encode/decode、request 處理 |
+| =keymap.lisp=            | =limn/keys= — Emacs 風格的 keymap               |
+| =undo.lisp=              | =limn/undo= — 含分支的 undo tree                |
+| =hooks.lisp=             | =limn/hooks= — 事件 hook registry               |
+| =buffer-registry.lisp=   | =limn/buffer= — Lisp 端的 buffer 追蹤           |
+| =search.lisp=            | =limn/search= — 搜尋邏輯（用 fake 資料測試）    |
 
-** Running
+** 執行方式
 
-Integration tests (needs running Limn):
+整合測試（需要 Limn 在跑）：
 
 #+begin_src bash
 ./backend/tests/run-tests.sh
 #+end_src
 
-Unit tests (pure Lisp):
+單元測試（純 Lisp）：
 
 #+begin_src bash
 sbcl --script backend/tests/unit/run-unit.lisp
 #+end_src
 
-** Environment variables
+** 環境變數
 
-| =LIMN_SOCKET=  | Socket path (default =/tmp/limn-test=)              |
-| =LIMN_FIXTURE= | PDF fixture (default =backend/tests/fixtures/test.pdf=) |
-| =LIMN_VERBOSE= | If set, log every wire message                      |
+| =LIMN_SOCKET=  | Socket 路徑（預設 =/tmp/limn-test=）                |
+| =LIMN_FIXTURE= | PDF fixture（預設 =backend/tests/fixtures/test.pdf=）|
+| =LIMN_VERBOSE= | 有設就會把每個 wire 訊息全部 log 出來               |
 
 ** Fixtures
 
-Place a test PDF at =backend/tests/fixtures/test.pdf=. See the README in
-that directory for options.
+把測試用 PDF 放到 =backend/tests/fixtures/test.pdf=。詳細選項看該目錄
+下的 README。
 
-** Current status
+** 目前狀態
 
-271 tests total (192 integration + 79 unit). All will fail until the
-matching implementation lands — by design (TDD).
+總共 271 個測試（192 整合 + 79 單元）。實作沒落地之前所有測試都會
+fail —— 這是 TDD 設計刻意的結果。
