@@ -374,6 +374,19 @@
           (funcall *now-fn*)
           (incf *uuid-counter*)))
 
+;; --- v0.39.11 in-memory cache (D2) -----------------------------------
+;; Eliminates re-read-sidecar-per-mouse-event hot path. Cache entries are
+;; plain plists keyed by PATH (string=):
+;;   (:|loaded-at| TS
+;;    :|by-page|   hash-table[page → list-of-annotation]
+;;    :|all|       list-of-annotation)
+;; Built lazily by %annotations-cache-build, populated eagerly by
+;; pdf-mode-on-buffer-opened, invalidated by pdf-annotations-save.
+;; pdf-annotation-at remains pure (works on caller-supplied lists) so
+;; existing tests that don't go through a path still pass.
+(defvar *pdf-annotations-cache* (make-hash-table :test #'equal)
+  "path-string → cache-entry plist. See module comment above.")
+
 (defstruct (pdf-annotation
             (:constructor %raw-make-pdf-annotation))
   (id        nil)
@@ -541,9 +554,13 @@
 
 (defun pdf-annotations-save (path anns)
   "Write ANNS list to sidecar for PATH. Returns t on success, nil on
-   silent-skip; signals error / emits message on hard fail (no silent ok)."
+   silent-skip; signals error / emits message on hard fail (no silent ok).
+   Always invalidates the in-memory cache for PATH (next read rebuilds)."
   (let ((spath (%effective-sidecar-path path))
         (data (pdf-annotations-serialize anns)))
+    ;; Invalidate first so a subsequent read can't observe stale state
+    ;; even if the write below errors (we'd rather rebuild than serve stale).
+    (%annotations-cache-invalidate path)
     (handler-case
         (progn (funcall *annotations-write-fn* spath data) t)
       (error (e)
@@ -567,6 +584,76 @@
         (or (pdf-annotations-deserialize data) '()))
     (error () '())))
 
+;; --- v0.39.11 cache helpers + query surface (D2) ---------------------
+
+(defun %path-key (path)
+  "Normalise PATH to a string suitable for keying *pdf-annotations-cache*."
+  (cond ((null path) nil)
+        ((stringp path) path)
+        ((pathnamep path) (namestring path))
+        (t (princ-to-string path))))
+
+(defun %annotations-cache-build (path)
+  "Load sidecar for PATH, build by-page index, store in cache. Returns
+   the cache-entry plist. Safe to call repeatedly — rebuilds each call."
+  (let* ((key (%path-key path))
+         (all (pdf-annotations-load path))
+         (by-page (make-hash-table :test #'eql)))
+    (dolist (a all)
+      (let ((p (pdf-annotation-page a)))
+        (push a (gethash p by-page))))
+    ;; Preserve insertion order within each page bucket (we pushed, so reverse).
+    (maphash (lambda (k v) (setf (gethash k by-page) (nreverse v))) by-page)
+    (let ((entry (list :|loaded-at| (funcall *now-fn*)
+                       :|by-page|   by-page
+                       :|all|       all)))
+      (when key (setf (gethash key *pdf-annotations-cache*) entry))
+      entry)))
+
+(defun %annotations-cache-get (path)
+  "Return the cache entry for PATH, building on miss."
+  (let ((key (%path-key path)))
+    (or (and key (gethash key *pdf-annotations-cache*))
+        (%annotations-cache-build path))))
+
+(defun %annotations-cache-invalidate (path)
+  "Drop the cache entry for PATH. Called from pdf-annotations-save."
+  (let ((key (%path-key path)))
+    (when key (remhash key *pdf-annotations-cache*))))
+
+(defun pdf-annotations-on-page (path page)
+  "O(1) lookup: all annotations on PAGE for PATH. Builds cache on miss."
+  (let* ((entry (%annotations-cache-get path))
+         (by-page (getf entry :|by-page|)))
+    (or (and by-page (gethash page by-page)) '())))
+
+(defun pdf-annotations-pages-with-notes (path)
+  "Sorted list of pages on PATH that have at least one annotation whose
+   :type is :note or :both. Consumed by the icon-marker agent (D4)."
+  (let* ((entry (%annotations-cache-get path))
+         (by-page (getf entry :|by-page|))
+         (pages '()))
+    (when by-page
+      (maphash (lambda (p anns)
+                 (when (some (lambda (a)
+                               (let ((tp (pdf-annotation-type a)))
+                                 (or (eq tp :note) (eq tp :both))))
+                             anns)
+                   (push p pages)))
+               by-page))
+    (sort pages #'<)))
+
+(defun pdf-annotations-with-tag (path tag)
+  "Linear scan over all annotations for PATH; return those whose :tags
+   contain TAG (string=). Consumed by annotation-UX agent (D5)."
+  (let* ((entry (%annotations-cache-get path))
+         (all   (getf entry :|all|)))
+    (remove-if-not
+     (lambda (a)
+       (and (pdf-annotation-tags a)
+            (find tag (pdf-annotation-tags a) :test #'string=)))
+     all)))
+
 (defun pdf-annotations-overlay-payload (anns)
   "Convert annotation list to view/overlays payload."
   (mapcar (lambda (a)
@@ -579,8 +666,9 @@
           anns))
 
 (defun pdf-annotations-for-buffer (path)
-  "Convenience: load + overlay-payload."
-  (pdf-annotations-overlay-payload (pdf-annotations-load path)))
+  "Convenience: overlay-payload, via cache (builds on miss)."
+  (let ((entry (%annotations-cache-get path)))
+    (pdf-annotations-overlay-payload (getf entry :|all|))))
 
 (defun pdf-annotation-at (anns page x y)
   "First annotation in ANNS whose rect contains (page, x, y), or NIL."
@@ -593,8 +681,10 @@
            anns))
 
 (defun pdf-annotations-at-point (path page x y)
-  "Look up + return the annotation at (page, x, y) on PATH's sidecar."
-  (pdf-annotation-at (pdf-annotations-load path) page x y))
+  "Look up + return the annotation at (page, x, y) on PATH's sidecar.
+   Goes through the page index (cache) to skip annotations on other
+   pages — significant speedup for sidecars with many pages."
+  (pdf-annotation-at (pdf-annotations-on-page path page) page x y))
 
 (defun pdf-annotations-delete-at-point (path page x y)
   "Delete the annotation at (page, x, y) from PATH's sidecar (no-op if none)."
@@ -1548,8 +1638,10 @@
     ;; Track buffer-id → path so buffer-closed can save last-position
     (when buffer-id
       (setf (gethash buffer-id limn/pdf-mode::*buffer-id-to-path*) path))
-    ;; Load + paint annotations
-    (let ((anns (limn/pdf-mode:pdf-annotations-load path)))
+    ;; Load + paint annotations.  v0.39.11 D2: populate cache eagerly so
+    ;; the first mouse-click hot path is a hash lookup, not a re-read.
+    (let* ((entry (limn/pdf-mode::%annotations-cache-build path))
+           (anns  (getf entry :|all|)))
       (when anns
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
