@@ -1448,6 +1448,54 @@ QString extract_selection_text(DocumentView* dv, Document* doc,
     dv->get_text_selection(bp, ep, is_word, rects, text);
     return QString::fromStdWString(text);
 }
+
+// v0.39.12: same as extract_selection_text, but also writes the
+// per-character/per-line rects in page-norm coords into OUT_RECTS
+// (each entry is QJsonArray[4] = [x0,y0,x1,y1]).  Used by the Lisp
+// annotation flow so saved highlights match the visible glyph
+// extents (the begin/end bounding-box approach produced a thin
+// strip on large-font titles).
+QString extract_selection_text_and_rects(DocumentView* dv, Document* doc,
+                                          const QJsonObject& begin,
+                                          const QJsonObject& end,
+                                          const QString& mode,
+                                          QJsonArray* out_rects) {
+    if (out_rects) *out_rects = QJsonArray();
+    if (!dv || !doc) return QString();
+    AbsoluteDocumentPos bp, ep;
+    if (!page_norm_to_absolute(doc, begin.value("page").toInt(),
+                                begin.value("x").toDouble(),
+                                begin.value("y").toDouble(), &bp)) return QString();
+    if (!page_norm_to_absolute(doc, end.value("page").toInt(),
+                                end.value("x").toDouble(),
+                                end.value("y").toDouble(), &ep)) return QString();
+    std::deque<AbsoluteRect> rects;
+    std::wstring text;
+    const bool is_word = (mode == "word");
+    dv->get_text_selection(bp, ep, is_word, rects, text);
+    if (out_rects) {
+        for (const auto& ar : rects) {
+            DocumentRect dr = ar.to_document(doc);
+            if (dr.page < 0) continue;
+            const float pw = doc->get_page_width(dr.page);
+            const float ph = doc->get_page_height(dr.page);
+            if (pw <= 0 || ph <= 0) continue;
+            QJsonArray r;
+            r.append(static_cast<double>(dr.rect.x0) / pw);
+            r.append(static_cast<double>(dr.rect.y0) / ph);
+            r.append(static_cast<double>(dr.rect.x1) / pw);
+            r.append(static_cast<double>(dr.rect.y1) / ph);
+            // Per-rect page is implicit on most callers (selection is
+            // single-page in the current Lisp flow), but stamp it on
+            // each entry as a 5th field so multi-page callers later
+            // don't have to guess.  Plain Lisp readers that read
+            // 4-tuples will just ignore the trailing element.
+            r.append(dr.page);
+            out_rects->append(r);
+        }
+    }
+    return QString::fromStdWString(text);
+}
 }
 
 void LimnCommand::cmd_view_selection_set(const QString& id, const QJsonObject& msg) {
@@ -1472,17 +1520,21 @@ void LimnCommand::cmd_view_selection_set(const QString& id, const QJsonObject& m
     // document). For non-focused windows we fall back to synth text,
     // which is still deterministic + distinguishable across coords.
     QString real_text;
+    QJsonArray real_rects;
     if (windows->focused_id() == win_id) {
         DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
         Document* doc    = dv ? dv->get_document() : nullptr;
-        real_text = extract_selection_text(dv, doc,
-                                            win->selection_begin,
-                                            win->selection_end,
-                                            win->selection_mode);
+        real_text = extract_selection_text_and_rects(
+            dv, doc,
+            win->selection_begin,
+            win->selection_end,
+            win->selection_mode,
+            &real_rects);
     }
     win->selection_text = real_text.isEmpty()
         ? synth_sel_text(win->selection_begin, win->selection_end)
         : real_text;
+    win->selection_rects = real_rects;
 
     // If this window is focused, the visible raster needs to redraw
     // (so the selection rect appears immediately for pixel sampling).
@@ -1517,6 +1569,9 @@ void LimnCommand::cmd_view_selection_get(const QString& id, const QJsonObject& m
         data.insert("end",   win->selection_end);
         data.insert("mode",  win->selection_mode);
         data.insert("text",  win->selection_text);
+        // v0.39.12: real per-character rects in page-norm so Lisp
+        // annotation save can persist proper glyph extents.
+        data.insert("rects", win->selection_rects);
     }
     bridge->send_ok(id, data);
 }
@@ -1532,6 +1587,7 @@ void LimnCommand::cmd_view_selection_clear(const QString& id, const QJsonObject&
     win->selection_begin  = QJsonObject();
     win->selection_end    = QJsonObject();
     win->selection_text   = QString();
+    win->selection_rects  = QJsonArray();
     if (windows->focused_id() == win_id) {
         int rw = 1200, rh = 900;
         if (auto* gl = main_widget->opengl_widget()) {

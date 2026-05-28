@@ -1143,15 +1143,20 @@
     (and bid (gethash bid limn/pdf-mode::*buffer-id-to-path*))))
 
 (defun limn/pdf-mode::%selection ()
-  "Get the current selection as a (:|page| P :|rects| ((x1 y1 x2 y2)))
-   plist.  v0.37 Phase F: the bridge's view/selection-get returns the
-   selection as :|active| / :|begin|{:|page|,:|x|,:|y|} / :|end|{...} /
-   :|mode| / :|text| — there is no :|rects| field on the wire (and
-   never has been since the wire schema settled in v0.15).  This
-   helper synthesizes a single-rect bounding box from begin/end so
-   downstream callers (%add-annotation) keep the old :|page|/:|rects|
-   contract.  Returns NIL when no selection is active or coords are
-   missing — %add-annotation treats that as a no-op."
+  "Get the current selection as a (:|page| P :|rects| ((x0 y0 x1 y1)...))
+   plist.
+
+   v0.39.12 update: view/selection-get now returns a :|rects| array
+   carrying the real per-character / per-line rects from sioyek's
+   get_text_selection (page-norm coords, each entry [x0 y0 x1 y1 page]).
+   We prefer these — they match the visible glyph extents, so
+   annotations saved on large-font titles are no longer thin strips.
+
+   Fallback path (when wire didn't include :|rects|, or none survived
+   the page filter — happens on image-only selections / older binaries):
+   synthesise a single bounding box from begin/end points so the
+   downstream contract still holds.  Returns NIL when no selection is
+   active or coords are missing."
   (let* ((r (limn/pdf-mode::%limn-call "view/selection-get" :|win-id| "w1"))
          (d (limn/pdf-mode::%response-data r)))
     (when (and d (getf d :|active|))
@@ -1160,12 +1165,29 @@
              (page (or (and b (getf b :|page|))
                        (and e (getf e :|page|))
                        0))
-             (bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
-             (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
-        (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
-          (list :|page| page
-                :|rects| (list (list (min bx ex) (min by ey)
-                                     (max bx ex) (max by ey)))))))))
+             (wire-rects (getf d :|rects|))
+             (page-rects
+               (and (consp wire-rects)
+                    (loop for r in wire-rects
+                          when (and (consp r) (>= (length r) 4))
+                            collect (let ((rp (if (>= (length r) 5)
+                                                   (nth 4 r)
+                                                   page)))
+                                       (when (or (null rp) (eql rp page))
+                                         (list (nth 0 r) (nth 1 r)
+                                               (nth 2 r) (nth 3 r))))
+                          into acc
+                          finally (return (remove nil acc))))))
+        (cond
+          (page-rects
+           (list :|page| page :|rects| page-rects))
+          (t
+           (let ((bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
+                 (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
+             (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
+               (list :|page| page
+                     :|rects| (list (list (min bx ex) (min by ey)
+                                          (max bx ex) (max by ey))))))))))))
 
 (defun limn/pdf-mode::%add-annotation (note)
   "Build + persist + paint an annotation from the current selection."
