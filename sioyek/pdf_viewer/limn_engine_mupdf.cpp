@@ -193,10 +193,29 @@ QJsonObject extract_search_hits(Document* doc,
         }
         if (hit_n <= 0) continue;
 
+        // Normalize quad coordinates from MuPDF page-point space to [0,1]²
+        // so that view/overlays (which uses page-norm coords) can position
+        // highlights correctly. MuPDF page space: Y=0 at top, Y increases
+        // downward — same orientation as the overlay renderer, so no Y flip
+        // is needed; just divide by page dimensions.
+        fz_rect pb = {0, 0, 1, 1};   // safe fallback: unit rect (pass-through)
+        fz_try(mupdf_context) {
+            fz_page* p = fz_load_page(mupdf_context, doc->doc, page);
+            pb = fz_bound_page(mupdf_context, p);
+            fz_drop_page(mupdf_context, p);
+        } fz_catch(mupdf_context) { /* keep unit rect */ }
+        const double pw = (pb.x1 > pb.x0) ? (pb.x1 - pb.x0) : 1.0;
+        const double ph = (pb.y1 > pb.y0) ? (pb.y1 - pb.y0) : 1.0;
+
         QJsonArray rects;
         for (int i = 0; i < hit_n; ++i) {
             double x0, y0, x1, y1;
             quad_to_rect(quads[i], x0, y0, x1, y1);
+            // Normalize to [0,1]² (page-norm coords expected by view/overlays).
+            x0 = (x0 - pb.x0) / pw;
+            y0 = (y0 - pb.y0) / ph;
+            x1 = (x1 - pb.x0) / pw;
+            y1 = (y1 - pb.y0) / ph;
             rects.append(rect_to_json(x0, y0, x1, y1));
         }
         QJsonObject h;

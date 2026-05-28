@@ -35,6 +35,7 @@
    ;; §A vars
    #:*pdf-scroll-step*
    #:*pdf-half-page-step*           ; v0.37 Phase D
+   #:*pdf-page-step*                ; v0.39 (C-f / C-b)
    #:*pdf-zoom-in-factor*
    #:*pdf-zoom-out-factor*
    #:*pdf-default-zoom*              ; v0.38 B18
@@ -50,6 +51,7 @@
    #:make-pdf-annotation #:pdf-annotation-p
    #:pdf-annotation-id #:pdf-annotation-page #:pdf-annotation-rects
    #:pdf-annotation-color #:pdf-annotation-note #:pdf-annotation-created-at
+   #:pdf-annotation-type #:pdf-annotation-tags
    #:pdf-annotations-serialize #:pdf-annotations-deserialize
    #:pdf-annotations-sidecar-path
    #:pdf-annotations-content-hash-sidecar-path
@@ -62,6 +64,10 @@
    #:pdf-annotations-migrate
    #:pdf-annotations-export-org
    #:*pdf-annotations-schema-version*
+   ;; §C cache + query surface (v0.39.11)
+   #:pdf-annotations-on-page
+   #:pdf-annotations-pages-with-notes
+   #:pdf-annotations-with-tag
    ;; §D TOC
    #:*pdf-toc-buffer-name*
    #:format-toc-tree #:parse-toc-line-page
@@ -191,13 +197,14 @@
       (push :limn/custom-available *features*))))
 
 #+:limn/custom-available
-(limn/custom:defcustom *pdf-scroll-step* 3
-  "Number of lines (approx) to scroll on j/k."
-  :type 'integer :group 'pdf-mode)
+(limn/custom:defcustom *pdf-scroll-step* 0.1
+  "Fraction of the visible screen height to scroll on j/k (0.0–1.0).
+   Uses view/scroll :dy so it is correct at any zoom level."
+  :type 'float :group 'pdf-mode)
 
 #-:limn/custom-available
-(defvar *pdf-scroll-step* 3
-  "Lines to scroll on j/k.")
+(defvar *pdf-scroll-step* 0.1
+  "Screen-fraction to scroll on j/k (0.0–1.0). Passed to view/scroll :dy.")
 
 #+:limn/custom-available
 (limn/custom:defcustom *pdf-zoom-in-factor* 1.25
@@ -241,8 +248,40 @@
   (hits        nil)             ; list of (:|page| P :|rects| ((x0 y0 x1 y1)...))
   (current-index 0 :type integer))
 
+;; v0.39: per-window search state. Keyed by win-id string so that
+;; multiple frames showing the same buffer each have their own
+;; independent search cursor. *current-win-id* is a dynamic variable
+;; that %wrap-cmd binds from the incoming key event's :win-id field;
+;; all search helpers read/write through the accessors below.
+(defvar *pdf-search-states* (make-hash-table :test #'equal)
+  "win-id → pdf-search-state.  Replaces the old single *pdf-search-state*.")
+
+(defvar *current-win-id* "w1"
+  "Dynamic variable holding the win-id of the window that fired the
+   current key event.  Bound by %wrap-cmd from ev's :win-id field.")
+
+(defun %search-state ()
+  "Return the active search state for the current window."
+  (gethash *current-win-id* *pdf-search-states*))
+
+(defun %set-search-state (state)
+  "Set (or clear, if STATE is nil) the search state for the current window."
+  (if state
+      (setf (gethash *current-win-id* *pdf-search-states*) state)
+      (remhash *current-win-id* *pdf-search-states*))
+  state)
+
+;; Keep the old name as a compatibility alias that reads the focused win.
+(defun %compat-search-state ()
+  "Return *pdf-search-state* equivalent for the current focused window."
+  (%search-state))
+
+;;; --- public export alias (old code that uses *pdf-search-state* directly) --
+;;; Nothing outside this file should access *pdf-search-state* directly;
+;;; internal helpers all use %search-state / %set-search-state now.
 (defvar *pdf-search-state* nil
-  "Currently active search state (one slot — single search at a time).")
+  "DEPRECATED: old single-slot global.  Kept for external callers only.
+   Actual state is in *pdf-search-states* keyed by win-id.")
 
 (defvar *pdf-last-search-query* nil
   "Last query string used for / (Emacs convention: empty input replays).")
@@ -261,23 +300,23 @@
                            :|case-sensitive| (if case-sensitive t :false)))
            (d (%response-data r))
            (hits (and d (getf d :|hits|))))
-      (setf *pdf-search-state*
-            (make-pdf-search-state :buffer-id buffer-id
-                                    :query query
-                                    :hits (or hits '())
-                                    :current-index 0))
+      (%set-search-state
+       (make-pdf-search-state :buffer-id buffer-id
+                               :query query
+                               :hits (or hits '())
+                               :current-index 0))
       ;; v0.25 search-history integration (§T)
       (let ((add (find-symbol "ADD-TO-HISTORY" :limn/history)))
         (when (and add (fboundp add))
           (handler-case
               (funcall (symbol-function add) '*search-history* query)
             (error () nil))))
-      *pdf-search-state*)))
+      (%search-state))))
 
 (defun pdf-search-reset ()
-  "Clear *pdf-search-state* and emit empty overlays."
-  (setf *pdf-search-state* nil)
-  (%limn-call "view/overlays" :|win-id| "w1" :|layers| '()))
+  "Clear search state for the current window and remove overlays."
+  (%set-search-state nil)
+  (%limn-call "view/overlays" :|win-id| *current-win-id* :|layers| '()))
 
 (defun pdf-search-advance (state)
   "Move current-index forward (wrap). Safe on empty/nil hits."
@@ -323,14 +362,30 @@
 ;;; §C annotation — struct + sidecar I/O + content-hash key + schema
 ;;; ═════════════════════════════════════════════════════════════════════
 
-(defvar *pdf-annotations-schema-version* 1
-  "Current sidecar schema version. Bumped on incompatible changes.")
+(defvar *pdf-annotations-schema-version* 2
+  "Current sidecar schema version. Bumped on incompatible changes.
+   v1 → v2 (v0.39.11): added :type (keyword) + :tags (list of strings) per entry.
+   Forward-compat: v2 reader accepts v1 files (missing fields default to
+   :type :highlight, :tags nil); writer always emits v2.")
 
 (defvar *uuid-counter* 0)
 (defun %fresh-uuid ()
   (format nil "u-~a-~a"
           (funcall *now-fn*)
           (incf *uuid-counter*)))
+
+;; --- v0.39.11 in-memory cache (D2) -----------------------------------
+;; Eliminates re-read-sidecar-per-mouse-event hot path. Cache entries are
+;; plain plists keyed by PATH (string=):
+;;   (:|loaded-at| TS
+;;    :|by-page|   hash-table[page → list-of-annotation]
+;;    :|all|       list-of-annotation)
+;; Built lazily by %annotations-cache-build, populated eagerly by
+;; pdf-mode-on-buffer-opened, invalidated by pdf-annotations-save.
+;; pdf-annotation-at remains pure (works on caller-supplied lists) so
+;; existing tests that don't go through a path still pass.
+(defvar *pdf-annotations-cache* (make-hash-table :test #'equal)
+  "path-string → cache-entry plist. See module comment above.")
 
 (defstruct (pdf-annotation
             (:constructor %raw-make-pdf-annotation))
@@ -339,32 +394,43 @@
   (rects     nil)               ; list of (x0 y0 x1 y1)
   (color     "#FFD700")
   (note      nil)
-  (created-at 0))
+  (created-at 0)
+  ;; v0.39.11 (schema v2):
+  ;; type — :highlight (default, current behavior) | :note (point note,
+  ;;        no text selection) | :both
+  ;; tags — list of strings (default nil)
+  (type      :highlight)
+  (tags      nil))
 
 ;; Public constructor: fills id / created-at via vtable when caller omits them.
 ;; Has to handle the case where caller doesn't pass :color either — fall back to
 ;; *pdf-annotation-color* (defcustom).
 (defun make-pdf-annotation (&key id page rects (color nil color-p)
-                                  note created-at)
+                                  note created-at
+                                  (type :highlight) tags)
   (%raw-make-pdf-annotation
    :id (or id (%fresh-uuid))
    :page (or page 0)
    :rects rects
    :color (if color-p color *pdf-annotation-color*)
    :note note
-   :created-at (or created-at (funcall *now-fn*))))
+   :created-at (or created-at (funcall *now-fn*))
+   :type (or type :highlight)
+   :tags tags))
 
 (defun pdf-annotations-serialize (anns)
   "Serialize list of pdf-annotation to a versioned schema string:
-   (:VERSION 1 :ANNOTATIONS ((:id ... :page ... ...) ...))"
+   (:VERSION 2 :ANNOTATIONS ((:id ... :page ... :type ... :tags (...) ...) ...))"
   (let ((entries
           (mapcar (lambda (a)
-                    (list :id        (pdf-annotation-id a)
-                          :page      (pdf-annotation-page a)
-                          :rects     (pdf-annotation-rects a)
-                          :color     (pdf-annotation-color a)
-                          :note      (pdf-annotation-note a)
-                          :created-at (pdf-annotation-created-at a)))
+                    (list :id         (pdf-annotation-id a)
+                          :page       (pdf-annotation-page a)
+                          :rects      (pdf-annotation-rects a)
+                          :color      (pdf-annotation-color a)
+                          :note       (pdf-annotation-note a)
+                          :created-at (pdf-annotation-created-at a)
+                          :type       (or (pdf-annotation-type a) :highlight)
+                          :tags       (pdf-annotation-tags a)))
                   anns)))
     (with-output-to-string (out)
       (write (list :version *pdf-annotations-schema-version*
@@ -385,18 +451,27 @@
     (let ((form (%try-read-form str)))
       (cond
         ((null form) nil)
-        ((and (listp form) (or (eq (getf form :version) 0)
-                                (eq (getf form :version) :v0)
-                                (eq (getf form :version) nil)))
-         ;; Either ancient (no version) or v0 — migrate first.
-         (let ((migrated (pdf-annotations-migrate form)))
+        ((and (listp form) (%plist-envelope-p form))
+         ;; Funnel any versioned form (v0, v1, v2, …) through migrate so
+         ;; entry plists get current-schema defaults before %decode-one
+         ;; sees them. %decode-one is also tolerant for safety.
+         (let* ((migrated (pdf-annotations-migrate form)))
            (%decode-entries (getf migrated :annotations))))
-        ((and (listp form) (getf form :annotations))
-         (%decode-entries (getf form :annotations)))
         ((listp form)
-         ;; Permissive: form is a raw list of entry-plists.
+         ;; Permissive: form is a raw list of entry-plists (no envelope).
          (%decode-entries form))
         (t nil)))))
+
+(defun %plist-envelope-p (form)
+  "True iff FORM looks like a (:version ... :annotations (...)) envelope
+   rather than a raw list of entry plists. Cheap structural test that
+   doesn't trip GETF's malformed-plist guard on lists-of-lists."
+  (and (listp form)
+       (keywordp (car form))
+       ;; even length is a property of a valid plist envelope; raw entry
+       ;; lists would start with a list, not a keyword, so the keywordp
+       ;; check above already excludes them — this is defence in depth.
+       (evenp (length form))))
 
 (defun %decode-entries (entries)
   (let ((acc nil))
@@ -408,17 +483,37 @@
 
 (defun %decode-one (e)
   (when (and (listp e) (getf e :id))
-    (make-pdf-annotation
-     :id        (getf e :id)
-     :page      (getf e :page 0)
-     :rects     (getf e :rects)
-     :color     (or (getf e :color) "#FFD700")
-     :note      (getf e :note)
-     :created-at (or (getf e :created-at) 0))))
+    ;; v1 sidecars lack :type and :tags — default to :highlight / nil.
+    ;; Use indicator-presence sentinel so an entry that explicitly stores
+    ;; :type nil still falls back to :highlight (matches struct default).
+    (let* ((type-cell (member :type e))
+           (type-val  (if type-cell (cadr type-cell) :highlight))
+           (tags-val  (getf e :tags)))
+      (make-pdf-annotation
+       :id        (getf e :id)
+       :page      (getf e :page 0)
+       :rects     (getf e :rects)
+       :color     (or (getf e :color) "#FFD700")
+       :note      (getf e :note)
+       :created-at (or (getf e :created-at) 0)
+       :type      (or type-val :highlight)
+       :tags      tags-val))))
+
+(defun %upgrade-entry-v1->v2 (e)
+  "Stamp v2 defaults onto an entry-plist that may be v0 or v1.
+   Adds :type :highlight and :tags nil where missing. Idempotent."
+  (if (listp e)
+      (let ((out (copy-list e)))
+        (unless (member :type out) (setf out (append out (list :type :highlight))))
+        (unless (member :tags out) (setf out (append out (list :tags nil))))
+        out)
+      e))
 
 (defun pdf-annotations-migrate (data)
   "Migrate a versioned-or-not plist up to current schema version.
-   Idempotent: returns DATA unchanged if already current."
+   Idempotent: returns DATA unchanged if already current.
+   v0 → v1: stamp :version.
+   v1 → v2: stamp :version + add default :type :highlight, :tags nil per entry."
   (cond
     ((null data) (list :version *pdf-annotations-schema-version*
                        :annotations '()))
@@ -428,9 +523,11 @@
        (cond
          ((eql v *pdf-annotations-schema-version*) data)
          ((< v *pdf-annotations-schema-version*)
-          ;; v0 → v1: same shape, just stamp version.
+          ;; Walk every entry adding defaults, then stamp current version.
           (list :version *pdf-annotations-schema-version*
-                :annotations (or (getf data :annotations) '())))
+                :annotations
+                (mapcar #'%upgrade-entry-v1->v2
+                        (or (getf data :annotations) '()))))
          (t data))))))
 
 (defun %home ()
@@ -457,9 +554,13 @@
 
 (defun pdf-annotations-save (path anns)
   "Write ANNS list to sidecar for PATH. Returns t on success, nil on
-   silent-skip; signals error / emits message on hard fail (no silent ok)."
+   silent-skip; signals error / emits message on hard fail (no silent ok).
+   Always invalidates the in-memory cache for PATH (next read rebuilds)."
   (let ((spath (%effective-sidecar-path path))
         (data (pdf-annotations-serialize anns)))
+    ;; Invalidate first so a subsequent read can't observe stale state
+    ;; even if the write below errors (we'd rather rebuild than serve stale).
+    (%annotations-cache-invalidate path)
     (handler-case
         (progn (funcall *annotations-write-fn* spath data) t)
       (error (e)
@@ -483,20 +584,102 @@
         (or (pdf-annotations-deserialize data) '()))
     (error () '())))
 
+;; --- v0.39.11 cache helpers + query surface (D2) ---------------------
+
+(defun %path-key (path)
+  "Normalise PATH to a string suitable for keying *pdf-annotations-cache*."
+  (cond ((null path) nil)
+        ((stringp path) path)
+        ((pathnamep path) (namestring path))
+        (t (princ-to-string path))))
+
+(defun %annotations-cache-build (path)
+  "Load sidecar for PATH, build by-page index, store in cache. Returns
+   the cache-entry plist. Safe to call repeatedly — rebuilds each call."
+  (let* ((key (%path-key path))
+         (all (pdf-annotations-load path))
+         (by-page (make-hash-table :test #'eql)))
+    (dolist (a all)
+      (let ((p (pdf-annotation-page a)))
+        (push a (gethash p by-page))))
+    ;; Preserve insertion order within each page bucket (we pushed, so reverse).
+    (maphash (lambda (k v) (setf (gethash k by-page) (nreverse v))) by-page)
+    (let ((entry (list :|loaded-at| (funcall *now-fn*)
+                       :|by-page|   by-page
+                       :|all|       all)))
+      (when key (setf (gethash key *pdf-annotations-cache*) entry))
+      entry)))
+
+(defun %annotations-cache-get (path)
+  "Return the cache entry for PATH, building on miss."
+  (let ((key (%path-key path)))
+    (or (and key (gethash key *pdf-annotations-cache*))
+        (%annotations-cache-build path))))
+
+(defun %annotations-cache-invalidate (path)
+  "Drop the cache entry for PATH. Called from pdf-annotations-save."
+  (let ((key (%path-key path)))
+    (when key (remhash key *pdf-annotations-cache*))))
+
+(defun pdf-annotations-on-page (path page)
+  "O(1) lookup: all annotations on PAGE for PATH. Builds cache on miss."
+  (let* ((entry (%annotations-cache-get path))
+         (by-page (getf entry :|by-page|)))
+    (or (and by-page (gethash page by-page)) '())))
+
+(defun pdf-annotations-pages-with-notes (path)
+  "Sorted list of pages on PATH that have at least one annotation whose
+   :type is :note or :both. Consumed by the icon-marker agent (D4)."
+  (let* ((entry (%annotations-cache-get path))
+         (by-page (getf entry :|by-page|))
+         (pages '()))
+    (when by-page
+      (maphash (lambda (p anns)
+                 (when (some (lambda (a)
+                               (let ((tp (pdf-annotation-type a)))
+                                 (or (eq tp :note) (eq tp :both))))
+                             anns)
+                   (push p pages)))
+               by-page))
+    (sort pages #'<)))
+
+(defun pdf-annotations-with-tag (path tag)
+  "Linear scan over all annotations for PATH; return those whose :tags
+   contain TAG (string=). Consumed by annotation-UX agent (D5)."
+  (let* ((entry (%annotations-cache-get path))
+         (all   (getf entry :|all|)))
+    (remove-if-not
+     (lambda (a)
+       (and (pdf-annotation-tags a)
+            (find tag (pdf-annotation-tags a) :test #'string=)))
+     all)))
+
 (defun pdf-annotations-overlay-payload (anns)
-  "Convert annotation list to view/overlays payload."
-  (mapcar (lambda (a)
-            (list :|type| "rect"
-                  :|page| (pdf-annotation-page a)
-                  ;; first rect (multi-rect anno: caller expands if needed)
-                  :|rect| (first (pdf-annotation-rects a))
-                  :|color| (pdf-annotation-color a)
-                  :|opacity| 0.6))
-          anns))
+  "Convert annotation list to view/overlays payload.  v0.39.12 follow-up:
+   emit ONE layer per rect (was: only the first rect, which made
+   multi-rect highlights — every annotation produced by v0.39.12's
+   get_text_selection persistence — render as just the first
+   character of the selected text).  Single-rect annotations from
+   older sidecars still work because the per-rect expansion is a
+   no-op for them."
+  (let ((acc nil))
+    (dolist (a anns)
+      (let ((page  (pdf-annotation-page a))
+            (color (pdf-annotation-color a)))
+        (dolist (rect (pdf-annotation-rects a))
+          (when rect
+            (push (list :|type|    "rect"
+                        :|page|    page
+                        :|rect|    rect
+                        :|color|   color
+                        :|opacity| 0.6)
+                  acc)))))
+    (nreverse acc)))
 
 (defun pdf-annotations-for-buffer (path)
-  "Convenience: load + overlay-payload."
-  (pdf-annotations-overlay-payload (pdf-annotations-load path)))
+  "Convenience: overlay-payload, via cache (builds on miss)."
+  (let ((entry (%annotations-cache-get path)))
+    (pdf-annotations-overlay-payload (getf entry :|all|))))
 
 (defun pdf-annotation-at (anns page x y)
   "First annotation in ANNS whose rect contains (page, x, y), or NIL."
@@ -509,8 +692,10 @@
            anns))
 
 (defun pdf-annotations-at-point (path page x y)
-  "Look up + return the annotation at (page, x, y) on PATH's sidecar."
-  (pdf-annotation-at (pdf-annotations-load path) page x y))
+  "Look up + return the annotation at (page, x, y) on PATH's sidecar.
+   Goes through the page index (cache) to skip annotations on other
+   pages — significant speedup for sidecars with many pages."
+  (pdf-annotation-at (pdf-annotations-on-page path page) page x y))
 
 (defun pdf-annotations-delete-at-point (path page x y)
   "Delete the annotation at (page, x, y) from PATH's sidecar (no-op if none)."
@@ -639,26 +824,22 @@
       (limn/pdf-mode::%page-set target))))
 
 ;; v0.38 B13: pdf-scroll-down/up honor numeric prefix-arg.
-;; `5j` should scroll 5× the base step; plain `j` scrolls 1×.
+;; `5j` scrolls 5× the base step; plain `j` scrolls 1×.
+;;
+;; v0.39: switched from view/set :offset-y (raw document coords — step 0.1
+;; doc-unit while pages are ~840 units tall → effectively no movement) to
+;; view/scroll :dy (screen fraction, zoom-invariant).
 (limn/pdf-mode::%defcmd pdf-scroll-down "p"
   (lambda (&optional prefix)
-    (let* ((v (limn/pdf-mode::%focused-view))
-           (off (or (getf v :|offset-y|) 0.0))
-           (n   (or prefix 1))
-           (step (* n (/ limn/pdf-mode:*pdf-scroll-step* 30.0))))
-      ;; Move within page via offset-y if engine supports it; otherwise
-      ;; the wire layer ignores the field.
-      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
-                                  :|offset-y| (+ off step)))))
+    (let* ((n    (or prefix 1))
+           (step (* n limn/pdf-mode:*pdf-scroll-step*)))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dy| step))))
 
 (limn/pdf-mode::%defcmd pdf-scroll-up "p"
   (lambda (&optional prefix)
-    (let* ((v (limn/pdf-mode::%focused-view))
-           (off (or (getf v :|offset-y|) 0.0))
-           (n   (or prefix 1))
-           (step (* n (/ limn/pdf-mode:*pdf-scroll-step* 30.0))))
-      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
-                                  :|offset-y| (max 0.0 (- off step))))))
+    (let* ((n    (or prefix 1))
+           (step (* n limn/pdf-mode:*pdf-scroll-step*)))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dy| (- step)))))
 
 (limn/pdf-mode::%defcmd pdf-zoom-in nil
   (lambda ()
@@ -743,7 +924,7 @@
 
 (limn/pdf-mode::%defcmd pdf-isearch-next nil
   (lambda ()
-    (let ((s limn/pdf-mode:*pdf-search-state*))
+    (let ((s (limn/pdf-mode::%search-state)))
       (when s
         (let* ((hits (limn/pdf-mode:pdf-search-state-hits s))
                (old-idx (limn/pdf-mode:pdf-search-state-current-index s)))
@@ -767,7 +948,7 @@
 
 (limn/pdf-mode::%defcmd pdf-isearch-prev nil
   (lambda ()
-    (let ((s limn/pdf-mode:*pdf-search-state*))
+    (let ((s (limn/pdf-mode::%search-state)))
       (when s
         (limn/pdf-mode:pdf-search-retreat s)
         (let* ((hits (limn/pdf-mode:pdf-search-state-hits s)))
@@ -843,32 +1024,109 @@
               (when (integerp p)
                 (limn/pdf-mode::%page-set p)))))))))
 
+;;; v0.39: smart n / p — walk search hits when a search is active,
+;;; otherwise fall back to next-page / prev-page.  This lets n/p serve
+;;; double duty: normal page navigation most of the time, and forward/
+;;; backward result navigation immediately after a / or ? search.
+;;; pdf-isearch-quit (C-g) clears *pdf-search-state*, restoring plain
+;;; page-navigation semantics.
+
+(limn/pdf-mode::%defcmd pdf-n nil
+  (lambda ()
+    (let ((s (limn/pdf-mode::%search-state)))
+      (if (and s (consp (limn/pdf-mode:pdf-search-state-hits s)))
+          ;; ── search active: advance to next hit ──────────────────────
+          (let* ((hits    (limn/pdf-mode:pdf-search-state-hits s))
+                 (old-idx (limn/pdf-mode:pdf-search-state-current-index s)))
+            (limn/pdf-mode:pdf-search-advance s)
+            (let ((new-idx (limn/pdf-mode:pdf-search-state-current-index s)))
+              (when (and (= old-idx (1- (length hits)))
+                         (= new-idx 0))
+                (limn/pdf-mode::%limn-call
+                 "message/echo" :|text| limn/pdf-mode:*pdf-wrapped-message*)))
+            (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s) hits))
+                   (p   (getf hit :|page|)))
+              (when (integerp p) (limn/pdf-mode::%page-set p)))
+            (limn/pdf-mode::%limn-call
+             "view/overlays" :|win-id| "w1"
+             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))
+          ;; ── no active search: next page ─────────────────────────────
+          (let* ((v  (limn/pdf-mode::%focused-view))
+                 (p  (or (getf v :|page|) 0))
+                 (pc (or (getf v :|page-count|) 1)))
+            (limn/pdf-mode::%page-set
+             (limn/pdf-mode::%clamp-page (1+ p) pc)))))))
+
+(limn/pdf-mode::%defcmd pdf-p nil
+  (lambda ()
+    (let ((s (limn/pdf-mode::%search-state)))
+      (if (and s (consp (limn/pdf-mode:pdf-search-state-hits s)))
+          ;; ── search active: retreat to previous hit ──────────────────
+          (progn
+            (limn/pdf-mode:pdf-search-retreat s)
+            (let* ((hits (limn/pdf-mode:pdf-search-state-hits s))
+                   (hit  (nth (limn/pdf-mode:pdf-search-state-current-index s)
+                               hits))
+                   (p    (getf hit :|page|)))
+              (when (integerp p) (limn/pdf-mode::%page-set p)))
+            (limn/pdf-mode::%limn-call
+             "view/overlays" :|win-id| "w1"
+             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))
+          ;; ── no active search: previous page ─────────────────────────
+          (let* ((v  (limn/pdf-mode::%focused-view))
+                 (p  (or (getf v :|page|) 0))
+                 (pc (or (getf v :|page-count|) 1)))
+            (limn/pdf-mode::%page-set
+             (limn/pdf-mode::%clamp-page (1- p) pc)))))))
+
 ;;; v0.37 Phase D: half-page scroll (vim C-d / C-u).  Uses offset-y
 ;;; deltas the same way pdf-scroll-down does, but with a larger step.
-;;; Half-page = 0.5 in page-norm coords (whole page = 1.0).
+;;; v0.39: now uses view/scroll :dy (screen fraction) like pdf-scroll-down.
 
 (defvar limn/pdf-mode:*pdf-half-page-step* 0.5
-  "Page-norm units to scroll for pdf-half-page-down / pdf-half-page-up.
-   Vim default is half the visible window height; 0.5 of page-norm is
-   the analog when fit-to-page is the default zoom.")
+  "Screen fraction to scroll for C-d / C-u (0.0–1.0).
+   0.5 = half the visible screen, matching vim's default behaviour.
+   v0.39: passed directly to view/scroll :dy (was broken view/set :offset-y).")
 
 (limn/pdf-mode::%defcmd pdf-half-page-down nil
   (lambda ()
-    (let* ((v (limn/pdf-mode::%focused-view))
-           (off (or (getf v :|offset-y|) 0.0)))
-      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
-                                  :|offset-y|
-                                  (+ off limn/pdf-mode:*pdf-half-page-step*)))))
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+                                :|dy| limn/pdf-mode:*pdf-half-page-step*)))
 
 (limn/pdf-mode::%defcmd pdf-half-page-up nil
   (lambda ()
-    (let* ((v (limn/pdf-mode::%focused-view))
-           (off (or (getf v :|offset-y|) 0.0)))
-      (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1"
-                                  :|offset-y|
-                                  (max 0.0
-                                       (- off
-                                          limn/pdf-mode:*pdf-half-page-step*))))))
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+                                :|dy| (- limn/pdf-mode:*pdf-half-page-step*))))
+
+;;; v0.39: full-page scroll (vim C-f / C-b).  One whole visible screen.
+
+(defvar limn/pdf-mode:*pdf-page-step* 1.0
+  "Screen fraction to scroll for C-f / C-b (full page = 1.0).")
+
+(limn/pdf-mode::%defcmd pdf-page-down nil
+  (lambda ()
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+                                :|dy| limn/pdf-mode:*pdf-page-step*)))
+
+(limn/pdf-mode::%defcmd pdf-page-up nil
+  (lambda ()
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+                                :|dy| (- limn/pdf-mode:*pdf-page-step*))))
+
+;;; v0.39: horizontal scroll (vim h / l).  Same step as j/k but on :dx.
+;;; Honors numeric prefix-arg.
+
+(limn/pdf-mode::%defcmd pdf-scroll-left "p"
+  (lambda (&optional prefix)
+    (let* ((n    (or prefix 1))
+           (step (* n limn/pdf-mode:*pdf-scroll-step*)))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dx| (- step)))))
+
+(limn/pdf-mode::%defcmd pdf-scroll-right "p"
+  (lambda (&optional prefix)
+    (let* ((n    (or prefix 1))
+           (step (* n limn/pdf-mode:*pdf-scroll-step*)))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dx| step))))
 
 ;;; v0.37 Phase D: close the focused PDF buffer (vim q).  Routes to
 ;;; buffer/close on the focused buffer-id.
@@ -896,15 +1154,20 @@
     (and bid (gethash bid limn/pdf-mode::*buffer-id-to-path*))))
 
 (defun limn/pdf-mode::%selection ()
-  "Get the current selection as a (:|page| P :|rects| ((x1 y1 x2 y2)))
-   plist.  v0.37 Phase F: the bridge's view/selection-get returns the
-   selection as :|active| / :|begin|{:|page|,:|x|,:|y|} / :|end|{...} /
-   :|mode| / :|text| — there is no :|rects| field on the wire (and
-   never has been since the wire schema settled in v0.15).  This
-   helper synthesizes a single-rect bounding box from begin/end so
-   downstream callers (%add-annotation) keep the old :|page|/:|rects|
-   contract.  Returns NIL when no selection is active or coords are
-   missing — %add-annotation treats that as a no-op."
+  "Get the current selection as a (:|page| P :|rects| ((x0 y0 x1 y1)...))
+   plist.
+
+   v0.39.12 update: view/selection-get now returns a :|rects| array
+   carrying the real per-character / per-line rects from sioyek's
+   get_text_selection (page-norm coords, each entry [x0 y0 x1 y1 page]).
+   We prefer these — they match the visible glyph extents, so
+   annotations saved on large-font titles are no longer thin strips.
+
+   Fallback path (when wire didn't include :|rects|, or none survived
+   the page filter — happens on image-only selections / older binaries):
+   synthesise a single bounding box from begin/end points so the
+   downstream contract still holds.  Returns NIL when no selection is
+   active or coords are missing."
   (let* ((r (limn/pdf-mode::%limn-call "view/selection-get" :|win-id| "w1"))
          (d (limn/pdf-mode::%response-data r)))
     (when (and d (getf d :|active|))
@@ -913,12 +1176,29 @@
              (page (or (and b (getf b :|page|))
                        (and e (getf e :|page|))
                        0))
-             (bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
-             (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
-        (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
-          (list :|page| page
-                :|rects| (list (list (min bx ex) (min by ey)
-                                     (max bx ex) (max by ey)))))))))
+             (wire-rects (getf d :|rects|))
+             (page-rects
+               (and (consp wire-rects)
+                    (loop for r in wire-rects
+                          when (and (consp r) (>= (length r) 4))
+                            collect (let ((rp (if (>= (length r) 5)
+                                                   (nth 4 r)
+                                                   page)))
+                                       (when (or (null rp) (eql rp page))
+                                         (list (nth 0 r) (nth 1 r)
+                                               (nth 2 r) (nth 3 r))))
+                          into acc
+                          finally (return (remove nil acc))))))
+        (cond
+          (page-rects
+           (list :|page| page :|rects| page-rects))
+          (t
+           (let ((bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
+                 (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
+             (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
+               (list :|page| page
+                     :|rects| (list (list (min bx ex) (min by ey)
+                                          (max bx ex) (max by ey))))))))))))
 
 (defun limn/pdf-mode::%add-annotation (note)
   "Build + persist + paint an annotation from the current selection."
@@ -987,13 +1267,20 @@
            (d (limn/pdf-mode::%response-data r))
            (txt (and d (getf d :|text|))))
       (when (and txt (stringp txt) (plusp (length txt)))
+        ;; 1. Push onto the Lisp-internal kill ring (for C-y within limn).
         (let ((kpkg (find-package '#:limn/kill)))
           (when kpkg
             (let ((kn (find-symbol "KILL-NEW" kpkg)))
               (when (and kn (fboundp kn))
                 (funcall (symbol-function kn) txt)))))
-        ;; Echo confirmation so the user knows the copy landed (and
-        ;; the e2e log carries evidence). v0.37 echo helper.
+        ;; 2. Write to the OS system clipboard via pbcopy (macOS).
+        ;;    Pure Lisp — no C++ wire needed.
+        (handler-case
+            (uiop:run-program '("pbcopy")
+                              :input (make-string-input-stream txt)
+                              :ignore-error-status t)
+          (error () nil))
+        ;; 3. Echo confirmation.
         (handler-case
             (limn/pdf-mode::%limn-call "message/echo"
                                         :|text| "Copied selection")
@@ -1310,6 +1597,64 @@
     (limn/pdf-mode::%limn-call "modeline/set" :|left| label)))
 
 ;;; ═════════════════════════════════════════════════════════════════════
+;;; §M mouse-driven text selection
+;;;
+;;; Left-button press  → remember anchor (handled via mouse-click hook).
+;;; Left-button move   → update selection via view/selection-set
+;;;                      (mouse-drag carries anchor + delta in page-norm).
+;;; M-w                → copy selected text to kill ring (existing binding).
+;;; C-g / next click   → clear selection (view/selection-clear).
+;;;
+;;; Coordinate convention: mouse-click / mouse-drag events from C++ carry
+;;; page-normalized x/y (0.0–1.0) — the same space view/selection-set
+;;; expects, so no coordinate conversion is needed here.
+;;; ═════════════════════════════════════════════════════════════════════
+
+(defun limn/pdf-mode::%on-mouse-click (ev)
+  "Hook handler for 'mouse-click' events.
+   Left click: clear any previous selection, store anchor for potential drag."
+  (let ((button (getf ev :|button|))
+        (page   (getf ev :|page|)))
+    (when (and (eql button 1) (integerp page) (>= page 0))
+      ;; Clear previous selection so a plain click always resets it.
+      (handler-case
+          (limn/pdf-mode::%limn-call
+           "view/selection-clear" :|win-id| "w1")
+        (error () nil)))))
+
+(defun limn/pdf-mode::%on-mouse-drag (ev)
+  "Hook handler for 'mouse-drag' events.
+   Left-button drag: extend the text selection from anchor to current pos."
+  (let ((button (getf ev :|button|))
+        (page   (getf ev :|page|))
+        (ax     (getf ev :|x|))
+        (ay     (getf ev :|y|))
+        (dx     (getf ev :|dx|))
+        (dy     (getf ev :|dy|)))
+    (when (and (eql button 1)
+               (integerp page) (>= page 0)
+               (numberp ax) (numberp ay)
+               (numberp dx) (numberp dy))
+      ;; Anchor (begin) is where drag started; current pos is anchor+delta.
+      (let ((end-x (+ ax dx))
+            (end-y (+ ay dy)))
+        ;; Ensure begin is always top-left in reading order.
+        (let* ((swap-p (or (> ay end-y)
+                           (and (= ay end-y) (> ax end-x))))
+               (bx (if swap-p end-x ax))
+               (by (if swap-p end-y ay))
+               (ex (if swap-p ax end-x))
+               (ey (if swap-p ay end-y)))
+          (handler-case
+              (limn/pdf-mode::%limn-call
+               "view/selection-set"
+               :|win-id| "w1"
+               :|begin| (list :|page| page :|x| bx :|y| by)
+               :|end|   (list :|page| page :|x| ex :|y| ey)
+               :|mode|  "char")
+            (error () nil)))))))
+
+;;; ═════════════════════════════════════════════════════════════════════
 ;;; §I lifecycle hooks
 ;;; ═════════════════════════════════════════════════════════════════════
 
@@ -1326,8 +1671,10 @@
     ;; Track buffer-id → path so buffer-closed can save last-position
     (when buffer-id
       (setf (gethash buffer-id limn/pdf-mode::*buffer-id-to-path*) path))
-    ;; Load + paint annotations
-    (let ((anns (limn/pdf-mode:pdf-annotations-load path)))
+    ;; Load + paint annotations.  v0.39.11 D2: populate cache eagerly so
+    ;; the first mouse-click hot path is a hash lookup, not a re-read.
+    (let* ((entry (limn/pdf-mode::%annotations-cache-build path))
+           (anns  (getf entry :|all|)))
       (when anns
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
@@ -1371,20 +1718,22 @@
            :buffer-id buffer-id :path path)
         (error () nil))
       (remhash buffer-id limn/pdf-mode::*buffer-id-to-path*)))
-  ;; Clear search state
-  (let ((s limn/pdf-mode:*pdf-search-state*))
-    (when (and s (or (null buffer-id)
-                     (equal buffer-id
-                            (limn/pdf-mode:pdf-search-state-buffer-id s))))
-      (setf limn/pdf-mode:*pdf-search-state* nil))))
+  ;; Clear search state for any window that was searching this buffer.
+  (maphash (lambda (win-id s)
+              (when (and s (or (null buffer-id)
+                               (equal buffer-id
+                                      (limn/pdf-mode:pdf-search-state-buffer-id s))))
+                (remhash win-id limn/pdf-mode::*pdf-search-states*)))
+            limn/pdf-mode::*pdf-search-states*))
 
 (defun limn/pdf-mode:pdf-mode-on-buffer-focused (&key buffer-id)
-  "Called when focus switches to BUFFER-ID. Reset stale per-buffer state."
-  (let ((s limn/pdf-mode:*pdf-search-state*))
-    (when (and s
-               (not (equal buffer-id
-                            (limn/pdf-mode:pdf-search-state-buffer-id s))))
-      (setf limn/pdf-mode:*pdf-search-state* nil))))
+  "Called when focus switches to BUFFER-ID. Reset stale per-buffer search."
+  (maphash (lambda (win-id s)
+              (when (and s
+                         (not (equal buffer-id
+                                     (limn/pdf-mode:pdf-search-state-buffer-id s))))
+                (remhash win-id limn/pdf-mode::*pdf-search-states*)))
+            limn/pdf-mode::*pdf-search-states*))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §T last-position
@@ -1451,9 +1800,13 @@
 (in-package #:limn/pdf-mode)
 
 (defun %wrap-cmd (sym)
-  "Wrap a defcommand symbol as keymap binding lambda (mirrors text-mode)."
+  "Wrap a defcommand symbol as keymap binding lambda (mirrors text-mode).
+   v0.39: also binds *current-win-id* from the event so all commands
+   that call %search-state / %set-search-state operate on the correct
+   per-window slot (multi-frame support)."
   (lambda (ev)
-    (let ((*last-key* (getf ev :|key|)))
+    (let ((*last-key*       (getf ev :|key|))
+          (*current-win-id* (or (getf ev :|win-id|) *current-win-id*)))
       (limn/cmd:call-interactively sym))))
 
 (defun %def (km spec sym)
@@ -1471,13 +1824,24 @@
 
     ;; Build keymap fresh.
     (let ((km (limn/keys:make-keymap)))
-      ;; navigation
-      (%def km "j"        (intern "PDF-SCROLL-DOWN" :cl-user))
-      (%def km "k"        (intern "PDF-SCROLL-UP"   :cl-user))
-      (%def km "<down>"   (intern "PDF-SCROLL-DOWN" :cl-user))
-      (%def km "<up>"     (intern "PDF-SCROLL-UP"   :cl-user))
-      (%def km "n"        (intern "PDF-NEXT-PAGE"   :cl-user))
-      (%def km "p"        (intern "PDF-PREV-PAGE"   :cl-user))
+      ;; ── navigation: vim hjkl + arrow keys ─────────────────────────
+      ;; v0.39: hjkl are pure scroll (screen-fraction via view/scroll).
+      ;; The old "h = highlight, l = next-page" sioyek defaults were
+      ;; dropped — they shadowed vim conventions and surprised dogfooders.
+      (%def km "h"        (intern "PDF-SCROLL-LEFT"  :cl-user))
+      (%def km "j"        (intern "PDF-SCROLL-DOWN"  :cl-user))
+      (%def km "k"        (intern "PDF-SCROLL-UP"    :cl-user))
+      (%def km "l"        (intern "PDF-SCROLL-RIGHT" :cl-user))
+      (%def km "<left>"   (intern "PDF-SCROLL-LEFT"  :cl-user))
+      (%def km "<down>"   (intern "PDF-SCROLL-DOWN"  :cl-user))
+      (%def km "<up>"     (intern "PDF-SCROLL-UP"    :cl-user))
+      (%def km "<right>"  (intern "PDF-SCROLL-RIGHT" :cl-user))
+      ;; page-level navigation.
+      ;; v0.39: n/p are smart — they walk search hits when a search is
+      ;; active (*pdf-search-state* non-nil) and fall back to page
+      ;; navigation otherwise.  J/K are always page-level.
+      (%def km "n"        (intern "PDF-N"           :cl-user))
+      (%def km "p"        (intern "PDF-P"           :cl-user))
       (%def km "J"        (intern "PDF-NEXT-PAGE"   :cl-user))
       (%def km "K"        (intern "PDF-PREV-PAGE"   :cl-user))
       ;; v0.38: b = prev-page (less convention).  NB: do NOT bind SPC —
@@ -1501,8 +1865,9 @@
       ;; v0.37 Phase D: half-page (vim C-d / C-u)
       (%def km "C-d"      (intern "PDF-HALF-PAGE-DOWN" :cl-user))
       (%def km "C-u"      (intern "PDF-HALF-PAGE-UP"   :cl-user))
-      ;; v0.37 Phase D: vim l = next page (h is kept as highlight-selection)
-      (%def km "l"        (intern "PDF-NEXT-PAGE" :cl-user))
+      ;; v0.39: full-page (vim C-f / C-b)
+      (%def km "C-f"      (intern "PDF-PAGE-DOWN"   :cl-user))
+      (%def km "C-b"      (intern "PDF-PAGE-UP"     :cl-user))
       ;; search
       (%def km "/"        (intern "PDF-ISEARCH-FORWARD"  :cl-user))
       (%def km "?"        (intern "PDF-ISEARCH-BACKWARD" :cl-user)) ; v0.37 Phase D
@@ -1513,8 +1878,8 @@
       ;; remaining after C-g).  pdf-isearch-quit is idempotent so binding
       ;; it here is safe even when no search is active.
       (%def km "C-g"      (intern "PDF-ISEARCH-QUIT" :cl-user))
-      ;; annotation
-      (%def km "h"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
+      ;; annotation — H stays as annotate (M-h is left free for users
+      ;; who want to bind highlight-selection somewhere out of hjkl's way).
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
       ;; v0.39 W13 — M-w copies the current PDF selection text onto
       ;; the kill-ring so a follow-up C-y in any text buffer pastes it.
@@ -1524,8 +1889,9 @@
       ;; v0.37 Phase D: file + session ops
       (%def km "o"        (intern "FIND-FILE"       :cl-user)) ; vim :e analog
       (%def km "q"        (intern "PDF-CLOSE"       :cl-user)) ; vim q
-      ;; v0.37 Phase D: M-x equivalent — vim :
-      (%def km ":"        (intern "EXECUTE-COMMAND" :cl-user))
+      ;; Note: ":" is intentionally NOT bound in pdf-mode — it should
+      ;; pass through as a literal character.  M-x (global keymap) is
+      ;; the command-palette; M-: (global keymap) evaluates a lisp form.
 
       ;; Register the mode (or update its keymap if already registered,
       ;; but respect user-overridden bindings).
@@ -1538,10 +1904,14 @@
               ;; First install: existing-km is empty → copy our km in.
               ;; Reinstall: existing-km has user overrides → merge defaults
               ;; only for keys without a binding.
-              (dolist (entry '(("j" pdf-scroll-down) ("k" pdf-scroll-up)
-                                ("<down>" pdf-scroll-down)
-                                ("<up>" pdf-scroll-up)
-                                ("n" pdf-next-page) ("p" pdf-prev-page)
+              (dolist (entry '(;; v0.39: vim-style hjkl scroll
+                                ("h" pdf-scroll-left)  ("j" pdf-scroll-down)
+                                ("k" pdf-scroll-up)    ("l" pdf-scroll-right)
+                                ("<left>"  pdf-scroll-left)
+                                ("<down>"  pdf-scroll-down)
+                                ("<up>"    pdf-scroll-up)
+                                ("<right>" pdf-scroll-right)
+                                ("n" pdf-n) ("p" pdf-p)   ; v0.39 smart dispatch
                                 ("b" pdf-prev-page)
                                 ("J" pdf-next-page) ("K" pdf-prev-page)
                                 ("G" pdf-goto-page) ("g g" pdf-first-page)
@@ -1551,18 +1921,18 @@
                                 ("d" pdf-toggle-dark)
                                 ("r" pdf-rotate-cw)
                                 ("/" pdf-isearch-forward)
+                                ("?" pdf-isearch-backward)
                                 ("C-g" pdf-isearch-quit)
-                                ("h" pdf-highlight-selection)
                                 ("H" pdf-annotate-selection)
                                 ("t" pdf-toc)
                                 ;; v0.37 Phase D additions
                                 ("C-d" pdf-half-page-down)
                                 ("C-u" pdf-half-page-up)
-                                ("l"   pdf-next-page)
-                                ("?"   pdf-isearch-backward)
+                                ;; v0.39: full-page (vim C-f / C-b)
+                                ("C-f" pdf-page-down)
+                                ("C-b" pdf-page-up)
                                 ("o"   find-file)
                                 ("q"   pdf-close)
-                                (":"   execute-command)
                                 ;; v0.39 W13
                                 ("M-w" pdf-copy-region-as-kill)))
                 (let* ((spec (first entry))
@@ -1606,7 +1976,19 @@
                      (handler-case
                          (pdf-mode-on-buffer-closed
                           :buffer-id (getf ev :|buffer-id|))
-                       (error () nil)))))))
+                       (error () nil))))
+          ;; v0.39: mouse-driven text selection.
+          ;; Left-click clears old selection; left-drag extends it.
+          ;; NB: hook names must use the "event/" prefix — that is what
+          ;; limn/dispatch:event-hook-name returns, and what the pump
+          ;; thread fires.  Bare "mouse-click" / "mouse-drag" never
+          ;; matched; that was the root cause of the feature not working.
+          (funcall (symbol-function add) "event/mouse-click"
+                   (lambda (ev)
+                     (handler-case (%on-mouse-click ev) (error () nil))))
+          (funcall (symbol-function add) "event/mouse-drag"
+                   (lambda (ev)
+                     (handler-case (%on-mouse-drag ev) (error () nil)))))))
 
     (setf *installed-p* t)
     sym-pm))

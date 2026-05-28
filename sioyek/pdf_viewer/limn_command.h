@@ -62,6 +62,7 @@ private:
     // ─── view/* ───────────────────────────────────────────────────────
     void cmd_view_set             (const QString& id, const QJsonObject& msg);
     void cmd_view_get             (const QString& id, const QJsonObject& msg);
+    void cmd_view_scroll          (const QString& id, const QJsonObject& msg);  // v0.39
     void cmd_view_overlays        (const QString& id, const QJsonObject& msg);
     // v0.15.1 visual selection (page-relative norm coords; per-window)
     void cmd_view_selection_set   (const QString& id, const QJsonObject& msg);
@@ -268,6 +269,9 @@ private:
     struct LimnFaceEntry {
         QString foreground;   // "#RRGGBB" or empty
         QString background;
+        // Route B: font-family for this face (e.g. "Terminus").  Empty means
+        // "inherit from the global status_font config / JetBrainsMono fallback".
+        QString family;
         bool    bold       = false;
         bool    italic     = false;
         bool    underline  = false;

@@ -5,9 +5,13 @@
 # Pass HEADLESS=0 to get a visible Qt window for visual inspection.
 #
 # Examples:
-#   ./backend/run-repl.sh                          # headless
-#   HEADLESS=0 ./backend/run-repl.sh               # visible Qt window
-#   LIMN_INITIAL=path/to.pdf ./backend/run-repl.sh # pre-open a file
+#   ./backend/run-repl.sh             # headless
+#   HEADLESS=0 ./backend/run-repl.sh  # visible Qt window
+#
+# To open a PDF: type (o "/path/to.pdf") at the REPL prompt.
+# (The old LIMN_INITIAL env var was removed in v0.39 — it took the
+# legacy MainWidget::open_document path instead of cmd_buffer_open,
+# which meant pdf-mode was never installed and j/k did nothing.)
 
 set -e
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -38,20 +38,32 @@
     (check (not (null cmd))
            "RELOAD-INIT-FILE registered as defcommand" nil)))
 
-;;; ── install-defaults wires M-x / M-r onto a keymap ──────────────────────
+(deftest default-config-eval-expression-defined
+  "limn/default-config provides eval-expression in :cl-user registry."
+  (%ensure-defaults-registered)
+  (let* ((sym (find-symbol "EVAL-EXPRESSION" :cl-user))
+         (cmd (and sym (limn/cmd:find-command sym))))
+    (check (not (null sym))
+           "EVAL-EXPRESSION symbol present in :cl-user" nil)
+    (check (not (null cmd))
+           "EVAL-EXPRESSION registered as defcommand" nil)))
+
+;;; ── install-defaults wires M-x / M-r / M-: onto a keymap ────────────────
 
 (deftest default-config-install-binds-mx-mr
-  "install-defaults binds M-x and M-r on the keymap it receives."
+  "install-defaults binds M-x, M-r, and M-: on the keymap it receives."
   (let* ((dc-pkg (find-package '#:limn/default-config))
          (install (and dc-pkg (find-symbol "INSTALL-DEFAULTS" dc-pkg)))
          (km (limn/keys:make-keymap)))
     (assert-true install "limn/default-config:install-defaults present")
     (when install
       (funcall (symbol-function install) km)
-      (let ((mx (limn/keys:lookup-sequence km '("M-x")))
-            (mr (limn/keys:lookup-sequence km '("M-r"))))
-        (check (functionp mx) "M-x bound on keymap" nil)
-        (check (functionp mr) "M-r bound on keymap" nil)))))
+      (let ((mx  (limn/keys:lookup-sequence km '("M-x")))
+            (mr  (limn/keys:lookup-sequence km '("M-r")))
+            (mco (limn/keys:lookup-sequence km '("M-:"))))
+        (check (functionp mx)  "M-x bound on keymap" nil)
+        (check (functionp mr)  "M-r bound on keymap" nil)
+        (check (functionp mco) "M-: bound on keymap" nil)))))
 
 ;;; ── load-init-file resilience ───────────────────────────────────────────
 

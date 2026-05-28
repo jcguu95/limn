@@ -69,6 +69,15 @@ struct LimnWindow {
     QJsonObject selection_end;
     QString     selection_mode = "char";
     QString     selection_text;
+    // v0.39.12 — actual per-character/per-line rects from MuPDF's
+    // text-selection algorithm, in page-norm coords (each entry is
+    // [x0 y0 x1 y1]).  Populated by cmd_view_selection_set when the
+    // window is focused, returned via view/selection-get so the Lisp
+    // annotation path can persist the real glyph rects instead of a
+    // thin bounding box synthesised from begin/end points (which
+    // dramatically underbooks the vertical extent on large-font
+    // titles).
+    QJsonArray  selection_rects;
 
     QJsonObject to_json() const;
 };

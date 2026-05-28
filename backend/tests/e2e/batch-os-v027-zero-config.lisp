@@ -1,6 +1,6 @@
 ;;;; v0.27 §N — zero-config first-run e2e
 ;;;;
-;;;; 驗證使用者第一次 launch limn、**沒 init.lisp**、直接 `limn paper.pdf` 就能用：
+;;;; 驗證使用者第一次 launch limn、**沒 init.lisp**、開檔後就能用：
 ;;;;   Ω1 launch 後 mupdf engine 自動套 pdf-mode
 ;;;;   Ω2 不靠 user init 按 j 翻頁
 ;;;;   Ω3 按 / 開搜尋

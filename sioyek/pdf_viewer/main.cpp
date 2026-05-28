@@ -132,9 +132,10 @@ int main(int argc, char* argv[]) {
     LimnInputFilter input_filter(&bridge, &command);
     app.installEventFilter(&input_filter);
 
-    if (!opts.initial_path.isEmpty()) {
-        window.open_document(opts.initial_path.toStdWString());
-    }
+    // v0.39: dropped startup-time `window.open_document(initial_path)`.
+    // Files are now opened exclusively via the bridge's buffer/open
+    // command so the buffer-opened event fires and pdf-mode installs
+    // for the window.  See limn_options.h for the rationale.
 
     int ret = app.exec();
     should_quit = true;

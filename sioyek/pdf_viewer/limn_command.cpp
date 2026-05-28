@@ -120,6 +120,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     // view/*
     if (cmd == "view/set")              { cmd_view_set             (id, msg); return; }
     if (cmd == "view/get")              { cmd_view_get             (id, msg); return; }
+    if (cmd == "view/scroll")           { cmd_view_scroll          (id, msg); return; }  // v0.39
     if (cmd == "view/overlays")         { cmd_view_overlays        (id, msg); return; }
     if (cmd == "view/selection-set")    { cmd_view_selection_set   (id, msg); return; }
     if (cmd == "view/selection-get")    { cmd_view_selection_get   (id, msg); return; }
@@ -1351,11 +1352,29 @@ void LimnCommand::cmd_display_sync_faces(const QString& id, const QJsonObject& m
         LimnFaceEntry entry;
         entry.foreground = f.value("foreground").toString();
         entry.background = f.value("background").toString();
+        // Route B: parse optional font-family.  The Lisp side sends
+        // {:name "minibuffer" :family "Terminus" ...} to specify a per-face
+        // font.  Any face may carry :family; only "minibuffer" is acted upon
+        // by the chrome bar at the moment.
+        entry.family     = f.value("family").toString();
         entry.bold       = f.value("bold").toBool(false);
         entry.italic     = f.value("italic").toBool(false);
         entry.underline  = f.value("underline").toBool(false);
         face_registry_.insert(name, entry);
     }
+
+    // Route B: push the "minibuffer" face's font family (if any) to the
+    // chrome bar so the echo/minibuffer line switches font at runtime.
+    // An absent or empty :family on the minibuffer face tells the bar to
+    // fall back to the status_font config value.
+    if (LimnChromeBar* cb = chrome_of(main_widget)) {
+        const QString mb_family = [&]() -> QString {
+            auto it = face_registry_.find("minibuffer");
+            return (it != face_registry_.end()) ? it->family : QString();
+        }();
+        cb->apply_face_font(mb_family);
+    }
+
     bridge->send_ok(id);
 }
 
@@ -1429,6 +1448,54 @@ QString extract_selection_text(DocumentView* dv, Document* doc,
     dv->get_text_selection(bp, ep, is_word, rects, text);
     return QString::fromStdWString(text);
 }
+
+// v0.39.12: same as extract_selection_text, but also writes the
+// per-character/per-line rects in page-norm coords into OUT_RECTS
+// (each entry is QJsonArray[4] = [x0,y0,x1,y1]).  Used by the Lisp
+// annotation flow so saved highlights match the visible glyph
+// extents (the begin/end bounding-box approach produced a thin
+// strip on large-font titles).
+QString extract_selection_text_and_rects(DocumentView* dv, Document* doc,
+                                          const QJsonObject& begin,
+                                          const QJsonObject& end,
+                                          const QString& mode,
+                                          QJsonArray* out_rects) {
+    if (out_rects) *out_rects = QJsonArray();
+    if (!dv || !doc) return QString();
+    AbsoluteDocumentPos bp, ep;
+    if (!page_norm_to_absolute(doc, begin.value("page").toInt(),
+                                begin.value("x").toDouble(),
+                                begin.value("y").toDouble(), &bp)) return QString();
+    if (!page_norm_to_absolute(doc, end.value("page").toInt(),
+                                end.value("x").toDouble(),
+                                end.value("y").toDouble(), &ep)) return QString();
+    std::deque<AbsoluteRect> rects;
+    std::wstring text;
+    const bool is_word = (mode == "word");
+    dv->get_text_selection(bp, ep, is_word, rects, text);
+    if (out_rects) {
+        for (const auto& ar : rects) {
+            DocumentRect dr = ar.to_document(doc);
+            if (dr.page < 0) continue;
+            const float pw = doc->get_page_width(dr.page);
+            const float ph = doc->get_page_height(dr.page);
+            if (pw <= 0 || ph <= 0) continue;
+            QJsonArray r;
+            r.append(static_cast<double>(dr.rect.x0) / pw);
+            r.append(static_cast<double>(dr.rect.y0) / ph);
+            r.append(static_cast<double>(dr.rect.x1) / pw);
+            r.append(static_cast<double>(dr.rect.y1) / ph);
+            // Per-rect page is implicit on most callers (selection is
+            // single-page in the current Lisp flow), but stamp it on
+            // each entry as a 5th field so multi-page callers later
+            // don't have to guess.  Plain Lisp readers that read
+            // 4-tuples will just ignore the trailing element.
+            r.append(dr.page);
+            out_rects->append(r);
+        }
+    }
+    return QString::fromStdWString(text);
+}
 }
 
 void LimnCommand::cmd_view_selection_set(const QString& id, const QJsonObject& msg) {
@@ -1453,17 +1520,21 @@ void LimnCommand::cmd_view_selection_set(const QString& id, const QJsonObject& m
     // document). For non-focused windows we fall back to synth text,
     // which is still deterministic + distinguishable across coords.
     QString real_text;
+    QJsonArray real_rects;
     if (windows->focused_id() == win_id) {
         DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
         Document* doc    = dv ? dv->get_document() : nullptr;
-        real_text = extract_selection_text(dv, doc,
-                                            win->selection_begin,
-                                            win->selection_end,
-                                            win->selection_mode);
+        real_text = extract_selection_text_and_rects(
+            dv, doc,
+            win->selection_begin,
+            win->selection_end,
+            win->selection_mode,
+            &real_rects);
     }
     win->selection_text = real_text.isEmpty()
         ? synth_sel_text(win->selection_begin, win->selection_end)
         : real_text;
+    win->selection_rects = real_rects;
 
     // If this window is focused, the visible raster needs to redraw
     // (so the selection rect appears immediately for pixel sampling).
@@ -1498,6 +1569,9 @@ void LimnCommand::cmd_view_selection_get(const QString& id, const QJsonObject& m
         data.insert("end",   win->selection_end);
         data.insert("mode",  win->selection_mode);
         data.insert("text",  win->selection_text);
+        // v0.39.12: real per-character rects in page-norm so Lisp
+        // annotation save can persist proper glyph extents.
+        data.insert("rects", win->selection_rects);
     }
     bridge->send_ok(id, data);
 }
@@ -1513,6 +1587,7 @@ void LimnCommand::cmd_view_selection_clear(const QString& id, const QJsonObject&
     win->selection_begin  = QJsonObject();
     win->selection_end    = QJsonObject();
     win->selection_text   = QString();
+    win->selection_rects  = QJsonArray();
     if (windows->focused_id() == win_id) {
         int rw = 1200, rh = 900;
         if (auto* gl = main_widget->opengl_widget()) {
@@ -1535,6 +1610,118 @@ void LimnCommand::cmd_view_get(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
+    bridge->send_ok(id, collect_view_state(win_id));
+}
+
+// ─── view/scroll ──────────────────────────────────────────────────────
+// v0.39: scroll by a fraction of the visible screen so callers never need
+// to know document coordinates or zoom level.
+//
+// Fields:
+//   :win-id  (string, required)
+//   :dy      (double) fraction of screen height — positive=down, negative=up
+//   :dx      (double) fraction of screen width  — positive=right (optional)
+//
+// Active window: applies immediately to the live DocumentView using
+//   delta = dy * (view_height / zoom)
+// Fallback (headless/zero-size window): uses current page height as a proxy
+//   so the win snapshot stays consistent with what would happen at a real size.
+
+void LimnCommand::cmd_view_scroll(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    if (!msg.contains("dy") && !msg.contains("dx")) {
+        bridge->send_fail(id, "view/scroll requires at least :dy or :dx");
+        return;
+    }
+
+    const double dy = msg.value("dy").toDouble(0.0);
+    const double dx = msg.value("dx").toDouble(0.0);
+
+    const bool is_active = (windows->focused_id() == win_id);
+    DocumentView* dv = (main_widget && is_active) ? main_widget->document_view() : nullptr;
+
+    // Compute effective screen dimensions in document space.
+    // When the Qt widget has real size (active window with visible Qt
+    // surface), use view_height/zoom — matches what move_screens does
+    // natively in document_view.cpp.  When the widget is zero-sized
+    // (headless / offscreen / pre-show), fall back to page height as a
+    // sensible proxy so callers still get a perceptible scroll delta.
+    const float zoom   = dv ? dv->get_zoom_level() : (win->zoom > 0.0f ? win->zoom : 1.0f);
+    const float view_h = dv ? static_cast<float>(dv->get_view_height()) : 0.0f;
+    const float view_w = dv ? static_cast<float>(dv->get_view_width())  : 0.0f;
+
+    float screen_h = (zoom > 0.0f && view_h > 0.0f) ? view_h / zoom : 0.0f;
+    float screen_w = (zoom > 0.0f && view_w > 0.0f) ? view_w / zoom : 0.0f;
+
+    if (screen_h <= 0.0f || screen_w <= 0.0f) {
+        Document* doc = (!win->buffer_id.isEmpty()) ? registry->lookup(win->buffer_id) : nullptr;
+        const float page_h = (doc && doc->num_pages() > 0)
+                              ? doc->get_page_height(std::max(0, win->page)) : 800.0f;
+        if (screen_h <= 0.0f) screen_h = page_h;
+        if (screen_w <= 0.0f) screen_w = page_h;  // square-ish proxy
+    }
+
+    // Compute new offsets.
+    //
+    // Sign conventions (wire API — what callers see):
+    //   :dy > 0  scroll down (reveal content below)
+    //   :dx > 0  scroll right (reveal content to the right)
+    //
+    // sioyek's internal offset coords are asymmetric (see absolute_to_window_pos
+    // in document_view.cpp): window_pos.y = (vpos.y - offset.y) * zoom + center
+    //                       window_pos.x = (vpos.x + offset.x) * zoom + center
+    // So "reveal content below" = increase offset_y (consistent with dy sign),
+    // but "reveal content to the right" = DECREASE offset_x.  Negate dx here
+    // so the wire API stays symmetric — callers don't have to know about the
+    // sioyek quirk.
+    const float cur_y = (is_active && dv) ? dv->get_offset_y() : win->offset_y;
+    const float cur_x = (is_active && dv) ? dv->get_offset_x() : win->offset_x;
+    float new_y = cur_y + static_cast<float>(dy) * screen_h;
+    float new_x = cur_x - static_cast<float>(dx) * screen_w;
+
+    // Don't pre-clamp at 0 — sioyek's set_offsets(force=false) below knows the
+    // real valid range (min/max_y_offset, min/max_x_offset) and clamps
+    // correctly, including for zoomed-in views where the valid x range can
+    // include negative values.  A naïve clamp at 0 made horizontal scroll feel
+    // walled-off early in v0.39 dogfood III.
+
+    win->offset_y = new_y;
+    win->offset_x = new_x;
+
+    // If active, push to DocumentView so the screen actually moves.
+    // force=false lets set_offsets clamp to the document's natural bounds;
+    // the clamped value flows back via dv->get_offset_y in collect_view_state.
+    // Also have to (a) rebuild the overlay raster — selection/overlay pixel
+    // rects move with the scroll — and (b) request an opengl repaint, just
+    // like cmd_view_set does.  Without (b) the offset updates internally but
+    // the screen stays frozen until the next unrelated paint trigger.
+    if (is_active && dv) {
+        dv->set_offsets(new_x, new_y, false);
+        // Sync win->page from the DV so view/get :page (and any code that
+        // reads focused_win->page) reflects what is actually visible after
+        // scrolling, not the last value set via view/set :page.
+        //
+        // Note: Document::get_page_offset() is a PAGE-NUMBERING offset (for
+        // documents that renumber, "page 1 is labeled v") — NOT the current
+        // page.  The real "page at current scroll position" API is
+        // get_center_page_number(), which delegates to
+        // current_document->get_offset_page_number(get_offset_y()).
+        const int cp = dv->get_center_page_number();
+        if (cp >= 0) win->page = cp;
+        int rw = 1200, rh = 900;
+        if (auto* gl = main_widget->opengl_widget()) {
+            if (gl->width()  > 0) rw = gl->width();
+            if (gl->height() > 0) rh = gl->height();
+        }
+        rebuild_overlay_raster(rw, rh);
+        if (auto* gl = main_widget->opengl_widget()) gl->update();
+    }
+
     bridge->send_ok(id, collect_view_state(win_id));
 }
 
@@ -3148,24 +3335,56 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         };
 
         if (type == "rect") {
-            float x0, y0, x1, y1;
+            double nx0, ny0, nx1, ny1;
             const QJsonArray ra = l.value("rect").toArray();
             if (ra.size() == 4) {
-                norm_to_pixel(ra[0].toDouble(), ra[1].toDouble(), &x0, &y0);
-                norm_to_pixel(ra[2].toDouble(), ra[3].toDouble(), &x1, &y1);
+                nx0 = ra[0].toDouble(); ny0 = ra[1].toDouble();
+                nx1 = ra[2].toDouble(); ny1 = ra[3].toDouble();
             } else if (l.contains("x0") && l.contains("y0")
                     && l.contains("x1") && l.contains("y1")) {
                 // v0.33b: alternate sugar — x0/y0/x1/y1 numeric fields.
-                norm_to_pixel(l.value("x0").toDouble(),
-                              l.value("y0").toDouble(), &x0, &y0);
-                norm_to_pixel(l.value("x1").toDouble(),
-                              l.value("y1").toDouble(), &x1, &y1);
+                nx0 = l.value("x0").toDouble(); ny0 = l.value("y0").toDouble();
+                nx1 = l.value("x1").toDouble(); ny1 = l.value("y1").toDouble();
             } else {
                 continue;
             }
+
+            // v0.39: use the DocumentView transform so rect overlays track
+            // zoom and scroll instead of being stuck in screen-norm space.
+            // Strategy: page-norm [0,1]² → raw page points → DV window pixels.
+            // Falls back to norm_to_pixel when DV is not yet initialised
+            // (headless / QOpenGLWidget context not materialised; view_width
+            // stays 0 until the real GL widget gets a resize event).
+            float x0, y0, x1, y1;
+            const bool dv_live =
+                dv->get_view_width() > 0 && dv->get_view_height() > 0;
+            if (dv_live) {
+                const float pw_pts = doc->get_page_width(page);
+                const float ph_pts = doc->get_page_height(page);
+                WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
+                    {page, (float)(nx0 * pw_pts), (float)(ny0 * ph_pts)});
+                WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
+                    {page, (float)(nx1 * pw_pts), (float)(ny1 * ph_pts)});
+                x0 = (float)wp0.x; y0 = (float)wp0.y;
+                x1 = (float)wp1.x; y1 = (float)wp1.y;
+            } else {
+                norm_to_pixel(nx0, ny0, &x0, &y0);
+                norm_to_pixel(nx1, ny1, &x1, &y1);
+            }
+
             QRectF r(QPointF(std::min(x0, x1), std::min(y0, y1)),
                      QPointF(std::max(x0, x1), std::max(y0, y1)));
-            painter.fillRect(r, col);
+            if (dv_live && current_rotation != 0) {
+                // DV gives widget-space pixels; painter has a rotation
+                // transform. Draw through an identity transform so the
+                // overlay lands at the correct widget position.
+                QTransform saved = painter.transform();
+                painter.resetTransform();
+                painter.fillRect(r, col);
+                painter.setTransform(saved);
+            } else {
+                painter.fillRect(r, col);
+            }
         }
         else if (type == "line") {
             const QJsonArray from = l.value("from").toArray();
@@ -3242,34 +3461,93 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         const QJsonObject se = focused_win->selection_end;
         const int sp_begin = sb.value("page").toInt(-1);
         const int sp_end   = se.value("page").toInt(-1);
+        // Render single-page selections.  We deliberately do NOT filter by
+        // current_page anymore: the selection coords already carry their own
+        // page (sp_begin), and document_to_window_pos_in_pixels_uncentered
+        // computes correct pixel positions for that page regardless of which
+        // page focused_win->page thinks is "current".  If the selection's
+        // page is off-screen, the resulting pixel coords are outside the
+        // raster bounds and Qt clips them — nothing visible, nothing wrong.
+        // This makes the highlight robust against win->page being stale,
+        // which is what blocked selections after j/k scroll on page 1+.
+        fprintf(stderr, "[limn-debug] selection render: sp_begin=%d sp_end=%d current_page=%d win->page=%d\n",
+                sp_begin, sp_end, current_page,
+                focused_win ? focused_win->page : -99);
         if (sp_begin == sp_end && sp_begin >= 0) {
-            // v0.37 fixup: single-path selection paint, matching the
-            // page-norm overlay loop's approach (page-norm × eff_w /
-            // eff_h, with painter's rotation transform already applied
-            // upstream).  Replaces v0.36-dogfood's two-path code that
-            // tried DocumentView::absolute_to_window_pos_in_pixels for
-            // "zoom/scroll correctness on real display" — that path is
-            // unreliable in headless (DV's viewport state isn't
-            // materialised when the QOpenGLWidget never gets a real
-            // GL context) AND inconsistent with how the overlay loop
-            // paints other layers (same page-norm input → same pixel
-            // output is the consistency contract).  Trade-off:
-            // selection rect won't track zoom/scroll on a real display
-            // — same limitation the overlay loop already has, scoped
-            // for fix elsewhere (e.g. v0.38 if we make both paths
-            // DV-aware together).
             const double bx = sb.value("x").toDouble();
             const double by = sb.value("y").toDouble();
             const double ex = se.value("x").toDouble();
             const double ey = se.value("y").toDouble();
-            const double x1 = std::min(bx, ex) * eff_w;
-            const double y1 = std::min(by, ey) * eff_h;
-            const double x2 = std::max(bx, ex) * eff_w;
-            const double y2 = std::max(by, ey) * eff_h;
-            QColor selcol(255, 255, 0);              // yellow
-            selcol.setAlphaF(0.5);
-            painter.fillRect(QRectF(QPointF(x1, y1), QPointF(x2, y2)),
-                              selcol);
+
+            QColor selcol(100, 180, 255);    // light blue 反藍
+            selcol.setAlphaF(0.35);
+            const bool dv_live = dv->get_view_width() > 0 && dv->get_view_height() > 0;
+
+            // Helper: fill one QRectF, respecting rotation transform.
+            auto fill_rect = [&](QRectF r) {
+                if (dv_live && current_rotation != 0) {
+                    QTransform saved = painter.transform();
+                    painter.resetTransform();
+                    painter.fillRect(r, selcol);
+                    painter.setTransform(saved);
+                } else {
+                    painter.fillRect(r, selcol);
+                }
+            };
+
+            // Primary path: ask sioyek for the actual per-character rects so
+            // the highlight follows text line breaks instead of drawing one
+            // big bounding box over the selected region.
+            bool drew_text_rects = false;
+            if (dv_live) {
+                AbsoluteDocumentPos abs_begin, abs_end;
+                if (page_norm_to_absolute(doc, sp_begin, bx, by, &abs_begin) &&
+                    page_norm_to_absolute(doc, sp_end,   ex, ey, &abs_end)) {
+                    std::deque<AbsoluteRect> sel_rects;
+                    std::wstring dummy;
+                    dv->get_text_selection(abs_begin, abs_end,
+                                           /*is_word=*/false, sel_rects, dummy);
+                    if (!sel_rects.empty()) {
+                        drew_text_rects = true;
+                        for (const auto& ar : sel_rects) {
+                            DocumentRect dr = ar.to_document(doc);
+                            // Filter by the selection's own page, not the
+                            // viewport's "current page" — see comment above
+                            // the outer if-block.
+                            if (dr.page != sp_begin) continue;
+                            WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
+                                DocumentPos{dr.page, dr.rect.x0, dr.rect.y0});
+                            WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
+                                DocumentPos{dr.page, dr.rect.x1, dr.rect.y1});
+                            fill_rect(QRectF(
+                                QPointF(std::min((float)wp0.x, (float)wp1.x),
+                                        std::min((float)wp0.y, (float)wp1.y)),
+                                QPointF(std::max((float)wp0.x, (float)wp1.x),
+                                        std::max((float)wp0.y, (float)wp1.y))));
+                        }
+                    }
+                }
+            }
+
+            // Fallback: bounding box (headless / image-only region / no rects).
+            if (!drew_text_rects) {
+                float px0, py0, px1, py1;
+                if (dv_live) {
+                    const float pw_pts = doc->get_page_width(sp_begin);
+                    const float ph_pts = doc->get_page_height(sp_begin);
+                    WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
+                        {sp_begin, (float)(bx * pw_pts), (float)(by * ph_pts)});
+                    WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
+                        {sp_begin, (float)(ex * pw_pts), (float)(ey * ph_pts)});
+                    px0 = (float)wp0.x; py0 = (float)wp0.y;
+                    px1 = (float)wp1.x; py1 = (float)wp1.y;
+                } else {
+                    px0 = (float)(bx * eff_w); py0 = (float)(by * eff_h);
+                    px1 = (float)(ex * eff_w); py1 = (float)(ey * eff_h);
+                }
+                fill_rect(QRectF(QPointF(std::min(px0, px1), std::min(py0, py1)),
+                                 QPointF(std::max(px0, px1), std::max(py0, py1))));
+            }
         }
     }
 }

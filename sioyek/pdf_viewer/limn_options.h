@@ -6,7 +6,11 @@
 //   --headless           start without showing window (for testing/CI)
 //   --socket <path>      socket path (default: /tmp/limn-<PID>)
 //   --test-mode          enable test/* command namespace
-//   <path>               positional: open this file in default window
+//
+// v0.39: positional <path> arg removed. Document opening goes through
+// the bridge's buffer/open command exclusively — having a CLI shortcut
+// that bypassed it created a dual-path bug where pdf-mode never got
+// installed for the loaded window (no buffer-opened event fired).
 //
 #include <QString>
 #include <QStringList>
@@ -15,7 +19,6 @@ struct LimnOptions {
     bool    headless     = false;
     bool    test_mode    = false;
     QString socket_path;          // empty means use default /tmp/limn-<PID>
-    QString initial_path;         // first non-flag positional, if any
 
     QString effective_socket_path() const;   // resolves the empty default
 
