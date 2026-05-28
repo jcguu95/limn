@@ -344,6 +344,7 @@
     (setf *pdf-last-search-query* query)
     (setf *pdf-filter-depth* 0)             ; fresh search resets filter colors
     (%set-overlay-history nil)               ; fresh search clears prior colors
+    (%set-narrow-stack nil)                  ; fresh search clears narrow stack
     (let ((state (%do-search-wire buffer-id query :case-sensitive case-sensitive)))
       ;; Seed narrow context from this search's hit lines.
       (when state
@@ -363,6 +364,7 @@
   (setf *pdf-filter-depth* 0)
   (%set-overlay-history nil)
   (%set-narrow-lines nil)
+  (%set-narrow-stack nil)
   (%limn-call "view/overlays" :|win-id| *current-win-id* :|layers| '()))
 
 (defun pdf-search-advance (state)
@@ -536,6 +538,67 @@
                     (gethash (cons page norm) tbl))
             collect h)))
 
+;; v0.39.16 narrow-stack — C-g pops one M-n level, not the whole search.
+;;
+;; Each successful M-n pushes a snapshot of the PRIOR state onto the
+;; stack BEFORE applying the new narrow.  pdf-isearch-quit (C-g) now:
+;;   - pops one snapshot if stack non-empty (restore prior level)
+;;   - full-reset if stack empty
+;;
+;; Snapshot captures everything needed to re-render the prior level:
+;; the search-state's hits + index, the narrow-line set, the overlay
+;; history, and the filter depth (for the color).
+(defvar *pdf-narrow-stack* (make-hash-table :test #'equal)
+  "win-id → list of narrow snapshots from prior levels.  Each snapshot
+   is a plist with :|state| :|narrow| :|history| :|depth|.")
+
+(defun %narrow-stack () (gethash *current-win-id* *pdf-narrow-stack*))
+(defun %set-narrow-stack (v)
+  (if v (setf (gethash *current-win-id* *pdf-narrow-stack*) v)
+        (remhash *current-win-id* *pdf-narrow-stack*))
+  v)
+
+(defun %snapshot-search-state (s)
+  "Return a plist that fully captures S so %restore can rebuild it."
+  (when s
+    (list :|buffer-id| (pdf-search-state-buffer-id s)
+          :|query|     (pdf-search-state-query s)
+          :|hits|      (pdf-search-state-hits s)
+          :|index|     (pdf-search-state-current-index s))))
+
+(defun %restore-search-state (snap)
+  "Replace *pdf-search-states*[win-id] with a state rebuilt from SNAP."
+  (when snap
+    (%set-search-state
+     (make-pdf-search-state
+      :buffer-id    (getf snap :|buffer-id|)
+      :query        (getf snap :|query|)
+      :hits         (getf snap :|hits|)
+      :current-index (getf snap :|index|)))))
+
+(defun %push-narrow-level ()
+  "Snapshot the CURRENT level (state + narrow + history + depth) onto
+   *pdf-narrow-stack*.  Called by M-n before applying the new narrow,
+   so a subsequent C-g can restore this point."
+  (let ((snap (list :|state|   (%snapshot-search-state (%search-state))
+                    :|narrow|  (%narrow-lines)
+                    :|history| (%overlay-history)
+                    :|depth|   *pdf-filter-depth*)))
+    (%set-narrow-stack (cons snap (%narrow-stack)))))
+
+(defun %pop-narrow-level ()
+  "Restore the most recent snapshot off *pdf-narrow-stack*.  Returns
+   T on pop, NIL when stack was empty."
+  (let ((stack (%narrow-stack)))
+    (when (consp stack)
+      (let ((snap (first stack)))
+        (%set-narrow-stack (rest stack))
+        (%restore-search-state (getf snap :|state|))
+        (%set-narrow-lines    (getf snap :|narrow|))
+        (%set-overlay-history (getf snap :|history|))
+        (setf *pdf-filter-depth* (getf snap :|depth|))
+        t))))
+
 ;; v0.39.11 A4 follow-up: track filter depth so successive M-n / M-f
 ;; rotate colors (mild rainbow).  Reset whenever a fresh / search runs.
 (defvar *pdf-filter-depth* 0
@@ -593,6 +656,13 @@
 ;;; top-left of the hit's first rect, end = bottom-right of the
 ;;; LAST rect on the same page (handles multi-rect line wraps).
 (defun %select-current-hit (state)
+  ;; v0.39.16: shrink end-point by EPS so sioyek's get_text_selection
+  ;; doesn't round to the NEXT character.  Previously selecting "integ"
+  ;; ended up with "integr" because end.x landed exactly on the right
+  ;; edge of "g" = left edge of "r", and sioyek's char-bbox round-to-
+  ;; nearest included "r".  EPS is in page-norm units; 0.0005 ≈ ~0.5
+  ;; character width on a typical page, plenty to land inside the rect
+  ;; but well shy of the hit's leftmost char.
   (when state
     (let* ((hits (pdf-search-state-hits state))
            (idx  (pdf-search-state-current-index state))
@@ -601,20 +671,24 @@
            (rects (and hit (getf hit :|rects|)))
            (first-r (and (consp rects) (first rects)))
            (last-r  (and (consp rects)
-                         (or (car (last rects)) first-r))))
+                         (or (car (last rects)) first-r)))
+           (eps 0.0005))
       (when (and (integerp page) first-r last-r
                  (>= (length first-r) 4) (>= (length last-r) 4))
-        (handler-case
-            (%limn-call "view/selection-set"
-                        :|win-id| *current-win-id*
-                        :|begin| (list :|page| page
-                                       :|x|    (nth 0 first-r)
-                                       :|y|    (nth 1 first-r))
-                        :|end|   (list :|page| page
-                                       :|x|    (nth 2 last-r)
-                                       :|y|    (nth 3 last-r))
-                        :|mode|  "char")
-          (error () nil))))))
+        (let* ((bx (nth 0 first-r))
+               (by (nth 1 first-r))
+               (raw-ex (nth 2 last-r))
+               (raw-ey (nth 3 last-r))
+               ;; Pull end inward, but never past begin.
+               (ex (max (- raw-ex eps) (+ bx eps)))
+               (ey (max (- raw-ey eps) (+ by eps))))
+          (handler-case
+              (%limn-call "view/selection-set"
+                          :|win-id| *current-win-id*
+                          :|begin| (list :|page| page :|x| bx :|y| by)
+                          :|end|   (list :|page| page :|x| ex :|y| ey)
+                          :|mode|  "char")
+            (error () nil)))))))
 
 ;;; --- v0.39.11 A4: narrow + fuzzy filters --------------------------
 
@@ -1287,8 +1361,29 @@
                (handler-case (limn/pdf-mode::%limn-call "minibuffer/close")
                  (error () nil)))))
         (t
-         (limn/pdf-mode:pdf-search-reset)
-         (limn/pdf-mode::%refresh-search-modeline))))))
+         ;; v0.39.16: if any M-n level is on the stack, pop ONE level
+         ;; (restore prior narrow) instead of full-reset.  Stack
+         ;; empty → full reset (legacy behaviour).
+         (cond
+           ((limn/pdf-mode::%pop-narrow-level)
+            ;; Restored prior level — re-emit overlays + selection +
+            ;; modeline so the user sees they backed off one step.
+            (limn/pdf-mode::%emit-search-overlays
+             (limn/pdf-mode::%search-state))
+            (limn/pdf-mode::%select-current-hit
+             (limn/pdf-mode::%search-state))
+            (limn/pdf-mode::%refresh-search-modeline)
+            (handler-case
+                (limn/pdf-mode::%limn-call
+                 "message/echo"
+                 :|text| (format nil "Narrow level ~A"
+                                 limn/pdf-mode::*pdf-filter-depth*))
+              (error () nil)))
+           (t
+            ;; Stack empty → full reset.
+            (limn/pdf-mode:pdf-search-reset)
+            (limn/pdf-mode::%set-narrow-stack nil)
+            (limn/pdf-mode::%refresh-search-modeline))))))))
 
 ;;; v0.37 Phase D: search backward.  Same prompt as forward but the
 ;;; result-cursor starts at the last hit (vim ? semantic).  Reuses the
@@ -1425,6 +1520,9 @@
                                raw-new-hits)))
                 ;; History + depth bump happen regardless of result
                 ;; count so prior colors stay visible even on no-match.
+                ;; Snapshot the PRIOR level before mutating anything
+                ;; so C-g can pop back here.
+                (limn/pdf-mode::%push-narrow-level)
                 (limn/pdf-mode::%set-overlay-history
                  (cons prior-payload prior-history))
                 (setf limn/pdf-mode::*pdf-filter-depth* next-depth)
