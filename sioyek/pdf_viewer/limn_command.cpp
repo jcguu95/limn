@@ -1236,6 +1236,26 @@ QString validate_layer(const QJsonObject& layer) {
     const int page = layer.value("page").toInt();
     if (page < 0) return QStringLiteral("layer 'page' must be >= 0");
 
+    // v0.40: "icon" layers carry their own defaults — color #FFAA00 and
+    // opacity 0.85 are applied at paint time if omitted, so the
+    // shared-field validation below (color required, opacity required)
+    // would reject otherwise-valid icons.  Validate icon fields
+    // separately and short-circuit.
+    if (type == "icon") {
+        if (!layer.contains("x") || !layer.value("x").isDouble())
+            return QStringLiteral("icon overlay missing or invalid 'x'");
+        if (!layer.contains("y") || !layer.value("y").isDouble())
+            return QStringLiteral("icon overlay missing or invalid 'y'");
+        if (layer.contains("color")
+            && !is_valid_hex_color(layer.value("color").toString()))
+            return QStringLiteral("icon 'color' must be #RRGGBB");
+        if (layer.contains("opacity") && !layer.value("opacity").isDouble())
+            return QStringLiteral("icon 'opacity' must be numeric");
+        if (layer.contains("size") && !layer.value("size").isDouble())
+            return QStringLiteral("icon 'size' must be numeric");
+        return QString();
+    }
+
     // v0.33b: 'face' may substitute for 'color' — the face registry
     // supplies the foreground hex at paint time. Without either, the
     // layer can't render.
