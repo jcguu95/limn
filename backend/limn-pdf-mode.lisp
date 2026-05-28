@@ -40,6 +40,7 @@
    #:*pdf-zoom-out-factor*
    #:*pdf-default-zoom*              ; v0.38 B18
    #:*pdf-annotation-color*
+   #:*pdf-highlight-colors*           ; v0.39 D-v2 feature 7
    ;; §B search state
    #:*pdf-search-state* #:make-pdf-search-state
    #:pdf-search-state-buffer-id #:pdf-search-state-query
@@ -237,6 +238,26 @@
 
 #-:limn/custom-available
 (defvar *pdf-annotation-color* "#FFD700")
+
+;; v0.39 D-v2 (feature 7): color-coded highlights via numeric prefix-arg.
+;; `C-1 H` → yellow (default); `C-2 H` → red; etc.  Indices match user-
+;; visible 1..N (1 = default).  Falls back to *pdf-annotation-color* for
+;; unknown indices so the user can't accidentally end up with no color.
+(defvar *pdf-highlight-colors*
+  '((1 . "#FFD700")  ; yellow (default)
+    (2 . "#FF8888")  ; red
+    (3 . "#88FF88")  ; green
+    (4 . "#88CCFF")  ; blue
+    (5 . "#FFAAFF")) ; pink
+  "Alist of (PREFIX-INDEX . HEX-COLOR-STRING) for prefix-arg-driven
+   highlight colors.  Used by pdf-highlight-selection and
+   pdf-annotate-selection when invoked with a numeric prefix.")
+
+(defun %prefix->color (prefix)
+  "Resolve a numeric PREFIX (or NIL) to a hex color via *pdf-highlight-colors*.
+   NIL prefix → default yellow.  Unknown index → default yellow."
+  (or (and (integerp prefix) (cdr (assoc prefix *pdf-highlight-colors*)))
+      *pdf-annotation-color*))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §B search state + helpers
@@ -1200,14 +1221,25 @@
                      :|rects| (list (list (min bx ex) (min by ey)
                                           (max bx ex) (max by ey))))))))))))
 
-(defun limn/pdf-mode::%add-annotation (note)
-  "Build + persist + paint an annotation from the current selection."
+(defun limn/pdf-mode::%add-annotation (note &key color type)
+  "Build + persist + paint an annotation from the current selection.
+   v0.39 D-v2: accepts :COLOR (hex string; defaults to *pdf-annotation-color*)
+   and :TYPE (:highlight | :note | :both; defaults to :highlight, or :both
+   when NOTE is non-empty and TYPE is unspecified).  On success, clears
+   the live blue selection band so only the saved yellow overlay remains,
+   and echoes a confirmation in the minibuffer."
   (let* ((sel (limn/pdf-mode::%selection))
          (rects (and sel (getf sel :|rects|)))
          (sel-page (and sel (getf sel :|page|)))
          (v (limn/pdf-mode::%focused-view))
          (page (or sel-page (getf v :|page|) 0))
-         (path (or (limn/pdf-mode::%current-pdf-path) "/tmp/unknown.pdf")))
+         (path (or (limn/pdf-mode::%current-pdf-path) "/tmp/unknown.pdf"))
+         (effective-color (or color limn/pdf-mode:*pdf-annotation-color*))
+         (effective-type
+           (or type
+               (if (and note (stringp note) (plusp (length note)))
+                   :both
+                   :highlight))))
     (when (and rects (consp rects))
       (let* ((existing (limn/pdf-mode:pdf-annotations-load path))
              ;; replace if a different anno covers same first rect
@@ -1220,7 +1252,8 @@
                                         (first rects))))
                          existing))
              (new (limn/pdf-mode:make-pdf-annotation
-                   :page page :rects rects :note note)))
+                   :page page :rects rects :note note
+                   :color effective-color :type effective-type)))
         (let ((all (append filtered (list new))))
           (limn/pdf-mode:pdf-annotations-save path all)
           ;; v0.37 Phase F: the wire schema for view/overlays takes
@@ -1231,29 +1264,296 @@
           ;; returned overlays=[].  Fixed schema name.
           (limn/pdf-mode::%limn-call
            "view/overlays" :|win-id| "w1"
-           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload all)))))))
+           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload all))
+          ;; v0.39 D-v2 (feature 2): clear the live selection band so the
+          ;; user sees only the saved yellow overlay, not blue + yellow.
+          (handler-case
+              (limn/pdf-mode::%limn-call
+               "view/selection-clear" :|win-id| "w1")
+            (error () nil))
+          ;; Confirmation echo so the user knows it landed.
+          (handler-case
+              (limn/pdf-mode::%limn-call
+               "message/echo"
+               :|text| (if (and note (stringp note) (plusp (length note)))
+                            "Annotation saved"
+                            "Highlight saved"))
+            (error () nil))
+          t)))))
 
-(limn/pdf-mode::%defcmd pdf-highlight-selection nil
-  (lambda ()
-    (limn/pdf-mode::%add-annotation nil)))
+;; v0.39 D-v2 (feature 1+7): H is the fast path — no prompt, type :highlight.
+;; Optional numeric prefix-arg picks a color from *pdf-highlight-colors*.
+(limn/pdf-mode::%defcmd pdf-highlight-selection "p"
+  (lambda (&optional prefix)
+    (let ((color (limn/pdf-mode::%prefix->color prefix)))
+      (limn/pdf-mode::%add-annotation nil
+                                       :color color
+                                       :type :highlight))))
 
-(limn/pdf-mode::%defcmd pdf-annotate-selection nil
-  (lambda ()
+;; v0.39 D-v2 (feature 1+7): M-h prompts for a note; type :both if note
+;; non-empty else :highlight.  Numeric prefix-arg picks color.
+(limn/pdf-mode::%defcmd pdf-annotate-selection "p"
+  (lambda (&optional prefix)
     (let* ((reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
            (read-fn (and reader (boundp reader) (symbol-value reader)))
-           (note (and read-fn (funcall read-fn "Note: "))))
-      (limn/pdf-mode::%add-annotation note))))
+           (note (and read-fn
+                      (handler-case (funcall read-fn "Note: ")
+                        (error () nil))))
+           (color (limn/pdf-mode::%prefix->color prefix))
+           (type  (if (and note (stringp note) (plusp (length note)))
+                       :both
+                       :highlight)))
+      (limn/pdf-mode::%add-annotation note :color color :type type))))
 
+;; v0.39 D-v2 (feature 8): echo result of delete.
 (limn/pdf-mode::%defcmd pdf-delete-annotation nil
   (lambda ()
     (let* ((path (limn/pdf-mode::%current-pdf-path))
            (v (limn/pdf-mode::%focused-view))
            (page (or (getf v :|page|) 0))
            (off-x (or (getf v :|offset-x|) 0.5))
-           (off-y (or (getf v :|offset-y|) 0.5)))
-      (when path
-        (limn/pdf-mode:pdf-annotations-delete-at-point
-         path page off-x off-y)))))
+           (off-y (or (getf v :|offset-y|) 0.5))
+           (deleted (and path
+                          (limn/pdf-mode:pdf-annotations-delete-at-point
+                           path page off-x off-y))))
+      (handler-case
+          (limn/pdf-mode::%limn-call
+           "message/echo"
+           :|text| (if deleted "Annotation deleted" "No annotation here"))
+        (error () nil)))))
+
+;; ── v0.39 D-v2 helpers (feature 3, 4, 5, 6) ─────────────────────────
+
+(defun limn/pdf-mode::%annotation-at-current-point ()
+  "Look up the annotation under the current view's center (offset-x/y).
+   Returns (VALUES ANNOTATION PATH PAGE) or NIL when none."
+  (let* ((path (limn/pdf-mode::%current-pdf-path))
+         (v (limn/pdf-mode::%focused-view))
+         (page (or (getf v :|page|) 0))
+         (off-x (or (getf v :|offset-x|) 0.5))
+         (off-y (or (getf v :|offset-y|) 0.5)))
+    (when path
+      (let ((ann (limn/pdf-mode:pdf-annotations-at-point
+                  path page off-x off-y)))
+        (values ann path page)))))
+
+(defun limn/pdf-mode::%annotation-preview (a &key (max-len 60))
+  "Build a short preview string for annotation A.
+   Truncates note text at MAX-LEN with an ellipsis.
+   Returns '[highlight]' for pure highlights, '[note]' for point-notes."
+  (let* ((note (limn/pdf-mode:pdf-annotation-note a))
+         (type (limn/pdf-mode:pdf-annotation-type a)))
+    (cond
+      ((and note (stringp note) (plusp (length note)))
+       (if (> (length note) max-len)
+           (concatenate 'string (subseq note 0 max-len) "…")
+           note))
+      ((eq type :note) "[note]")
+      (t "[highlight]"))))
+
+(defun limn/pdf-mode::%tags-suffix (a)
+  "Format an annotation's tags as ' [tag1, tag2]' or '' when none."
+  (let ((tags (limn/pdf-mode:pdf-annotation-tags a)))
+    (if (and tags (consp tags))
+        (format nil " [~{~a~^, ~}]" tags)
+        "")))
+
+;; v0.39 D-v2 (feature 3): show annotation note at current point.
+(limn/pdf-mode::%defcmd pdf-show-note-at-point nil
+  (lambda ()
+    (multiple-value-bind (ann path page)
+        (limn/pdf-mode::%annotation-at-current-point)
+      (declare (ignore path page))
+      (let ((text
+              (cond
+                ((null ann) "No annotation here")
+                (t
+                 (let* ((note (limn/pdf-mode:pdf-annotation-note ann))
+                        (body (cond
+                                ((and note (stringp note) (plusp (length note)))
+                                 (if (> (length note) 200)
+                                     (concatenate 'string
+                                                  (subseq note 0 200) "…")
+                                     note))
+                                (t "Highlight (no note)")))
+                        (tags (limn/pdf-mode::%tags-suffix ann)))
+                   (concatenate 'string body tags))))))
+        (handler-case
+            (limn/pdf-mode::%limn-call "message/echo" :|text| text)
+          (error () nil))))))
+
+;; v0.39 D-v2 (feature 4): list all annotations, pick via completing-read,
+;; jump to that page.  Optionally pushes a position mark first so C-o
+;; returns to the pre-jump position (B branch — graceful fallback if absent).
+(limn/pdf-mode::%defcmd pdf-list-notes nil
+  (lambda ()
+    (let* ((path (limn/pdf-mode::%current-pdf-path))
+           (anns (and path (limn/pdf-mode:pdf-annotations-load path))))
+      (cond
+        ((null path)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                         :|text| "No PDF in current buffer")
+           (error () nil)))
+        ((null anns)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                         :|text| "No annotations in this PDF")
+           (error () nil)))
+        (t
+         (let* ((sorted (sort (copy-list anns)
+                               (lambda (a b)
+                                 (let ((pa (limn/pdf-mode:pdf-annotation-page a))
+                                       (pb (limn/pdf-mode:pdf-annotation-page b)))
+                                   (if (= pa pb)
+                                       (< (or (limn/pdf-mode:pdf-annotation-created-at a) 0)
+                                          (or (limn/pdf-mode:pdf-annotation-created-at b) 0))
+                                       (< pa pb))))))
+                (entries
+                  (mapcar
+                   (lambda (a)
+                     (format nil "p.~a  ~a~a"
+                              (1+ (limn/pdf-mode:pdf-annotation-page a))
+                              (limn/pdf-mode::%annotation-preview a)
+                              (limn/pdf-mode::%tags-suffix a)))
+                   sorted))
+                (completing (find-symbol "COMPLETING-READ" '#:limn/completion))
+                (pick (and completing (fboundp completing)
+                            (handler-case
+                                (funcall (symbol-function completing)
+                                         "Annotation: " entries :require-match t)
+                              (error () nil)))))
+           (when (and pick (stringp pick) (plusp (length pick)))
+             (let* ((idx (position pick entries :test #'string=))
+                    (target (and idx (nth idx sorted))))
+               (when target
+                 ;; Optional: push a mark via B-branch helper if present.
+                 (let ((push-mark (find-symbol "%PDF-PUSH-MARK" :limn/pdf-mode)))
+                   (when (and push-mark (fboundp push-mark))
+                     (handler-case (funcall (symbol-function push-mark))
+                       (error () nil))))
+                 (limn/pdf-mode::%page-set
+                  (limn/pdf-mode:pdf-annotation-page target)))))))))))
+
+;; v0.39 D-v2 (feature 5): edit the note text on the annotation at point.
+;; UX trade-off: the underlying minibuffer-read does not support an
+;; initial-input parameter, so we surface the current note in the prompt
+;; and treat an empty submission as "keep current".  C-g cancels.
+(limn/pdf-mode::%defcmd pdf-edit-note-at-point nil
+  (lambda ()
+    (multiple-value-bind (ann path page)
+        (limn/pdf-mode::%annotation-at-current-point)
+      (declare (ignore page))
+      (cond
+        ((null ann)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                         :|text| "No annotation here")
+           (error () nil)))
+        (t
+         (let* ((current (or (limn/pdf-mode:pdf-annotation-note ann) ""))
+                (preview (if (> (length current) 40)
+                             (concatenate 'string (subseq current 0 40) "…")
+                             current))
+                (prompt (format nil "Edit note [~a]: " preview))
+                (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+                (read-fn (and reader (boundp reader) (symbol-value reader)))
+                (new-note (and read-fn
+                                (handler-case (funcall read-fn prompt)
+                                  (error () nil)))))
+           ;; Empty input → keep existing; C-g → reader signals, caught
+           ;; above → also keeps existing.  Otherwise mutate + re-save.
+           (when (and new-note (stringp new-note) (plusp (length new-note)))
+             (setf (limn/pdf-mode:pdf-annotation-note ann) new-note)
+             ;; Bump type :highlight → :both if we added a note.
+             (when (eq (limn/pdf-mode:pdf-annotation-type ann) :highlight)
+               (setf (limn/pdf-mode:pdf-annotation-type ann) :both))
+             ;; Re-save the whole list (save invalidates cache).  We
+             ;; mutated the struct in place, so a re-load picks up the
+             ;; new value.
+             (let ((all (limn/pdf-mode:pdf-annotations-load path)))
+               ;; The mutated ANN might not be eq to any element in ALL
+               ;; (load builds fresh structs).  Find by id and replace.
+               (let* ((id (limn/pdf-mode:pdf-annotation-id ann))
+                      (updated
+                        (mapcar (lambda (a)
+                                  (if (equal (limn/pdf-mode:pdf-annotation-id a) id)
+                                      ann
+                                      a))
+                                all)))
+                 (limn/pdf-mode:pdf-annotations-save path updated)
+                 (limn/pdf-mode::%limn-call
+                  "view/overlays" :|win-id| "w1"
+                  :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload updated))))
+             (handler-case
+                 (limn/pdf-mode::%limn-call "message/echo"
+                                             :|text| "Note updated")
+               (error () nil)))))))))
+
+;; v0.39 D-v2 (feature 6): add/remove tags on the annotation at point.
+(limn/pdf-mode::%defcmd pdf-tag-annotation nil
+  (lambda ()
+    (multiple-value-bind (ann path page)
+        (limn/pdf-mode::%annotation-at-current-point)
+      (declare (ignore page))
+      (cond
+        ((null ann)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                         :|text| "No annotation here")
+           (error () nil)))
+        (t
+         (let* ((current-tags (limn/pdf-mode:pdf-annotation-tags ann))
+                (current-str (format nil "~{~a~^, ~}" (or current-tags '())))
+                (prompt (if (plusp (length current-str))
+                             (format nil "Tags (current: ~a): " current-str)
+                             "Tags (comma-separated): "))
+                (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+                (read-fn (and reader (boundp reader) (symbol-value reader)))
+                (raw (and read-fn
+                           (handler-case (funcall read-fn prompt)
+                             (error () nil)))))
+           (when (stringp raw)
+             ;; Parse: split on comma, trim whitespace, drop empties.
+             ;; An entirely empty input clears the tag list.
+             (let* ((parts (limn/pdf-mode::%split-string raw #\,))
+                    (cleaned
+                      (loop for p in parts
+                             for trimmed = (string-trim
+                                            '(#\Space #\Tab #\Newline) p)
+                             when (plusp (length trimmed))
+                               collect trimmed)))
+               (setf (limn/pdf-mode:pdf-annotation-tags ann) cleaned)
+               ;; Persist: load, replace-by-id, save.
+               (let* ((all (limn/pdf-mode:pdf-annotations-load path))
+                      (id (limn/pdf-mode:pdf-annotation-id ann))
+                      (updated
+                        (mapcar (lambda (a)
+                                  (if (equal (limn/pdf-mode:pdf-annotation-id a) id)
+                                      ann
+                                      a))
+                                all)))
+                 (limn/pdf-mode:pdf-annotations-save path updated))
+               (handler-case
+                   (limn/pdf-mode::%limn-call
+                    "message/echo"
+                    :|text| (if cleaned
+                                 (format nil "Tags: ~{~a~^, ~}" cleaned)
+                                 "Tags cleared"))
+                 (error () nil))))))))))
+
+(defun limn/pdf-mode::%split-string (s ch)
+  "Split string S on character CH.  Returns list of substrings (may
+   include empty strings for adjacent delimiters)."
+  (let ((acc nil)
+        (start 0)
+        (len (length s)))
+    (dotimes (i len)
+      (when (char= (char s i) ch)
+        (push (subseq s start i) acc)
+        (setf start (1+ i))))
+    (push (subseq s start len) acc)
+    (nreverse acc)))
 
 ;;; v0.39 W13 — copy current PDF selection text onto the kill-ring.
 ;;; Emacs convention: M-w `copy-region-as-kill`.  PDF read-only buffers
@@ -1878,9 +2178,23 @@
       ;; remaining after C-g).  pdf-isearch-quit is idempotent so binding
       ;; it here is safe even when no search is active.
       (%def km "C-g"      (intern "PDF-ISEARCH-QUIT" :cl-user))
-      ;; annotation — H stays as annotate (M-h is left free for users
-      ;; who want to bind highlight-selection somewhere out of hjkl's way).
-      (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
+      ;; annotation — v0.39 D-v2 split:
+      ;;   H    → fast highlight (no prompt, type :highlight)
+      ;;   M-h  → prompting annotate (note → type :both)
+      ;; Numeric prefix-arg picks a color from *pdf-highlight-colors*
+      ;; (e.g. `C-3 H` = green).
+      (%def km "H"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
+      (%def km "M-h"      (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
+      ;; D-v2 (feature 3): show note at point.
+      (%def km "v"        (intern "PDF-SHOW-NOTE-AT-POINT"  :cl-user))
+      ;; D-v2 (feature 4): list + jump.
+      (%def km "M-N"      (intern "PDF-LIST-NOTES"          :cl-user))
+      ;; D-v2 (feature 5): edit note at point.
+      (%def km "E"        (intern "PDF-EDIT-NOTE-AT-POINT"  :cl-user))
+      ;; D-v2 (feature 6): add/remove tags.
+      (%def km "M-t"      (intern "PDF-TAG-ANNOTATION"      :cl-user))
+      ;; D-v2 (feature 8): delete annotation at point.
+      (%def km "D"        (intern "PDF-DELETE-ANNOTATION"   :cl-user))
       ;; v0.39 W13 — M-w copies the current PDF selection text onto
       ;; the kill-ring so a follow-up C-y in any text buffer pastes it.
       (%def km "M-w"      (intern "PDF-COPY-REGION-AS-KILL" :cl-user))
@@ -1923,7 +2237,14 @@
                                 ("/" pdf-isearch-forward)
                                 ("?" pdf-isearch-backward)
                                 ("C-g" pdf-isearch-quit)
-                                ("H" pdf-annotate-selection)
+                                ;; v0.39 D-v2: H = fast highlight, M-h = prompting annotate
+                                ("H"   pdf-highlight-selection)
+                                ("M-h" pdf-annotate-selection)
+                                ("v"   pdf-show-note-at-point)
+                                ("M-N" pdf-list-notes)
+                                ("E"   pdf-edit-note-at-point)
+                                ("M-t" pdf-tag-annotation)
+                                ("D"   pdf-delete-annotation)
                                 ("t" pdf-toc)
                                 ;; v0.37 Phase D additions
                                 ("C-d" pdf-half-page-down)
