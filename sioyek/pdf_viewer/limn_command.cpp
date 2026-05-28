@@ -1646,11 +1646,17 @@ void LimnCommand::cmd_view_scroll(const QString& id, const QJsonObject& msg) {
     // the screen stays frozen until the next unrelated paint trigger.
     if (is_active && dv) {
         dv->set_offsets(new_x, new_y, false);
-        // Sync win->page from the DV so that subsequent rebuild_overlay_raster
-        // calls use the correct current_page (= what's actually visible), not
-        // the last page set via view/set :page.  Without this, selections made
-        // after scrolling with j/k are invisible because current_page is stale.
-        win->page = dv->get_page_offset();
+        // Sync win->page from the DV so view/get :page (and any code that
+        // reads focused_win->page) reflects what is actually visible after
+        // scrolling, not the last value set via view/set :page.
+        //
+        // Note: Document::get_page_offset() is a PAGE-NUMBERING offset (for
+        // documents that renumber, "page 1 is labeled v") — NOT the current
+        // page.  The real "page at current scroll position" API is
+        // get_center_page_number(), which delegates to
+        // current_document->get_offset_page_number(get_offset_y()).
+        const int cp = dv->get_center_page_number();
+        if (cp >= 0) win->page = cp;
         int rw = 1200, rh = 900;
         if (auto* gl = main_widget->opengl_widget()) {
             if (gl->width()  > 0) rw = gl->width();
@@ -3399,8 +3405,19 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         const QJsonObject se = focused_win->selection_end;
         const int sp_begin = sb.value("page").toInt(-1);
         const int sp_end   = se.value("page").toInt(-1);
-        // Only render single-page selections that are on the current page.
-        if (sp_begin == sp_end && sp_begin == current_page) {
+        // Render single-page selections.  We deliberately do NOT filter by
+        // current_page anymore: the selection coords already carry their own
+        // page (sp_begin), and document_to_window_pos_in_pixels_uncentered
+        // computes correct pixel positions for that page regardless of which
+        // page focused_win->page thinks is "current".  If the selection's
+        // page is off-screen, the resulting pixel coords are outside the
+        // raster bounds and Qt clips them — nothing visible, nothing wrong.
+        // This makes the highlight robust against win->page being stale,
+        // which is what blocked selections after j/k scroll on page 1+.
+        fprintf(stderr, "[limn-debug] selection render: sp_begin=%d sp_end=%d current_page=%d win->page=%d\n",
+                sp_begin, sp_end, current_page,
+                focused_win ? focused_win->page : -99);
+        if (sp_begin == sp_end && sp_begin >= 0) {
             const double bx = sb.value("x").toDouble();
             const double by = sb.value("y").toDouble();
             const double ex = se.value("x").toDouble();
@@ -3438,7 +3455,10 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
                         drew_text_rects = true;
                         for (const auto& ar : sel_rects) {
                             DocumentRect dr = ar.to_document(doc);
-                            if (dr.page != current_page) continue;
+                            // Filter by the selection's own page, not the
+                            // viewport's "current page" — see comment above
+                            // the outer if-block.
+                            if (dr.page != sp_begin) continue;
                             WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
                                 DocumentPos{dr.page, dr.rect.x0, dr.rect.y0});
                             WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
