@@ -9,6 +9,14 @@
 ;;;;   LIMN_NO_SPAWN=1  load all modules then exit cleanly — no binary needed
 ;;;;                    (used by smoke tests and CI)
 ;;;;
+;;;; run-repl.sh forwards any extra args to sbcl AFTER this file loads,
+;;;; so you can chain --eval to drive the live limn from the shell:
+;;;;
+;;;;   HEADLESS=0 ./backend/run-repl.sh --eval '(o "/tmp/m.pdf")'
+;;;;
+;;;; → launches visible Qt, opens the PDF via (o ...) (defined in
+;;;;   repl-helpers.lisp), then drops to the interactive prompt.
+;;;;
 ;;;; To open a PDF, use (o "/path/to.pdf") at the REPL prompt. The old
 ;;;; LIMN_INITIAL env var was removed in v0.39 because it routed through
 ;;;; the legacy MainWidget::open_document instead of the bridge's
