@@ -655,15 +655,26 @@
      all)))
 
 (defun pdf-annotations-overlay-payload (anns)
-  "Convert annotation list to view/overlays payload."
-  (mapcar (lambda (a)
-            (list :|type| "rect"
-                  :|page| (pdf-annotation-page a)
-                  ;; first rect (multi-rect anno: caller expands if needed)
-                  :|rect| (first (pdf-annotation-rects a))
-                  :|color| (pdf-annotation-color a)
-                  :|opacity| 0.6))
-          anns))
+  "Convert annotation list to view/overlays payload.  v0.39.12 follow-up:
+   emit ONE layer per rect (was: only the first rect, which made
+   multi-rect highlights — every annotation produced by v0.39.12's
+   get_text_selection persistence — render as just the first
+   character of the selected text).  Single-rect annotations from
+   older sidecars still work because the per-rect expansion is a
+   no-op for them."
+  (let ((acc nil))
+    (dolist (a anns)
+      (let ((page  (pdf-annotation-page a))
+            (color (pdf-annotation-color a)))
+        (dolist (rect (pdf-annotation-rects a))
+          (when rect
+            (push (list :|type|    "rect"
+                        :|page|    page
+                        :|rect|    rect
+                        :|color|   color
+                        :|opacity| 0.6)
+                  acc)))))
+    (nreverse acc)))
 
 (defun pdf-annotations-for-buffer (path)
   "Convenience: overlay-payload, via cache (builds on miss)."
