@@ -98,11 +98,12 @@
       (t (format nil "~{~a-~}~a"
                  (mapcar #'%mod-letter mods) key)))))
 
-(defvar *log-keys* nil
+(defvar *log-keys* t
   "When non-NIL, every dispatched key event prints to *standard-output*
    in the SBCL REPL: spec, win-id, and what (if anything) resolved.
-   Toggle live with  (setf limn::*log-keys* t)  /  (setf limn::*log-keys* nil)
-   No restart required.")
+   Default is T during the dogfood cycle so the user sees every dispatch
+   without remembering to toggle.  Turn off before shipping:
+     (setf limn::*log-keys* nil)")
 
 (defun %dispatch-key (ev)
   "Hook handler: receive a key event, walk the active mode-buffer's keymap
