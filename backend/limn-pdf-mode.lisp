@@ -1505,6 +1505,11 @@
            (cond
              ((or (not (stringp needle)) (zerop (length needle))) nil)
              (t
+              ;; v0.39.17 — snapshot the PRIOR level BEFORE %do-search-wire
+              ;; mutates %search-state.  v0.39.16 pushed AFTER the wire,
+              ;; so the snapshot captured the NEW state — C-g then
+              ;; restored to the wrong thing (user reported "順序倒過來").
+              (limn/pdf-mode::%push-narrow-level)
               (let* ((new-state
                        (limn/pdf-mode::%do-search-wire buf needle))
                      (raw-new-hits
@@ -1520,9 +1525,6 @@
                                raw-new-hits)))
                 ;; History + depth bump happen regardless of result
                 ;; count so prior colors stay visible even on no-match.
-                ;; Snapshot the PRIOR level before mutating anything
-                ;; so C-g can pop back here.
-                (limn/pdf-mode::%push-narrow-level)
                 (limn/pdf-mode::%set-overlay-history
                  (cons prior-payload prior-history))
                 (setf limn/pdf-mode::*pdf-filter-depth* next-depth)
@@ -2060,6 +2062,10 @@
 
 (defun limn/pdf-mode:pdf-mode-update-modeline (&key buffer-id path)
   (declare (ignore buffer-id))
+  ;; v0.39.17 — modeline/set wire requires :|win-id|.  Missed in the
+  ;; v0.39.12 attempt, which is why the modeline label NEVER appeared
+  ;; even though all the Lisp-side plumbing looked right.  Without
+  ;; win-id the wire rejects with "modeline/set requires win-id".
   (let* ((v (limn/pdf-mode::%focused-view))
          (page (or (getf v :|page|) 0))
          (pc (or (getf v :|page-count|) 1))
@@ -2069,8 +2075,9 @@
                   (or path "/tmp/unknown.pdf")
                   page pc zoom counter)))
     (limn/pdf-mode::%limn-call "modeline/set"
-                                :|left|  label
-                                :|right| (or counter ""))))
+                                :|win-id| limn/pdf-mode::*current-win-id*
+                                :|left|   label
+                                :|right|  (or counter ""))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §M mouse-driven text selection
