@@ -1646,6 +1646,11 @@ void LimnCommand::cmd_view_scroll(const QString& id, const QJsonObject& msg) {
     // the screen stays frozen until the next unrelated paint trigger.
     if (is_active && dv) {
         dv->set_offsets(new_x, new_y, false);
+        // Sync win->page from the DV so that subsequent rebuild_overlay_raster
+        // calls use the correct current_page (= what's actually visible), not
+        // the last page set via view/set :page.  Without this, selections made
+        // after scrolling with j/k are invisible because current_page is stale.
+        win->page = dv->get_page_offset();
         int rw = 1200, rh = 900;
         if (auto* gl = main_widget->opengl_widget()) {
             if (gl->width()  > 0) rw = gl->width();
