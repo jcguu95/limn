@@ -27,7 +27,6 @@
 #include <QMouseEvent>
 #include <QPointF>
 #include <QApplication>
-#include <QClipboard>
 #include <QCryptographicHash>
 #include <QPainter>
 #include <QPen>
@@ -135,9 +134,6 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "message/echo")  { cmd_message_echo (id, msg); return; }
     if (cmd == "message/log")   { cmd_message_log  (id, msg); return; }
     if (cmd == "message/clear") { cmd_message_clear(id, msg); return; }
-
-    // clipboard/*
-    if (cmd == "clipboard/set") { cmd_clipboard_set(id, msg); return; }
 
     // minibuffer/* (SPEC §5.4)
     if (cmd == "minibuffer/open")       { cmd_minibuffer_open       (id, msg); return; }
@@ -1122,23 +1118,6 @@ void LimnCommand::cmd_message_log(const QString& id, const QJsonObject& msg) {
 void LimnCommand::cmd_message_clear(const QString& id, const QJsonObject&) {
     text_buffers["*echo-area*"].clear();
     if (auto* c = chrome_of(main_widget)) c->set_echo(QString());
-    bridge->send_ok(id);
-}
-
-// ─── clipboard/* ─────────────────────────────────────────────────────
-//
-// clipboard/set {text: "..."} — write TEXT to the system clipboard via Qt.
-// Uses QGuiApplication::clipboard() so it works on macOS, Linux (X11/Wayland),
-// and Windows.  No :|win-id| needed — clipboard is process-global.
-void LimnCommand::cmd_clipboard_set(const QString& id, const QJsonObject& msg) {
-    const QString text = msg.value("text").toString();
-    // Empty string is valid (clearing the clipboard).
-    auto* cb = QGuiApplication::clipboard();
-    if (!cb) {
-        bridge->send_fail(id, "clipboard/set: no system clipboard available");
-        return;
-    }
-    cb->setText(text);
     bridge->send_ok(id);
 }
 

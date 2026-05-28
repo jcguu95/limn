@@ -1100,10 +1100,12 @@
             (let ((kn (find-symbol "KILL-NEW" kpkg)))
               (when (and kn (fboundp kn))
                 (funcall (symbol-function kn) txt)))))
-        ;; 2. Write to the OS system clipboard so the user can paste
-        ;;    into any other application (macOS/Linux/Windows).
+        ;; 2. Write to the OS system clipboard via pbcopy (macOS).
+        ;;    Pure Lisp — no C++ wire needed.
         (handler-case
-            (limn/pdf-mode::%limn-call "clipboard/set" :|text| txt)
+            (uiop:run-program '("pbcopy")
+                              :input (make-string-input-stream txt)
+                              :ignore-error-status t)
           (error () nil))
         ;; 3. Echo confirmation.
         (handler-case

@@ -181,9 +181,6 @@ private:
     void cmd_message_log            (const QString& id, const QJsonObject& msg);
     void cmd_message_clear          (const QString& id, const QJsonObject& msg);
 
-    // ─── clipboard/* ─────────────────────────────────────────────────
-    void cmd_clipboard_set          (const QString& id, const QJsonObject& msg);
-
     // ─── minibuffer/* (SPEC §5.4) ───────────────────────────────────
     void cmd_minibuffer_open        (const QString& id, const QJsonObject& msg);
     void cmd_minibuffer_close       (const QString& id, const QJsonObject& msg);
