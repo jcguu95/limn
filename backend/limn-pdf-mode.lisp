@@ -51,6 +51,7 @@
    #:make-pdf-annotation #:pdf-annotation-p
    #:pdf-annotation-id #:pdf-annotation-page #:pdf-annotation-rects
    #:pdf-annotation-color #:pdf-annotation-note #:pdf-annotation-created-at
+   #:pdf-annotation-type #:pdf-annotation-tags
    #:pdf-annotations-serialize #:pdf-annotations-deserialize
    #:pdf-annotations-sidecar-path
    #:pdf-annotations-content-hash-sidecar-path
@@ -63,6 +64,10 @@
    #:pdf-annotations-migrate
    #:pdf-annotations-export-org
    #:*pdf-annotations-schema-version*
+   ;; §C cache + query surface (v0.39.11)
+   #:pdf-annotations-on-page
+   #:pdf-annotations-pages-with-notes
+   #:pdf-annotations-with-tag
    ;; §D TOC
    #:*pdf-toc-buffer-name*
    #:format-toc-tree #:parse-toc-line-page
@@ -357,8 +362,11 @@
 ;;; §C annotation — struct + sidecar I/O + content-hash key + schema
 ;;; ═════════════════════════════════════════════════════════════════════
 
-(defvar *pdf-annotations-schema-version* 1
-  "Current sidecar schema version. Bumped on incompatible changes.")
+(defvar *pdf-annotations-schema-version* 2
+  "Current sidecar schema version. Bumped on incompatible changes.
+   v1 → v2 (v0.39.11): added :type (keyword) + :tags (list of strings) per entry.
+   Forward-compat: v2 reader accepts v1 files (missing fields default to
+   :type :highlight, :tags nil); writer always emits v2.")
 
 (defvar *uuid-counter* 0)
 (defun %fresh-uuid ()
@@ -373,32 +381,43 @@
   (rects     nil)               ; list of (x0 y0 x1 y1)
   (color     "#FFD700")
   (note      nil)
-  (created-at 0))
+  (created-at 0)
+  ;; v0.39.11 (schema v2):
+  ;; type — :highlight (default, current behavior) | :note (point note,
+  ;;        no text selection) | :both
+  ;; tags — list of strings (default nil)
+  (type      :highlight)
+  (tags      nil))
 
 ;; Public constructor: fills id / created-at via vtable when caller omits them.
 ;; Has to handle the case where caller doesn't pass :color either — fall back to
 ;; *pdf-annotation-color* (defcustom).
 (defun make-pdf-annotation (&key id page rects (color nil color-p)
-                                  note created-at)
+                                  note created-at
+                                  (type :highlight) tags)
   (%raw-make-pdf-annotation
    :id (or id (%fresh-uuid))
    :page (or page 0)
    :rects rects
    :color (if color-p color *pdf-annotation-color*)
    :note note
-   :created-at (or created-at (funcall *now-fn*))))
+   :created-at (or created-at (funcall *now-fn*))
+   :type (or type :highlight)
+   :tags tags))
 
 (defun pdf-annotations-serialize (anns)
   "Serialize list of pdf-annotation to a versioned schema string:
-   (:VERSION 1 :ANNOTATIONS ((:id ... :page ... ...) ...))"
+   (:VERSION 2 :ANNOTATIONS ((:id ... :page ... :type ... :tags (...) ...) ...))"
   (let ((entries
           (mapcar (lambda (a)
-                    (list :id        (pdf-annotation-id a)
-                          :page      (pdf-annotation-page a)
-                          :rects     (pdf-annotation-rects a)
-                          :color     (pdf-annotation-color a)
-                          :note      (pdf-annotation-note a)
-                          :created-at (pdf-annotation-created-at a)))
+                    (list :id         (pdf-annotation-id a)
+                          :page       (pdf-annotation-page a)
+                          :rects      (pdf-annotation-rects a)
+                          :color      (pdf-annotation-color a)
+                          :note       (pdf-annotation-note a)
+                          :created-at (pdf-annotation-created-at a)
+                          :type       (or (pdf-annotation-type a) :highlight)
+                          :tags       (pdf-annotation-tags a)))
                   anns)))
     (with-output-to-string (out)
       (write (list :version *pdf-annotations-schema-version*
@@ -419,18 +438,27 @@
     (let ((form (%try-read-form str)))
       (cond
         ((null form) nil)
-        ((and (listp form) (or (eq (getf form :version) 0)
-                                (eq (getf form :version) :v0)
-                                (eq (getf form :version) nil)))
-         ;; Either ancient (no version) or v0 — migrate first.
-         (let ((migrated (pdf-annotations-migrate form)))
+        ((and (listp form) (%plist-envelope-p form))
+         ;; Funnel any versioned form (v0, v1, v2, …) through migrate so
+         ;; entry plists get current-schema defaults before %decode-one
+         ;; sees them. %decode-one is also tolerant for safety.
+         (let* ((migrated (pdf-annotations-migrate form)))
            (%decode-entries (getf migrated :annotations))))
-        ((and (listp form) (getf form :annotations))
-         (%decode-entries (getf form :annotations)))
         ((listp form)
-         ;; Permissive: form is a raw list of entry-plists.
+         ;; Permissive: form is a raw list of entry-plists (no envelope).
          (%decode-entries form))
         (t nil)))))
+
+(defun %plist-envelope-p (form)
+  "True iff FORM looks like a (:version ... :annotations (...)) envelope
+   rather than a raw list of entry plists. Cheap structural test that
+   doesn't trip GETF's malformed-plist guard on lists-of-lists."
+  (and (listp form)
+       (keywordp (car form))
+       ;; even length is a property of a valid plist envelope; raw entry
+       ;; lists would start with a list, not a keyword, so the keywordp
+       ;; check above already excludes them — this is defence in depth.
+       (evenp (length form))))
 
 (defun %decode-entries (entries)
   (let ((acc nil))
@@ -442,17 +470,37 @@
 
 (defun %decode-one (e)
   (when (and (listp e) (getf e :id))
-    (make-pdf-annotation
-     :id        (getf e :id)
-     :page      (getf e :page 0)
-     :rects     (getf e :rects)
-     :color     (or (getf e :color) "#FFD700")
-     :note      (getf e :note)
-     :created-at (or (getf e :created-at) 0))))
+    ;; v1 sidecars lack :type and :tags — default to :highlight / nil.
+    ;; Use indicator-presence sentinel so an entry that explicitly stores
+    ;; :type nil still falls back to :highlight (matches struct default).
+    (let* ((type-cell (member :type e))
+           (type-val  (if type-cell (cadr type-cell) :highlight))
+           (tags-val  (getf e :tags)))
+      (make-pdf-annotation
+       :id        (getf e :id)
+       :page      (getf e :page 0)
+       :rects     (getf e :rects)
+       :color     (or (getf e :color) "#FFD700")
+       :note      (getf e :note)
+       :created-at (or (getf e :created-at) 0)
+       :type      (or type-val :highlight)
+       :tags      tags-val))))
+
+(defun %upgrade-entry-v1->v2 (e)
+  "Stamp v2 defaults onto an entry-plist that may be v0 or v1.
+   Adds :type :highlight and :tags nil where missing. Idempotent."
+  (if (listp e)
+      (let ((out (copy-list e)))
+        (unless (member :type out) (setf out (append out (list :type :highlight))))
+        (unless (member :tags out) (setf out (append out (list :tags nil))))
+        out)
+      e))
 
 (defun pdf-annotations-migrate (data)
   "Migrate a versioned-or-not plist up to current schema version.
-   Idempotent: returns DATA unchanged if already current."
+   Idempotent: returns DATA unchanged if already current.
+   v0 → v1: stamp :version.
+   v1 → v2: stamp :version + add default :type :highlight, :tags nil per entry."
   (cond
     ((null data) (list :version *pdf-annotations-schema-version*
                        :annotations '()))
@@ -462,9 +510,11 @@
        (cond
          ((eql v *pdf-annotations-schema-version*) data)
          ((< v *pdf-annotations-schema-version*)
-          ;; v0 → v1: same shape, just stamp version.
+          ;; Walk every entry adding defaults, then stamp current version.
           (list :version *pdf-annotations-schema-version*
-                :annotations (or (getf data :annotations) '())))
+                :annotations
+                (mapcar #'%upgrade-entry-v1->v2
+                        (or (getf data :annotations) '()))))
          (t data))))))
 
 (defun %home ()
