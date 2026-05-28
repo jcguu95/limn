@@ -340,17 +340,22 @@
   state)
 
 (defun pdf-search-overlay-payload (state &optional color)
-  "Generate overlays plist list. Current hit = opacity 0.6;
-   others = 0.25. Multi-rect hits each get their own overlay entry.
-   COLOR defaults to yellow at depth 0; when *pdf-filter-depth* > 0
-   (after one or more M-n / M-f) it auto-picks from
-   *pdf-filter-colors* so subsequent n/p navigation keeps the
-   narrowed color instead of reverting to yellow."
-  (let ((effective-color
-          (or color
-              (if (zerop *pdf-filter-depth*)
-                  "#FFD700"
-                  (%pdf-filter-color (1- *pdf-filter-depth*))))))
+  "Generate overlays plist list.  Multi-rect hits each get their own
+   overlay entry.
+
+   At filter-depth 0 (the original / search): current hit alpha 0.6,
+   others 0.25 (the default sioyek yellow look).
+   At filter-depth > 0 (after M-n / M-f): alphas drop to 0.40 /
+   0.18 so the cyan / magenta / etc. don't compete visually with
+   the underlying glyph — user reported the v0.39.11 default was
+   'too similar to a real highlight'."
+  (let* ((effective-color
+           (or color
+               (if (zerop *pdf-filter-depth*)
+                   "#FFD700"
+                   (%pdf-filter-color (1- *pdf-filter-depth*)))))
+         (alpha-current (if (zerop *pdf-filter-depth*) 0.60 0.40))
+         (alpha-other   (if (zerop *pdf-filter-depth*) 0.25 0.18)))
     (when (and state (pdf-search-state-hits state))
       (let ((current-idx (pdf-search-state-current-index state))
             (acc nil)
@@ -358,7 +363,7 @@
       (dolist (hit (pdf-search-state-hits state))
         (let* ((page (getf hit :|page|))
                (rects (getf hit :|rects|))
-               (op (if (= i current-idx) 0.6 0.25)))
+               (op (if (= i current-idx) alpha-current alpha-other)))
           (dolist (rect rects)
             (push (list :|type| "rect"
                          :|page| page
@@ -418,6 +423,36 @@
                         (gethash bid-v (symbol-value path-fn)))))
         (pdf-mode-update-modeline :buffer-id bid-v :path path))
     (error () nil)))
+
+;;; v0.39.12 follow-up — auto-select the current hit on every n/p so
+;;; the user can M-w copy it, and so they visually know WHICH match is
+;;; current (otherwise "match 3 / 17" in modeline says nothing about
+;;; where on the page).  Emits view/selection-set with begin =
+;;; top-left of the hit's first rect, end = bottom-right of the
+;;; LAST rect on the same page (handles multi-rect line wraps).
+(defun %select-current-hit (state)
+  (when state
+    (let* ((hits (pdf-search-state-hits state))
+           (idx  (pdf-search-state-current-index state))
+           (hit  (and (consp hits) (nth idx hits)))
+           (page (and hit (getf hit :|page|)))
+           (rects (and hit (getf hit :|rects|)))
+           (first-r (and (consp rects) (first rects)))
+           (last-r  (and (consp rects)
+                         (or (car (last rects)) first-r))))
+      (when (and (integerp page) first-r last-r
+                 (>= (length first-r) 4) (>= (length last-r) 4))
+        (handler-case
+            (%limn-call "view/selection-set"
+                        :|win-id| *current-win-id*
+                        :|begin| (list :|page| page
+                                       :|x|    (nth 0 first-r)
+                                       :|y|    (nth 1 first-r))
+                        :|end|   (list :|page| page
+                                       :|x|    (nth 2 last-r)
+                                       :|y|    (nth 3 last-r))
+                        :|mode|  "char")
+          (error () nil))))))
 
 ;;; --- v0.39.11 A4: narrow + fuzzy filters --------------------------
 
@@ -1016,6 +1051,7 @@
             (limn/pdf-mode::%limn-call
              "view/overlays" :|win-id| "w1"
              :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
+            (limn/pdf-mode::%select-current-hit state)
             (limn/pdf-mode::%refresh-search-modeline)))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-next nil
@@ -1041,6 +1077,7 @@
           (limn/pdf-mode::%limn-call
            "view/overlays" :|win-id| "w1"
            :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+          (limn/pdf-mode::%select-current-hit s)
           (limn/pdf-mode::%refresh-search-modeline))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-prev nil
@@ -1057,6 +1094,7 @@
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
          :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+        (limn/pdf-mode::%select-current-hit s)
         (limn/pdf-mode::%refresh-search-modeline)))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-quit nil
@@ -1122,6 +1160,7 @@
             (let* ((p (getf (nth (1- (length hits)) hits) :|page|)))
               (when (integerp p)
                 (limn/pdf-mode::%page-set p)))
+            (limn/pdf-mode::%select-current-hit state)
             (limn/pdf-mode::%refresh-search-modeline)))))))
 
 ;;; v0.39: smart n / p — walk search hits when a search is active,
@@ -1150,6 +1189,7 @@
             (limn/pdf-mode::%limn-call
              "view/overlays" :|win-id| "w1"
              :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+            (limn/pdf-mode::%select-current-hit s)
             (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: next page ─────────────────────────────
           (let* ((v  (limn/pdf-mode::%focused-view))
@@ -1173,6 +1213,7 @@
             (limn/pdf-mode::%limn-call
              "view/overlays" :|win-id| "w1"
              :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))
+            (limn/pdf-mode::%select-current-hit s)
             (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: previous page ─────────────────────────
           (let* ((v  (limn/pdf-mode::%focused-view))
@@ -1184,6 +1225,13 @@
 ;;; --- v0.39.11 A4: pdf-isearch-narrow / pdf-isearch-fuzzy commands ---
 
 (limn/pdf-mode::%defcmd pdf-isearch-narrow nil
+  ;; v0.39.12 follow-up: re-SEARCH rather than filter.  Previous
+  ;; behaviour kept the original rects (the "the" boxes) and just
+  ;; relabelled them with a new color, which left the new substring
+  ;; visually unmarked.  Now M-n issues a fresh buffer/search for
+  ;; the new substring, replaces the hit list, increments the filter
+  ;; depth so successive M-n cycle through colors, and auto-selects
+  ;; the current hit so M-w copy / visual feedback both work.
   (lambda ()
     (let* ((s (limn/pdf-mode::%search-state))
            (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
@@ -1196,29 +1244,56 @@
            (error () nil)))
         ((not read-fn) nil)
         (t
-         (let* ((needle (funcall read-fn "Narrow (substring): "))
-                (new-hits
-                  (and (stringp needle) (plusp (length needle))
-                       (limn/pdf-mode:pdf-search-narrow-by-substring s needle))))
+         (let* ((needle (funcall read-fn "Narrow search for: "))
+                (buf (limn/pdf-mode::%focused-buffer-id))
+                (v   (limn/pdf-mode::%focused-view))
+                (cur-page (or (getf v :|page|) 0))
+                (next-depth (1+ limn/pdf-mode::*pdf-filter-depth*)))
            (cond
-             ((null new-hits)
-              (limn/pdf-mode::%limn-call
-               "view/overlays" :|win-id| "w1" :|layers| '())
-              (handler-case
-                  (limn/pdf-mode::%limn-call "message/echo"
-                                             :|text| "No matches after filter")
-                (error () nil)))
+             ((or (not (stringp needle)) (zerop (length needle))) nil)
              (t
-              (incf limn/pdf-mode::*pdf-filter-depth*)
-              (setf (limn/pdf-mode:pdf-search-state-hits s) new-hits
-                    (limn/pdf-mode:pdf-search-state-current-index s) 0)
-              (limn/pdf-mode::%limn-call
-               "view/overlays" :|win-id| "w1"
-               :|layers| (limn/pdf-mode:pdf-search-overlay-payload
-                          s (limn/pdf-mode::%pdf-filter-color)))
-              (let ((p (getf (first new-hits) :|page|)))
-                (when (integerp p) (limn/pdf-mode::%page-set p)))))
-           (limn/pdf-mode::%refresh-search-modeline)))))))
+              ;; Issue a fresh buffer/search.  pdf-search-execute resets
+              ;; *pdf-filter-depth* to 0, so we restore the bumped depth
+              ;; AFTER the call so colors keep cycling.
+              (let ((new-state
+                      (limn/pdf-mode:pdf-search-execute buf needle)))
+                (setf limn/pdf-mode::*pdf-filter-depth* next-depth)
+                (cond
+                  ((or (not new-state)
+                       (not (consp (limn/pdf-mode:pdf-search-state-hits
+                                    new-state))))
+                   (limn/pdf-mode::%limn-call
+                    "view/overlays" :|win-id| "w1" :|layers| '())
+                   (handler-case
+                       (limn/pdf-mode::%limn-call
+                        "message/echo"
+                        :|text| (format nil "No matches for ~s" needle))
+                     (error () nil)))
+                  (t
+                   ;; Land on the first hit at/after current page —
+                   ;; matches the new pdf-isearch-forward semantic.
+                   (let* ((hits (limn/pdf-mode:pdf-search-state-hits
+                                  new-state))
+                          (start
+                            (or (loop for h in hits for i from 0
+                                      when (let ((p (getf h :|page|)))
+                                             (and (integerp p)
+                                                  (>= p cur-page)))
+                                        return i)
+                                0)))
+                     (setf (limn/pdf-mode:pdf-search-state-current-index
+                            new-state)
+                           start)
+                     (let* ((hit (nth start hits))
+                            (p   (getf hit :|page|)))
+                       (when (integerp p)
+                         (limn/pdf-mode::%page-set p))))
+                   (limn/pdf-mode::%limn-call
+                    "view/overlays" :|win-id| "w1"
+                    :|layers| (limn/pdf-mode:pdf-search-overlay-payload
+                               new-state))
+                   (limn/pdf-mode::%select-current-hit new-state))))
+              (limn/pdf-mode::%refresh-search-modeline)))))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-fuzzy nil
   (lambda ()
@@ -1254,7 +1329,8 @@
                :|layers| (limn/pdf-mode:pdf-search-overlay-payload
                           s (limn/pdf-mode::%pdf-filter-color)))
               (let ((p (getf (first new-hits) :|page|)))
-                (when (integerp p) (limn/pdf-mode::%page-set p)))))
+                (when (integerp p) (limn/pdf-mode::%page-set p)))
+              (limn/pdf-mode::%select-current-hit s)))
            (limn/pdf-mode::%refresh-search-modeline)))))))
 
 ;;; v0.37 Phase D: half-page scroll (vim C-d / C-u).  Uses offset-y
