@@ -3268,24 +3268,56 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         };
 
         if (type == "rect") {
-            float x0, y0, x1, y1;
+            double nx0, ny0, nx1, ny1;
             const QJsonArray ra = l.value("rect").toArray();
             if (ra.size() == 4) {
-                norm_to_pixel(ra[0].toDouble(), ra[1].toDouble(), &x0, &y0);
-                norm_to_pixel(ra[2].toDouble(), ra[3].toDouble(), &x1, &y1);
+                nx0 = ra[0].toDouble(); ny0 = ra[1].toDouble();
+                nx1 = ra[2].toDouble(); ny1 = ra[3].toDouble();
             } else if (l.contains("x0") && l.contains("y0")
                     && l.contains("x1") && l.contains("y1")) {
                 // v0.33b: alternate sugar — x0/y0/x1/y1 numeric fields.
-                norm_to_pixel(l.value("x0").toDouble(),
-                              l.value("y0").toDouble(), &x0, &y0);
-                norm_to_pixel(l.value("x1").toDouble(),
-                              l.value("y1").toDouble(), &x1, &y1);
+                nx0 = l.value("x0").toDouble(); ny0 = l.value("y0").toDouble();
+                nx1 = l.value("x1").toDouble(); ny1 = l.value("y1").toDouble();
             } else {
                 continue;
             }
+
+            // v0.39: use the DocumentView transform so rect overlays track
+            // zoom and scroll instead of being stuck in screen-norm space.
+            // Strategy: page-norm [0,1]² → raw page points → DV window pixels.
+            // Falls back to norm_to_pixel when DV is not yet initialised
+            // (headless / QOpenGLWidget context not materialised; view_width
+            // stays 0 until the real GL widget gets a resize event).
+            float x0, y0, x1, y1;
+            const bool dv_live =
+                dv->get_view_width() > 0 && dv->get_view_height() > 0;
+            if (dv_live) {
+                const float pw_pts = doc->get_page_width(page);
+                const float ph_pts = doc->get_page_height(page);
+                WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
+                    {page, (float)(nx0 * pw_pts), (float)(ny0 * ph_pts)});
+                WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
+                    {page, (float)(nx1 * pw_pts), (float)(ny1 * ph_pts)});
+                x0 = (float)wp0.x; y0 = (float)wp0.y;
+                x1 = (float)wp1.x; y1 = (float)wp1.y;
+            } else {
+                norm_to_pixel(nx0, ny0, &x0, &y0);
+                norm_to_pixel(nx1, ny1, &x1, &y1);
+            }
+
             QRectF r(QPointF(std::min(x0, x1), std::min(y0, y1)),
                      QPointF(std::max(x0, x1), std::max(y0, y1)));
-            painter.fillRect(r, col);
+            if (dv_live && current_rotation != 0) {
+                // DV gives widget-space pixels; painter has a rotation
+                // transform. Draw through an identity transform so the
+                // overlay lands at the correct widget position.
+                QTransform saved = painter.transform();
+                painter.resetTransform();
+                painter.fillRect(r, col);
+                painter.setTransform(saved);
+            } else {
+                painter.fillRect(r, col);
+            }
         }
         else if (type == "line") {
             const QJsonArray from = l.value("from").toArray();
@@ -3362,34 +3394,44 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         const QJsonObject se = focused_win->selection_end;
         const int sp_begin = sb.value("page").toInt(-1);
         const int sp_end   = se.value("page").toInt(-1);
-        if (sp_begin == sp_end && sp_begin >= 0) {
-            // v0.37 fixup: single-path selection paint, matching the
-            // page-norm overlay loop's approach (page-norm × eff_w /
-            // eff_h, with painter's rotation transform already applied
-            // upstream).  Replaces v0.36-dogfood's two-path code that
-            // tried DocumentView::absolute_to_window_pos_in_pixels for
-            // "zoom/scroll correctness on real display" — that path is
-            // unreliable in headless (DV's viewport state isn't
-            // materialised when the QOpenGLWidget never gets a real
-            // GL context) AND inconsistent with how the overlay loop
-            // paints other layers (same page-norm input → same pixel
-            // output is the consistency contract).  Trade-off:
-            // selection rect won't track zoom/scroll on a real display
-            // — same limitation the overlay loop already has, scoped
-            // for fix elsewhere (e.g. v0.38 if we make both paths
-            // DV-aware together).
+        // Only render single-page selections that are on the current page.
+        if (sp_begin == sp_end && sp_begin == current_page) {
+            // v0.39: use the same DV-aware pixel mapping as "rect" overlays
+            // so the selection highlight tracks zoom and scroll correctly.
+            // Light blue (反藍) instead of the old yellow.
             const double bx = sb.value("x").toDouble();
             const double by = sb.value("y").toDouble();
             const double ex = se.value("x").toDouble();
             const double ey = se.value("y").toDouble();
-            const double x1 = std::min(bx, ex) * eff_w;
-            const double y1 = std::min(by, ey) * eff_h;
-            const double x2 = std::max(bx, ex) * eff_w;
-            const double y2 = std::max(by, ey) * eff_h;
-            QColor selcol(255, 255, 0);              // yellow
-            selcol.setAlphaF(0.5);
-            painter.fillRect(QRectF(QPointF(x1, y1), QPointF(x2, y2)),
-                              selcol);
+
+            float px0, py0, px1, py1;
+            const bool dv_live =
+                dv->get_view_width() > 0 && dv->get_view_height() > 0;
+            if (dv_live) {
+                const float pw_pts = doc->get_page_width(sp_begin);
+                const float ph_pts = doc->get_page_height(sp_begin);
+                WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
+                    {sp_begin, (float)(bx * pw_pts), (float)(by * ph_pts)});
+                WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
+                    {sp_begin, (float)(ex * pw_pts), (float)(ey * ph_pts)});
+                px0 = (float)wp0.x; py0 = (float)wp0.y;
+                px1 = (float)wp1.x; py1 = (float)wp1.y;
+            } else {
+                px0 = (float)(bx * eff_w); py0 = (float)(by * eff_h);
+                px1 = (float)(ex * eff_w); py1 = (float)(ey * eff_h);
+            }
+            QRectF r(QPointF(std::min(px0, px1), std::min(py0, py1)),
+                     QPointF(std::max(px0, px1), std::max(py0, py1)));
+            QColor selcol(100, 180, 255);    // light blue 反藍
+            selcol.setAlphaF(0.35);
+            if (dv_live && current_rotation != 0) {
+                QTransform saved = painter.transform();
+                painter.resetTransform();
+                painter.fillRect(r, selcol);
+                painter.setTransform(saved);
+            } else {
+                painter.fillRect(r, selcol);
+            }
         }
     }
 }
