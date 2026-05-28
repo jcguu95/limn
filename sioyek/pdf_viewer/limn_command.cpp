@@ -30,6 +30,8 @@
 #include <QCryptographicHash>
 #include <QPainter>
 #include <QPen>
+#include <QBrush>
+#include <QPolygonF>
 #include <QFont>
 #include <QFontInfo>
 #include <QFontMetricsF>
@@ -3259,10 +3261,20 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
             if (it != face_registry_.end() && !it->foreground.isEmpty())
                 colstr = it->foreground;
         }
+        // v0.40: "icon" overlays default to #FFAA00 (orange) when no color
+        // given.  Other types still require an explicit hex color.
+        if (type == "icon"
+            && (colstr.length() != 7 || !colstr.startsWith('#'))) {
+            colstr = "#FFAA00";
+        }
         if (colstr.length() != 7 || !colstr.startsWith('#')) continue;
         QColor col(colstr);
         if (!col.isValid()) continue;
-        double opacity = l.value("opacity").toDouble(1.0);
+        // v0.40: icons default to 0.85 alpha (more visually present than
+        // the 1.0 default used for rect/line/text fills, which already
+        // carry their own per-layer opacity).
+        double opacity = l.value("opacity").toDouble(
+            type == "icon" ? 0.85 : 1.0);
         if (opacity < 0.0) opacity = 0.0;
         if (opacity > 1.0) opacity = 1.0;
         col.setAlphaF(opacity);
@@ -3329,6 +3341,76 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
             } else {
                 painter.fillRect(r, col);
             }
+        }
+        else if (type == "icon") {
+            // v0.40: small marker icon at page-norm CENTER (x, y).
+            // Required: page, x, y.  Optional: shape ("note" default,
+            // "bookmark", "circle", "square"), color (default #FFAA00),
+            // size (px, default 14).
+            if (!l.contains("x") || !l.contains("y")) continue;
+            const double nx = l.value("x").toDouble();
+            const double ny = l.value("y").toDouble();
+            const int    sz = l.value("size").toInt(14);
+            if (sz <= 0) continue;
+            const QString shape =
+                l.value("shape").toString(QStringLiteral("note"));
+
+            // Map page-norm center → widget pixels via DV (same DV-aware
+            // path that "rect" uses).  Fall back to the simplified
+            // page-norm→raster mapping when DV isn't live yet.
+            float cx, cy;
+            const bool dv_live =
+                dv->get_view_width() > 0 && dv->get_view_height() > 0;
+            if (dv_live) {
+                const float pw_pts = doc->get_page_width(page);
+                const float ph_pts = doc->get_page_height(page);
+                WindowPos wp = dv->document_to_window_pos_in_pixels_uncentered(
+                    {page, (float)(nx * pw_pts), (float)(ny * ph_pts)});
+                cx = (float)wp.x; cy = (float)wp.y;
+            } else {
+                norm_to_pixel(nx, ny, &cx, &cy);
+            }
+
+            // Bounding box centered on (cx, cy), size×size pixels.
+            QRectF r(QPointF(cx - sz / 2.0, cy - sz / 2.0),
+                     QPointF(cx + sz / 2.0, cy + sz / 2.0));
+
+            // Draw through identity transform when rotated + DV-live, to
+            // match the rect branch (DV already returns widget-space px).
+            QTransform saved;
+            const bool need_reset = dv_live && current_rotation != 0;
+            if (need_reset) {
+                saved = painter.transform();
+                painter.resetTransform();
+            }
+
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QBrush(col));
+            if (shape == "circle") {
+                painter.drawEllipse(r);
+            } else if (shape == "square") {
+                painter.fillRect(r, col);
+            } else if (shape == "bookmark") {
+                // Pennant: top-left, top-right, right edge, V-notch
+                // bottom-center, left edge.
+                QPolygonF poly;
+                poly << QPointF(r.left(),  r.top())
+                     << QPointF(r.right(), r.top())
+                     << QPointF(r.right(), r.bottom())
+                     << QPointF((r.left() + r.right()) / 2.0,
+                                 r.bottom() - sz * 0.30)
+                     << QPointF(r.left(),  r.bottom());
+                painter.drawPolygon(poly);
+            } else {
+                // "note" (default): rounded square — like a sticky note.
+                const double radius = std::max(2.0, sz * 0.20);
+                painter.drawRoundedRect(r, radius, radius);
+            }
+
+            if (need_reset) {
+                painter.setTransform(saved);
+            }
+            painter.setBrush(Qt::NoBrush);
         }
         else if (type == "line") {
             const QJsonArray from = l.value("from").toArray();
