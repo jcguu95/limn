@@ -3396,41 +3396,76 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         const int sp_end   = se.value("page").toInt(-1);
         // Only render single-page selections that are on the current page.
         if (sp_begin == sp_end && sp_begin == current_page) {
-            // v0.39: use the same DV-aware pixel mapping as "rect" overlays
-            // so the selection highlight tracks zoom and scroll correctly.
-            // Light blue (反藍) instead of the old yellow.
             const double bx = sb.value("x").toDouble();
             const double by = sb.value("y").toDouble();
             const double ex = se.value("x").toDouble();
             const double ey = se.value("y").toDouble();
 
-            float px0, py0, px1, py1;
-            const bool dv_live =
-                dv->get_view_width() > 0 && dv->get_view_height() > 0;
-            if (dv_live) {
-                const float pw_pts = doc->get_page_width(sp_begin);
-                const float ph_pts = doc->get_page_height(sp_begin);
-                WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
-                    {sp_begin, (float)(bx * pw_pts), (float)(by * ph_pts)});
-                WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
-                    {sp_begin, (float)(ex * pw_pts), (float)(ey * ph_pts)});
-                px0 = (float)wp0.x; py0 = (float)wp0.y;
-                px1 = (float)wp1.x; py1 = (float)wp1.y;
-            } else {
-                px0 = (float)(bx * eff_w); py0 = (float)(by * eff_h);
-                px1 = (float)(ex * eff_w); py1 = (float)(ey * eff_h);
-            }
-            QRectF r(QPointF(std::min(px0, px1), std::min(py0, py1)),
-                     QPointF(std::max(px0, px1), std::max(py0, py1)));
             QColor selcol(100, 180, 255);    // light blue 反藍
             selcol.setAlphaF(0.35);
-            if (dv_live && current_rotation != 0) {
-                QTransform saved = painter.transform();
-                painter.resetTransform();
-                painter.fillRect(r, selcol);
-                painter.setTransform(saved);
-            } else {
-                painter.fillRect(r, selcol);
+            const bool dv_live = dv->get_view_width() > 0 && dv->get_view_height() > 0;
+
+            // Helper: fill one QRectF, respecting rotation transform.
+            auto fill_rect = [&](QRectF r) {
+                if (dv_live && current_rotation != 0) {
+                    QTransform saved = painter.transform();
+                    painter.resetTransform();
+                    painter.fillRect(r, selcol);
+                    painter.setTransform(saved);
+                } else {
+                    painter.fillRect(r, selcol);
+                }
+            };
+
+            // Primary path: ask sioyek for the actual per-character rects so
+            // the highlight follows text line breaks instead of drawing one
+            // big bounding box over the selected region.
+            bool drew_text_rects = false;
+            if (dv_live) {
+                AbsoluteDocumentPos abs_begin, abs_end;
+                if (page_norm_to_absolute(doc, sp_begin, bx, by, &abs_begin) &&
+                    page_norm_to_absolute(doc, sp_end,   ex, ey, &abs_end)) {
+                    std::deque<AbsoluteRect> sel_rects;
+                    std::wstring dummy;
+                    dv->get_text_selection(abs_begin, abs_end,
+                                           /*is_word=*/false, sel_rects, dummy);
+                    if (!sel_rects.empty()) {
+                        drew_text_rects = true;
+                        for (const auto& ar : sel_rects) {
+                            DocumentRect dr = ar.to_document(doc);
+                            if (dr.page != current_page) continue;
+                            WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
+                                DocumentPos{dr.page, dr.rect.x0, dr.rect.y0});
+                            WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
+                                DocumentPos{dr.page, dr.rect.x1, dr.rect.y1});
+                            fill_rect(QRectF(
+                                QPointF(std::min((float)wp0.x, (float)wp1.x),
+                                        std::min((float)wp0.y, (float)wp1.y)),
+                                QPointF(std::max((float)wp0.x, (float)wp1.x),
+                                        std::max((float)wp0.y, (float)wp1.y))));
+                        }
+                    }
+                }
+            }
+
+            // Fallback: bounding box (headless / image-only region / no rects).
+            if (!drew_text_rects) {
+                float px0, py0, px1, py1;
+                if (dv_live) {
+                    const float pw_pts = doc->get_page_width(sp_begin);
+                    const float ph_pts = doc->get_page_height(sp_begin);
+                    WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
+                        {sp_begin, (float)(bx * pw_pts), (float)(by * ph_pts)});
+                    WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
+                        {sp_begin, (float)(ex * pw_pts), (float)(ey * ph_pts)});
+                    px0 = (float)wp0.x; py0 = (float)wp0.y;
+                    px1 = (float)wp1.x; py1 = (float)wp1.y;
+                } else {
+                    px0 = (float)(bx * eff_w); py0 = (float)(by * eff_h);
+                    px1 = (float)(ex * eff_w); py1 = (float)(ey * eff_h);
+                }
+                fill_rect(QRectF(QPointF(std::min(px0, px1), std::min(py0, py1)),
+                                 QPointF(std::max(px0, px1), std::max(py0, py1))));
             }
         }
     }
