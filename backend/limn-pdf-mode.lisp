@@ -1094,13 +1094,18 @@
            (d (limn/pdf-mode::%response-data r))
            (txt (and d (getf d :|text|))))
       (when (and txt (stringp txt) (plusp (length txt)))
+        ;; 1. Push onto the Lisp-internal kill ring (for C-y within limn).
         (let ((kpkg (find-package '#:limn/kill)))
           (when kpkg
             (let ((kn (find-symbol "KILL-NEW" kpkg)))
               (when (and kn (fboundp kn))
                 (funcall (symbol-function kn) txt)))))
-        ;; Echo confirmation so the user knows the copy landed (and
-        ;; the e2e log carries evidence). v0.37 echo helper.
+        ;; 2. Write to the OS system clipboard so the user can paste
+        ;;    into any other application (macOS/Linux/Windows).
+        (handler-case
+            (limn/pdf-mode::%limn-call "clipboard/set" :|text| txt)
+          (error () nil))
+        ;; 3. Echo confirmation.
         (handler-case
             (limn/pdf-mode::%limn-call "message/echo"
                                         :|text| "Copied selection")
