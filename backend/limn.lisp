@@ -98,6 +98,12 @@
       (t (format nil "~{~a-~}~a"
                  (mapcar #'%mod-letter mods) key)))))
 
+(defvar *log-keys* nil
+  "When non-NIL, every dispatched key event prints to *standard-output*
+   in the SBCL REPL: spec, win-id, and what (if anything) resolved.
+   Toggle live with  (setf limn::*log-keys* t)  /  (setf limn::*log-keys* nil)
+   No restart required.")
+
 (defun %dispatch-key (ev)
   "Hook handler: receive a key event, walk the active mode-buffer's keymap
    stack (minor → major) then fall back to *global-keymap*, invoke action
@@ -117,6 +123,11 @@
          (mods       (getf ev :|mods|))
          (km         *global-keymap*)
          (lookup-seq (%sym :limn/keys '#:lookup-sequence)))
+    (when *log-keys*
+      (format *standard-output*
+              "~&[limn:key] spec=~S win=~A mods=~A~%"
+              spec (getf ev :|win-id|) mods)
+      (force-output *standard-output*))
     (unless lookup-seq (return-from %dispatch-key nil))
 
     ;; A5 numeric prefix arg accumulation: a digit pressed with no
@@ -180,6 +191,21 @@
            ;; via :interactive "p". Reset accumulator regardless.
            (acc-int (when (plusp (length *prefix-arg-acc*))
                       (parse-integer *prefix-arg-acc* :junk-allowed t))))
+      (when *log-keys*
+        (format *standard-output*
+                "[limn:key]   → resolved=~A mode=~A global=~A leader=~A~%"
+                (cond ((eq result :prefix) :prefix)
+                      ((functionp result) (or (multiple-value-bind (n)
+                                                  (ignore-errors
+                                                    (nth-value
+                                                     2 (function-lambda-expression
+                                                        result)))
+                                                n)
+                                              :unnamed-fn))
+                      ((null result) :unbound)
+                      (t result))
+                (and mode-result t) (and global-result t) (and leader-result t))
+        (force-output *standard-output*))
       (setf *prefix-arg-acc* "")
       (cond
         ((eq result :prefix)
