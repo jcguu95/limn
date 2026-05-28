@@ -24,7 +24,21 @@ public:
     bool open_document(const std::wstring& path);
 
     // Accessors used by LimnCommand.
+    //
+    // document_view()    — the *focused* window's DV. Today there is
+    //                      only one DV, so this is just document_view_;
+    //                      after Phase 3 (per-win DVs) it will return
+    //                      panes_[windows->focused_id()].dv.
+    //
+    // document_view(id)  — Phase 2 stub for "the DV belonging to a
+    //                      specific window". Currently every win-id maps
+    //                      to the singleton document_view_; the overload
+    //                      exists so LimnCommand can be migrated to a
+    //                      win-aware API without behaviour change.
+    //                      Empty/unknown win_id falls back to the focused
+    //                      DV. See docs/split-frame-design.md.
     DocumentView*        document_view()    { return document_view_; }
+    DocumentView*        document_view(const QString& win_id);
     PdfViewOpenGLWidget* opengl_widget()    { return opengl_widget_; }
     DocumentManager*     document_manager() { return document_manager_; }
     LimnChromeBar*       chrome_bar()       { return chrome_bar_; }
