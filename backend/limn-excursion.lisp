@@ -687,7 +687,7 @@
                         (and bid (%marker-pos (%narrow-start bid)))))
         (pmax-closure (lambda (bid)
                         (and bid (%marker-pos (%narrow-end bid))))))
-    (dolist (pkg-name '(#:limn/text-nav #:limn/mark))
+    (dolist (pkg-name '(#:limn/text-nav #:limn/mark #:limn/isearch))
       (let ((pkg (find-package pkg-name)))
         (when pkg
           (let ((pmin-sym (find-symbol "*POINT-MIN-FN*" pkg))

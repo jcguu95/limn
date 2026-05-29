@@ -33,7 +33,10 @@
    #:*highlight-fn*
    #:*clear-highlights-fn*
    #:*history-push-fn*
-   #:*isearch-case-fold*))
+   #:*isearch-case-fold*
+   ;; v0.40 narrow — accessible-region bounds (NIL = no narrowing)
+   #:*point-min-fn*
+   #:*point-max-fn*))
 
 (in-package #:limn/isearch)
 
@@ -66,6 +69,16 @@
 (defvar *isearch-case-fold* t
   "When true, search is case-insensitive.")
 
+;; v0.40 narrow — accessible-region bounds.  Same nil-means-no-narrow
+;; contract as limn/text-nav; rewired at limn/excursion load time.
+(defvar *point-min-fn*
+  (lambda (bid) (declare (ignore bid)) nil)
+  "fn (buf-id) → integer | nil — start of accessible region, NIL = 0")
+
+(defvar *point-max-fn*
+  (lambda (bid) (declare (ignore bid)) nil)
+  "fn (buf-id) → integer | nil — end of accessible region, NIL = (length text)")
+
 ;;; ── state struct ────────────────────────────────────────────────────────────
 
 (defstruct (isearch-state
@@ -82,17 +95,21 @@
 
 ;;; ── internal helpers ────────────────────────────────────────────────────────
 
-(defun %find-matches (text query case-fold)
-  "Return all (start . end) matches of QUERY in TEXT, allowing overlaps."
+(defun %find-matches (text query case-fold &optional (lo 0) (hi nil))
+  "Return all (start . end) matches of QUERY in TEXT, allowing overlaps.
+   When LO / HI are given, only matches fully contained in [LO, HI) are
+   returned — this is how narrow-to-region restricts isearch to the
+   accessible region.  HI defaults to (length text)."
   (when (or (string= query "") (string= text ""))
     (return-from %find-matches '()))
   (let* ((q     (if case-fold (string-downcase query) query))
          (tx    (if case-fold (string-downcase text)  text))
          (qlen  (length q))
          (tlen  (length tx))
-         (limit (- tlen qlen))
+         (hi    (or hi tlen))
+         (limit (min (- tlen qlen) (- hi qlen)))
          (res   '()))
-    (loop for i from 0 to limit
+    (loop for i from lo to limit
           when (string= tx q :start1 i :end1 (+ i qlen))
             do (push (cons i (+ i qlen)) res))
     (nreverse res)))
@@ -143,14 +160,19 @@
 
 (defun isearch-update (state query)
   "Recompute matches for QUERY, move cursor to best match, repaint.
-   Returns a fresh state (original STATE is not mutated)."
+   Returns a fresh state (original STATE is not mutated).
+   v0.40: when the buffer is narrowed, matches are restricted to
+   [point-min, point-max)."
   (let* ((buf-id   (isearch-state-buf-id state))
          (forward  (isearch-state-forward-p state))
          (saved    (isearch-state-saved-cursor state))
          (text     (funcall *buffer-text-fn* buf-id))
+         (lo       (or (funcall *point-min-fn* buf-id) 0))
+         (hi       (or (funcall *point-max-fn* buf-id) (length text)))
          (matches  (if (string= query "")
                        '()
-                       (%find-matches text query *isearch-case-fold*)))
+                       (%find-matches text query *isearch-case-fold*
+                                      lo hi)))
          (idx      (cond
                      ((null matches) 0)
                      (forward        (%nearest-match-forward  matches saved))

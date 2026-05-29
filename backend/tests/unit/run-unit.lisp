@@ -146,7 +146,9 @@
                 ;; with-excursion-ctx from excursion-v032.lisp)
                 "text-nav-narrow.lisp"
                 ;; v0.40 §1.2 — mark narrow-aware
-                "mark-narrow.lisp"))
+                "mark-narrow.lisp"
+                ;; v0.40 §1.3 — isearch narrow-aware
+                "isearch-narrow.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
