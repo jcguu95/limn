@@ -1223,7 +1223,7 @@
 (defun %refresh-overlays (path anns)
   (declare (ignore path))
   (%limn-call "view/overlays" :|win-id| "w1"
-               :|layers| (pdf-annotations-overlay-payload anns)))
+               :|layers| (pdf-annotations-overlay-payload-with-icons anns)))
 
 (defun %annotations-replace-by-id (path ann)
   "Load PATH's sidecar, replace the element whose id matches ANN's id with
@@ -1949,7 +1949,7 @@
           ;; returned overlays=[].  Fixed schema name.
           (limn/pdf-mode::%limn-call
            "view/overlays" :|win-id| "w1"
-           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload all))
+           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload-with-icons all))
           ;; v0.39 D-v2 (feature 2): clear the live selection band so the
           ;; user sees only the saved yellow overlay, not blue + yellow.
           (handler-case
@@ -2126,7 +2126,7 @@
                  (limn/pdf-mode:pdf-annotations-save path updated)
                  (limn/pdf-mode::%limn-call
                   "view/overlays" :|win-id| "w1"
-                  :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload updated))))
+                  :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload-with-icons updated))))
              (handler-case
                  (limn/pdf-mode::%limn-call "message/echo"
                                              :|text| "Note updated")
@@ -2402,7 +2402,7 @@
       ;; persistent annotation markup so it's visible while navigating.
       (handler-case
           (%limn-call "view/overlays" :|win-id| "w1"
-                      :|layers| (pdf-annotations-overlay-payload
+                      :|layers| (pdf-annotations-overlay-payload-with-icons
                                  (pdf-annotations-load path)))
         (error () nil))
       (setf (getf *notes-list-state* :focus) :pdf)
@@ -2465,7 +2465,7 @@
       ;; persistent annotation markup from the (possibly mutated) sidecar.
       (handler-case
           (%limn-call "view/overlays" :|win-id| "w1"
-                      :|layers| (pdf-annotations-overlay-payload
+                      :|layers| (pdf-annotations-overlay-payload-with-icons
                                  (pdf-annotations-load path)))
         (error () nil))
       (when tid
