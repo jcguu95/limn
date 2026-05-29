@@ -109,6 +109,17 @@ void MainWidget::show_pdf_view() {
     if (main_stack_) main_stack_->setCurrentIndex(0);
 }
 
+// Phase 2 — see docs/split-frame-design.md. Today every LimnWindow maps
+// to the single document_view_; the overload exists so LimnCommand can
+// be migrated to a win-aware API without behaviour change. When Phase 3
+// (per-win DVs) lands, this becomes panes_[win_id].dv (and the no-arg
+// document_view() becomes panes_[focused_id].dv). Empty win_id falls
+// back to the focused/singleton DV — that's how non-per-win callers
+// (singleton load paths, helper sites) keep working unchanged.
+DocumentView* MainWidget::document_view(const QString& /*win_id*/) {
+    return document_view_;
+}
+
 // markup-interaction step 2 — side-panel layout.
 //
 // The text view normally lives at index 1 of main_stack_ and is shown

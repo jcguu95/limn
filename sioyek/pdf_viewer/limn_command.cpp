@@ -501,8 +501,11 @@ void LimnCommand::cmd_bridge_win_focus(const QString& id, const QJsonObject& msg
     //      the live DV (re-open the document if it differs from live,
     //      then apply page/zoom/offset/dark-mode). Rebuild the overlay
     //      raster so the new focused window's overlays paint.
-    DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
-    LimnWindow* prev = windows->get(windows->focused_id());
+    // Phase 2: prev focused window's DV. Today singleton; Phase 3 will
+    // route this to the prev-pane's DV via the win-id overload.
+    const QString prev_id = windows->focused_id();
+    DocumentView* dv = main_widget ? main_widget->document_view(prev_id) : nullptr;
+    LimnWindow* prev = windows->get(prev_id);
     if (prev && dv && !prev->buffer_id.isEmpty()) {
         Document* live = dv->get_document();
         if (live && registry->find_id(live) == prev->buffer_id) {
@@ -643,7 +646,9 @@ void LimnCommand::cmd_view_set(const QString& id, const QJsonObject& msg) {
     // doc was last loaded. For multi-window state independence, we track each
     // window's page/zoom in LimnWindow, and only forward to the live widget
     // if this window is the focused/active one.
-    DocumentView* dv = main_widget->document_view();
+    // Phase 2: win-aware. Today routes to the singleton DV; Phase 3 will
+    // resolve per-win panes.
+    DocumentView* dv = main_widget->document_view(win_id);
     Document* doc = dv->get_document();
     // v0.15: "is_active" = this window owns the live widget. Use the
     // explicit focused-id (single source of truth, set by bridge/win-
@@ -1566,10 +1571,13 @@ void LimnCommand::cmd_view_selection_set(const QString& id, const QJsonObject& m
         // also returns per-character rects (for annotation save).  Only
         // works for the focused window (extraction goes through the live
         // DV's document).  Non-focused → synth text + no rects.
+        // split-frame Phase 2: win-aware DV lookup — document_view(win_id)
+        // resolves the pane that owns this window (today still singleton;
+        // Phase 3 makes it per-pane).
         QString real_text;
         QJsonArray real_rects;
         if (windows->focused_id() == win_id) {
-            DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
+            DocumentView* dv = main_widget ? main_widget->document_view(win_id) : nullptr;
             Document* doc    = dv ? dv->get_document() : nullptr;
             real_text = extract_selection_text_and_rects(
                 dv, doc,
@@ -1692,7 +1700,9 @@ void LimnCommand::cmd_view_scroll(const QString& id, const QJsonObject& msg) {
     const double dx = msg.value("dx").toDouble(0.0);
 
     const bool is_active = (windows->focused_id() == win_id);
-    DocumentView* dv = (main_widget && is_active) ? main_widget->document_view() : nullptr;
+    // Phase 2: win-aware. Singleton today; Phase 3 will resolve the
+    // per-pane DV (and is_active gating becomes a hint, not a hard gate).
+    DocumentView* dv = (main_widget && is_active) ? main_widget->document_view(win_id) : nullptr;
 
     // Compute effective screen dimensions in document space.
     // When the Qt widget has real size (active window with visible Qt
@@ -2105,7 +2115,8 @@ void LimnCommand::cmd_buffer_show(const QString& id, const QJsonObject& msg) {
             Document* target_doc = registry->lookup(buffer_id);
             if (target_doc) {
                 main_widget->open_document(target_doc->get_path());
-                DocumentView* dv = main_widget->document_view();
+                // Phase 2: win-aware. Today singleton; Phase 3 per-pane.
+                DocumentView* dv = main_widget->document_view(win_id);
                 if (dv) {
                     dv->set_zoom_level(win->zoom, true, true);
                     dv->goto_page(win->page);
@@ -2662,7 +2673,9 @@ QJsonObject LimnCommand::collect_view_state(const QString& win_id) {
     // is computed from offset_y + viewport_height/2, which is ill-defined
     // in headless/offscreen tests (viewport is degenerate) and would make
     // view/get :page disagree with what the client just set.
-    DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
+    // Phase 2: win-aware overload (today routes to singleton; Phase 3
+    // returns the per-pane DV — `is_active` gating below becomes a hint).
+    DocumentView* dv = main_widget ? main_widget->document_view(win_id) : nullptr;
     // v0.15: focused-id is the single source of truth for "is this
     // window the one driving the live widget". See cmd_view_set for
     // why we don't use the buffer-id heuristic anymore.
@@ -3473,7 +3486,11 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         }
     }
 
-    DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
+    // Phase 2: overlay raster is shared across all panes today. After
+    // Phase 4 each pane gets its own raster; this lookup becomes
+    // per-pane DV resolution. Focused win drives the raster either way.
+    const QString focused_id_for_raster = windows ? windows->focused_id() : QString();
+    DocumentView* dv = main_widget ? main_widget->document_view(focused_id_for_raster) : nullptr;
     Document* doc    = dv ? dv->get_document() : nullptr;
     if (!dv || !doc) return;
 
@@ -4034,7 +4051,9 @@ void LimnCommand::cmd_test_page_pixel_rect(const QString& id,
                                             const QJsonObject& msg) {
     Q_UNUSED(msg);
     if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
-    DocumentView* dv = main_widget->document_view();
+    // Phase 2: focused win's DV (test helper inspects the visible pane).
+    const QString focused_id = windows ? windows->focused_id() : QString();
+    DocumentView* dv = main_widget->document_view(focused_id);
     Document* doc    = dv ? dv->get_document() : nullptr;
     if (!dv || !doc) {
         // v0.33b: when a text-engine buffer is in the focused window, no
@@ -4233,7 +4252,11 @@ bool LimnCommand::widget_to_page_norm(int widget_x, int widget_y,
                                        int* out_page,
                                        double* out_nx, double* out_ny) {
     if (!main_widget) return false;
-    DocumentView* dv = main_widget->document_view();
+    // Phase 2: widget coords are received via the focused pane today (the
+    // mouse-event router only knows the singleton viewport). Phase 3 will
+    // pass an explicit win-id from the per-pane mouse handler.
+    const QString focused_id = windows ? windows->focused_id() : QString();
+    DocumentView* dv = main_widget->document_view(focused_id);
     Document* doc    = dv ? dv->get_document() : nullptr;
     if (!dv || !doc) return false;
 
