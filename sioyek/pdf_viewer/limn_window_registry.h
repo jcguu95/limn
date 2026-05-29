@@ -70,6 +70,22 @@ struct LimnWindow {
     QString     selection_mode = "char";
     QString     selection_text;
 
+    // v0.39.18 A (search-hit selection fix): explicit-geometry selection.
+    // When a caller (e.g. %select-current-hit) already knows the EXACT
+    // rects + text of a selection — as search does, from MuPDF's match
+    // quads — it passes them straight through instead of round-tripping
+    // begin/end through get_text_selection (which rounds to char bounds
+    // and over-selected by a char).  When selection_explicit is true,
+    // selection_rects holds the exact page-norm rects to paint and
+    // selection_text holds the exact copy text; the begin/end +
+    // get_text_selection path is skipped for both paint and copy.
+    // Each element of selection_rects is an object:
+    //   {"page": int, "x0": double, "y0": double, "x1": double, "y1": double}
+    // all page-norm [0,1].  Mouse selection leaves selection_explicit
+    // false and uses the begin/end path unchanged.
+    bool        selection_explicit = false;
+    QJsonArray  selection_rects;
+
     QJsonObject to_json() const;
 };
 

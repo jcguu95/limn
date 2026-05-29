@@ -240,6 +240,50 @@ static QString line_text_for_hit(const QVector<PageLine>& lines,
     return best_text;
 }
 
+// v0.39.18 A: extract the EXACT matched substring inside a hit quad.
+// fz_search returns one quad per match occurrence; that quad's bbox
+// encloses exactly the matched glyphs.  We walk the page's stext chars
+// and keep those whose glyph-rect CENTER falls inside the (slightly
+// padded) match quad, in document order.  This gives the precise copy
+// text — without the whole-line padding the :texts excerpt carries.
+//
+// Returns an empty QString on failure; the caller falls back to the
+// query string in that case.
+static QString match_text_for_quad(Document* doc, int page, const fz_quad& q) {
+    fz_stext_page* stext = nullptr;
+    fz_try(mupdf_context) {
+        stext = doc->get_stext_with_page_number(mupdf_context, page);
+    } fz_catch(mupdf_context) {
+        return QString();
+    }
+    if (!stext) return QString();
+
+    double qx0, qy0, qx1, qy1;
+    quad_to_rect(q, qx0, qy0, qx1, qy1);
+    // Small tolerance (1% of quad height) so glyph centers right on the
+    // edge still count — guards against float rounding in fz coords.
+    const double tol = 0.01 * std::max(1.0, qy1 - qy0);
+
+    QString out;
+    for (fz_stext_block* block = stext->first_block; block; block = block->next) {
+        if (block->type != FZ_STEXT_BLOCK_TEXT) continue;
+        for (fz_stext_line* line = block->u.t.first_line; line; line = line->next) {
+            for (fz_stext_char* ch = line->first_char; ch; ch = ch->next) {
+                double cx0, cy0, cx1, cy1;
+                quad_to_rect(ch->quad, cx0, cy0, cx1, cy1);
+                const double ccx = 0.5 * (cx0 + cx1);
+                const double ccy = 0.5 * (cy0 + cy1);
+                if (ccx >= qx0 - tol && ccx <= qx1 + tol &&
+                    ccy >= qy0 - tol && ccy <= qy1 + tol) {
+                    const int c = ch->c;
+                    if (c <= 0x10FFFF) out.append(QChar(static_cast<uint>(c)));
+                }
+            }
+        }
+    }
+    return out;
+}
+
 QJsonObject extract_search_hits(Document* doc,
                                  const QString& query,
                                  bool case_sensitive) {
@@ -290,9 +334,15 @@ QJsonObject extract_search_hits(Document* doc,
 
         QJsonArray rects;
         QJsonArray texts;          // v0.39.11 A4 — parallel to rects
+        QJsonArray match_texts;    // v0.39.18 A — EXACT matched substring per rect
         for (int i = 0; i < hit_n; ++i) {
             double x0, y0, x1, y1;
             quad_to_rect(quads[i], x0, y0, x1, y1);
+            // v0.39.18 A: exact match substring from the (un-normalized)
+            // page-point quad, BEFORE we normalize the coords below.
+            QString mt = match_text_for_quad(doc, page, quads[i]);
+            if (mt.isEmpty()) mt = query;   // fall back to query string
+            match_texts.append(mt);
             // Normalize to [0,1]² (page-norm coords expected by view/overlays).
             x0 = (x0 - pb.x0) / pw;
             y0 = (y0 - pb.y0) / ph;
@@ -305,6 +355,7 @@ QJsonObject extract_search_hits(Document* doc,
         h.insert("page", page);
         h.insert("rects", rects);
         h.insert("texts", texts);  // v0.39.11 A4 — parallel to rects
+        h.insert("match-texts", match_texts);  // v0.39.18 A — exact copy text
         hits.append(h);
     }
     result.insert("hits", hits);

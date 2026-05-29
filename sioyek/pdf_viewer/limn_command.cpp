@@ -121,6 +121,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "view/set")              { cmd_view_set             (id, msg); return; }
     if (cmd == "view/get")              { cmd_view_get             (id, msg); return; }
     if (cmd == "view/scroll")           { cmd_view_scroll          (id, msg); return; }  // v0.39
+    if (cmd == "view/center-on")        { cmd_view_center_on       (id, msg); return; }  // v0.39.18 A
     if (cmd == "view/overlays")         { cmd_view_overlays        (id, msg); return; }
     if (cmd == "view/selection-set")    { cmd_view_selection_set   (id, msg); return; }
     if (cmd == "view/selection-get")    { cmd_view_selection_get   (id, msg); return; }
@@ -1461,32 +1462,70 @@ void LimnCommand::cmd_view_selection_set(const QString& id, const QJsonObject& m
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
-    QString err;
-    err = validate_sel_pos(msg.value("begin"));
-    if (!err.isEmpty()) { bridge->send_fail(id, err); return; }
-    err = validate_sel_pos(msg.value("end"));
-    if (!err.isEmpty()) { bridge->send_fail(id, err); return; }
+    // v0.39.18 A (search-hit selection fix): explicit-geometry path.
+    // When :rects is present, the caller already knows the exact rects
+    // (page-norm) and (via :text) the exact copy string — pass both
+    // straight through, skipping the begin/end → get_text_selection
+    // round-trip that rounds to char bounds and over-selects.  Each rect
+    // is {"page":int,"x0":d,"y0":d,"x1":d,"y1":d} in page-norm [0,1].
+    const QJsonValue rects_v = msg.value("rects");
+    const bool explicit_rects = rects_v.isArray() && !rects_v.toArray().isEmpty();
 
-    win->selection_begin  = msg.value("begin").toObject();
-    win->selection_end    = msg.value("end").toObject();
-    win->selection_mode   = msg.value("mode").toString("char");
-    win->selection_active = true;
-    // v0.15.2: try real sioyek extraction first. Only works for the
-    // focused window (since extraction goes through the live DV's
-    // document). For non-focused windows we fall back to synth text,
-    // which is still deterministic + distinguishable across coords.
-    QString real_text;
-    if (windows->focused_id() == win_id) {
-        DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
-        Document* doc    = dv ? dv->get_document() : nullptr;
-        real_text = extract_selection_text(dv, doc,
-                                            win->selection_begin,
-                                            win->selection_end,
-                                            win->selection_mode);
+    if (explicit_rects) {
+        win->selection_rects   = rects_v.toArray();
+        win->selection_explicit = true;
+        win->selection_mode    = msg.value("mode").toString("char");
+        win->selection_active  = true;
+        // begin/end are optional in this path; keep whatever was sent (or
+        // synthesize from the first/last rect) so selection_get stays sane.
+        if (validate_sel_pos(msg.value("begin")).isEmpty()) {
+            win->selection_begin = msg.value("begin").toObject();
+        } else {
+            const QJsonObject r0 = win->selection_rects.first().toObject();
+            win->selection_begin = QJsonObject{
+                {"page", r0.value("page")},
+                {"x", r0.value("x0")}, {"y", r0.value("y0")}};
+        }
+        if (validate_sel_pos(msg.value("end")).isEmpty()) {
+            win->selection_end = msg.value("end").toObject();
+        } else {
+            const QJsonObject rN = win->selection_rects.last().toObject();
+            win->selection_end = QJsonObject{
+                {"page", rN.value("page")},
+                {"x", rN.value("x1")}, {"y", rN.value("y1")}};
+        }
+        // Exact copy text comes from :text verbatim — no get_text_selection.
+        win->selection_text = msg.value("text").toString();
+    } else {
+        QString err;
+        err = validate_sel_pos(msg.value("begin"));
+        if (!err.isEmpty()) { bridge->send_fail(id, err); return; }
+        err = validate_sel_pos(msg.value("end"));
+        if (!err.isEmpty()) { bridge->send_fail(id, err); return; }
+
+        win->selection_begin    = msg.value("begin").toObject();
+        win->selection_end      = msg.value("end").toObject();
+        win->selection_mode     = msg.value("mode").toString("char");
+        win->selection_active   = true;
+        win->selection_explicit = false;
+        win->selection_rects    = QJsonArray();
+        // v0.15.2: try real sioyek extraction first. Only works for the
+        // focused window (since extraction goes through the live DV's
+        // document). For non-focused windows we fall back to synth text,
+        // which is still deterministic + distinguishable across coords.
+        QString real_text;
+        if (windows->focused_id() == win_id) {
+            DocumentView* dv = main_widget ? main_widget->document_view() : nullptr;
+            Document* doc    = dv ? dv->get_document() : nullptr;
+            real_text = extract_selection_text(dv, doc,
+                                                win->selection_begin,
+                                                win->selection_end,
+                                                win->selection_mode);
+        }
+        win->selection_text = real_text.isEmpty()
+            ? synth_sel_text(win->selection_begin, win->selection_end)
+            : real_text;
     }
-    win->selection_text = real_text.isEmpty()
-        ? synth_sel_text(win->selection_begin, win->selection_end)
-        : real_text;
 
     // If this window is focused, the visible raster needs to redraw
     // (so the selection rect appears immediately for pixel sampling).
@@ -1532,10 +1571,12 @@ void LimnCommand::cmd_view_selection_clear(const QString& id, const QJsonObject&
         bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
         return;
     }
-    win->selection_active = false;
-    win->selection_begin  = QJsonObject();
-    win->selection_end    = QJsonObject();
-    win->selection_text   = QString();
+    win->selection_active   = false;
+    win->selection_begin    = QJsonObject();
+    win->selection_end      = QJsonObject();
+    win->selection_text     = QString();
+    win->selection_explicit = false;
+    win->selection_rects    = QJsonArray();
     if (windows->focused_id() == win_id) {
         int rw = 1200, rh = 900;
         if (auto* gl = main_widget->opengl_widget()) {
@@ -1661,6 +1702,61 @@ void LimnCommand::cmd_view_scroll(const QString& id, const QJsonObject& msg) {
         // current_document->get_offset_page_number(get_offset_y()).
         const int cp = dv->get_center_page_number();
         if (cp >= 0) win->page = cp;
+        int rw = 1200, rh = 900;
+        if (auto* gl = main_widget->opengl_widget()) {
+            if (gl->width()  > 0) rw = gl->width();
+            if (gl->height() > 0) rh = gl->height();
+        }
+        rebuild_overlay_raster(rw, rh);
+        if (auto* gl = main_widget->opengl_widget()) gl->update();
+    }
+
+    bridge->send_ok(id, collect_view_state(win_id));
+}
+
+// ─── view/center-on ───────────────────────────────────────────────────
+//
+// v0.39.18 A (search-scroll fix): scroll the view so a given page-norm
+// point sits at the SCREEN CENTER vertically.  sioyek's offset_y is the
+// absolute-document Y that sits at screen center, so we convert
+// (page, y) → AbsoluteDocumentPos and set offset_y to abs.y, keeping X
+// unchanged.  Used by search navigation to bring the current hit into
+// view instead of just top-aligning its page.
+//
+// Args: :win-id (string), :page (int), :y (page-norm double, 0..1).
+void LimnCommand::cmd_view_center_on(const QString& id, const QJsonObject& msg) {
+    const QString win_id = msg.value("win-id").toString();
+    LimnWindow* win = windows->get(win_id);
+    if (!win) {
+        bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id));
+        return;
+    }
+    if (!msg.value("page").isDouble() || !msg.value("y").isDouble()) {
+        bridge->send_fail(id, "view/center-on requires :page (int) and :y (number)");
+        return;
+    }
+    const int    page = msg.value("page").toInt();
+    const double ny   = msg.value("y").toDouble();
+
+    const bool is_active = (windows->focused_id() == win_id);
+    DocumentView* dv = (main_widget && is_active) ? main_widget->document_view() : nullptr;
+    Document* doc = (!win->buffer_id.isEmpty()) ? registry->lookup(win->buffer_id) : nullptr;
+    if (!doc) doc = (dv ? dv->get_document() : nullptr);
+
+    AbsoluteDocumentPos abs;
+    if (!page_norm_to_absolute(doc, page, 0.5, ny, &abs)) {
+        bridge->send_fail(id, QString("view/center-on: invalid page %1").arg(page));
+        return;
+    }
+
+    // offset_y is the document Y at screen center → set it to the hit's
+    // center Y to center the hit vertically.  Keep current X.
+    win->offset_y = abs.y;
+    win->page     = page;
+    if (is_active && dv) {
+        const float cur_x = dv->get_offset_x();
+        win->offset_x = cur_x;
+        dv->set_offsets(cur_x, abs.y, true);
         int rw = 1200, rh = 900;
         if (auto* gl = main_widget->opengl_widget()) {
             if (gl->width()  > 0) rw = gl->width();
@@ -3433,30 +3529,76 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
         // raster bounds and Qt clips them — nothing visible, nothing wrong.
         // This makes the highlight robust against win->page being stale,
         // which is what blocked selections after j/k scroll on page 1+.
-        fprintf(stderr, "[limn-debug] selection render: sp_begin=%d sp_end=%d current_page=%d win->page=%d\n",
+        fprintf(stderr, "[limn-debug] selection render: sp_begin=%d sp_end=%d current_page=%d win->page=%d explicit=%d nrects=%d\n",
                 sp_begin, sp_end, current_page,
-                focused_win ? focused_win->page : -99);
-        if (sp_begin == sp_end && sp_begin >= 0) {
+                focused_win ? focused_win->page : -99,
+                focused_win->selection_explicit ? 1 : 0,
+                focused_win->selection_rects.size());
+
+        QColor selcol(100, 180, 255);    // light blue 反藍
+        selcol.setAlphaF(0.35);
+        const bool dv_live_sel =
+            dv->get_view_width() > 0 && dv->get_view_height() > 0;
+        // Helper: fill one QRectF, respecting rotation transform.  Shared
+        // by the explicit-rects path and the begin/end path below.
+        auto fill_sel_rect = [&](QRectF r) {
+            if (dv_live_sel && current_rotation != 0) {
+                QTransform saved = painter.transform();
+                painter.resetTransform();
+                painter.fillRect(r, selcol);
+                painter.setTransform(saved);
+            } else {
+                painter.fillRect(r, selcol);
+            }
+        };
+
+        // v0.39.18 A: explicit-rects path — paint the caller-supplied
+        // page-norm rects EXACTLY (search-hit match quads).  No
+        // get_text_selection re-derivation → no char-rounding overselect.
+        if (focused_win->selection_explicit &&
+            !focused_win->selection_rects.isEmpty()) {
+            for (const QJsonValue& rv : focused_win->selection_rects) {
+                if (!rv.isObject()) continue;
+                const QJsonObject ro = rv.toObject();
+                const int rpage = ro.value("page").toInt(-1);
+                if (rpage < 0 || rpage >= doc->num_pages()) continue;
+                const double rx0 = ro.value("x0").toDouble();
+                const double ry0 = ro.value("y0").toDouble();
+                const double rx1 = ro.value("x1").toDouble();
+                const double ry1 = ro.value("y1").toDouble();
+                if (dv_live_sel) {
+                    const float pw_pts = doc->get_page_width(rpage);
+                    const float ph_pts = doc->get_page_height(rpage);
+                    WindowPos wp0 = dv->document_to_window_pos_in_pixels_uncentered(
+                        {rpage, (float)(rx0 * pw_pts), (float)(ry0 * ph_pts)});
+                    WindowPos wp1 = dv->document_to_window_pos_in_pixels_uncentered(
+                        {rpage, (float)(rx1 * pw_pts), (float)(ry1 * ph_pts)});
+                    fill_sel_rect(QRectF(
+                        QPointF(std::min((float)wp0.x, (float)wp1.x),
+                                std::min((float)wp0.y, (float)wp1.y)),
+                        QPointF(std::max((float)wp0.x, (float)wp1.x),
+                                std::max((float)wp0.y, (float)wp1.y))));
+                } else {
+                    // Headless fallback (fit-to-page, zero scroll): page-norm
+                    // maps directly to the raster.  Only correct for the
+                    // current page in that simplified geometry.
+                    if (rpage != current_page) continue;
+                    fill_sel_rect(QRectF(
+                        QPointF((float)(rx0 * eff_w), (float)(ry0 * eff_h)),
+                        QPointF((float)(rx1 * eff_w), (float)(ry1 * eff_h))));
+                }
+            }
+        } else if (sp_begin == sp_end && sp_begin >= 0) {
             const double bx = sb.value("x").toDouble();
             const double by = sb.value("y").toDouble();
             const double ex = se.value("x").toDouble();
             const double ey = se.value("y").toDouble();
 
-            QColor selcol(100, 180, 255);    // light blue 反藍
-            selcol.setAlphaF(0.35);
-            const bool dv_live = dv->get_view_width() > 0 && dv->get_view_height() > 0;
-
-            // Helper: fill one QRectF, respecting rotation transform.
-            auto fill_rect = [&](QRectF r) {
-                if (dv_live && current_rotation != 0) {
-                    QTransform saved = painter.transform();
-                    painter.resetTransform();
-                    painter.fillRect(r, selcol);
-                    painter.setTransform(saved);
-                } else {
-                    painter.fillRect(r, selcol);
-                }
-            };
+            // Reuse the outer selection helpers (selcol / dv_live_sel /
+            // fill_sel_rect) so the mouse / begin-end path matches the
+            // explicit-rects path exactly.
+            const bool dv_live = dv_live_sel;
+            auto& fill_rect = fill_sel_rect;
 
             // Primary path: ask sioyek for the actual per-character rects so
             // the highlight follows text line breaks instead of drawing one

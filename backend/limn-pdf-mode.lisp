@@ -306,13 +306,19 @@
         for page  = (getf hit :|page|)
         for rects = (getf hit :|rects|)
         for texts = (getf hit :|texts|)
+        ;; v0.39.18 A: :|match-texts| is the EXACT matched substring per
+        ;; rect (engine extracts the glyphs inside each match quad).  Used
+        ;; as the M-w copy text — the :|texts| line excerpt is too wide.
+        for mtexts = (getf hit :|match-texts|)
         nconc (loop for r in rects
                     for i from 0
                     for tx = (and (consp texts) (nth i texts))
-                    collect (list :|page|  page
-                                  :|rects| (list r)
-                                  :|texts| (and tx (list tx))
-                                  :|text|  (or tx "")))))
+                    for mt = (and (consp mtexts) (nth i mtexts))
+                    collect (list :|page|        page
+                                  :|rects|       (list r)
+                                  :|texts|       (and tx (list tx))
+                                  :|match-texts| (and mt (list mt))
+                                  :|text|        (or tx "")))))
 
 (defun %do-search-wire (buffer-id query &key case-sensitive)
   "Wire-only helper: do the buffer/search round-trip and install a
@@ -656,38 +662,64 @@
 ;;; top-left of the hit's first rect, end = bottom-right of the
 ;;; LAST rect on the same page (handles multi-rect line wraps).
 (defun %select-current-hit (state)
-  ;; v0.39.16: shrink end-point by EPS so sioyek's get_text_selection
-  ;; doesn't round to the NEXT character.  Previously selecting "integ"
-  ;; ended up with "integr" because end.x landed exactly on the right
-  ;; edge of "g" = left edge of "r", and sioyek's char-bbox round-to-
-  ;; nearest included "r".  EPS is in page-norm units; 0.0005 ≈ ~0.5
-  ;; character width on a typical page, plenty to land inside the rect
-  ;; but well shy of the hit's leftmost char.
+  ;; v0.39.18 A (root fix): pass the hit's EXACT match quads straight to
+  ;; view/selection-set as :|rects|, plus an exact :|text| built from the
+  ;; engine's per-rect :|match-texts| (the precise glyphs inside each
+  ;; quad).  C++ paints those rects verbatim and uses :|text| as the copy
+  ;; string — neither path touches get_text_selection, so there is no
+  ;; char-rounding overselect (the old EPS gamble is gone).  Each rect is
+  ;; sent as {:page :x0 :y0 :x1 :y1} (page-norm).
   (when state
-    (let* ((hits (pdf-search-state-hits state))
-           (idx  (pdf-search-state-current-index state))
-           (hit  (and (consp hits) (nth idx hits)))
-           (page (and hit (getf hit :|page|)))
+    (let* ((hits  (pdf-search-state-hits state))
+           (idx   (pdf-search-state-current-index state))
+           (hit   (and (consp hits) (nth idx hits)))
+           (page  (and hit (getf hit :|page|)))
            (rects (and hit (getf hit :|rects|)))
-           (first-r (and (consp rects) (first rects)))
-           (last-r  (and (consp rects)
-                         (or (car (last rects)) first-r)))
-           (eps 0.0005))
-      (when (and (integerp page) first-r last-r
-                 (>= (length first-r) 4) (>= (length last-r) 4))
-        (let* ((bx (nth 0 first-r))
-               (by (nth 1 first-r))
-               (raw-ex (nth 2 last-r))
-               (raw-ey (nth 3 last-r))
-               ;; Pull end inward, but never past begin.
-               (ex (max (- raw-ex eps) (+ bx eps)))
-               (ey (max (- raw-ey eps) (+ by eps))))
+           (mtexts (and hit (getf hit :|match-texts|))))
+      (when (and (integerp page) (consp rects))
+        (let* ((rect-objs
+                 (loop for r in rects
+                       when (and (consp r) (>= (length r) 4))
+                         collect (list :|page| page
+                                       :|x0| (nth 0 r) :|y0| (nth 1 r)
+                                       :|x1| (nth 2 r) :|y1| (nth 3 r))))
+               ;; Join the exact match substrings (one per rect).  For a
+               ;; line-wrapped match there are >1 rects/texts; concatenate.
+               (copy-text
+                 (cond
+                   ((consp mtexts)
+                    (format nil "~{~A~}"
+                            (remove nil mtexts)))
+                   (t (or (pdf-search-state-query state) "")))))
+          (when rect-objs
+            (handler-case
+                (%limn-call "view/selection-set"
+                            :|win-id| *current-win-id*
+                            :|rects| rect-objs
+                            :|text|  copy-text
+                            :|mode|  "char")
+              (error () nil))))))))
+
+;;; v0.39.18 A (bug 2): center the current hit vertically on screen.
+;;; %page-set only top-aligns the page; if the hit is lower on the page
+;;; it lands off-screen.  view/center-on converts (page, page-norm-y) to
+;;; absolute doc Y and sets offset_y so that Y sits at screen center.
+;;; We use the vertical center of the hit's first rect.
+(defun %center-on-current-hit (state)
+  (when state
+    (let* ((hits  (pdf-search-state-hits state))
+           (idx   (pdf-search-state-current-index state))
+           (hit   (and (consp hits) (nth idx hits)))
+           (page  (and hit (getf hit :|page|)))
+           (rects (and hit (getf hit :|rects|)))
+           (first-r (and (consp rects) (first rects))))
+      (when (and (integerp page) (consp first-r) (>= (length first-r) 4))
+        (let ((cy (/ (+ (nth 1 first-r) (nth 3 first-r)) 2.0)))
           (handler-case
-              (%limn-call "view/selection-set"
+              (%limn-call "view/center-on"
                           :|win-id| *current-win-id*
-                          :|begin| (list :|page| page :|x| bx :|y| by)
-                          :|end|   (list :|page| page :|x| ex :|y| ey)
-                          :|mode|  "char")
+                          :|page| page
+                          :|y| cy)
             (error () nil)))))))
 
 ;;; --- v0.39.11 A4: narrow + fuzzy filters --------------------------
@@ -703,19 +735,24 @@
       (let* ((page  (getf hit :|page|))
              (rects (getf hit :|rects|))
              (texts (getf hit :|texts|))
+             (mtexts (getf hit :|match-texts|))   ; v0.39.18 A
              (kept-r nil)
              (kept-t nil)
+             (kept-mt nil)
              (i 0))
         (dolist (r rects)
-          (let ((tx (and (consp texts) (nth i texts))))
+          (let ((tx (and (consp texts) (nth i texts)))
+                (mt (and (consp mtexts) (nth i mtexts))))
             (when (funcall pred page r (or tx ""))
               (push r  kept-r)
-              (push tx kept-t)))
+              (push tx kept-t)
+              (push mt kept-mt)))
           (incf i))
         (when kept-r
           (push (list :|page|  page
                       :|rects| (nreverse kept-r)
-                      :|texts| (nreverse kept-t))
+                      :|texts| (nreverse kept-t)
+                      :|match-texts| (nreverse kept-mt))
                 kept-hits))))
     (nreverse kept-hits)))
 
@@ -1286,6 +1323,7 @@
                   (when (integerp p) (limn/pdf-mode::%page-set p)))))
             (limn/pdf-mode::%emit-search-overlays state)
             (limn/pdf-mode::%select-current-hit state)
+            (limn/pdf-mode::%center-on-current-hit state)
             (limn/pdf-mode::%refresh-search-modeline)))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-next nil
@@ -1310,6 +1348,7 @@
               (when (integerp p) (limn/pdf-mode::%page-set p))))
           (limn/pdf-mode::%emit-search-overlays s)
           (limn/pdf-mode::%select-current-hit s)
+          (limn/pdf-mode::%center-on-current-hit s)
           (limn/pdf-mode::%refresh-search-modeline))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-prev nil
@@ -1325,6 +1364,7 @@
               (when (integerp p) (limn/pdf-mode::%page-set p)))))
         (limn/pdf-mode::%emit-search-overlays s)
         (limn/pdf-mode::%select-current-hit s)
+        (limn/pdf-mode::%center-on-current-hit s)
         (limn/pdf-mode::%refresh-search-modeline)))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-quit nil
@@ -1372,6 +1412,8 @@
              (limn/pdf-mode::%search-state))
             (limn/pdf-mode::%select-current-hit
              (limn/pdf-mode::%search-state))
+            (limn/pdf-mode::%center-on-current-hit
+             (limn/pdf-mode::%search-state))
             (limn/pdf-mode::%refresh-search-modeline)
             (handler-case
                 (limn/pdf-mode::%limn-call
@@ -1410,6 +1452,7 @@
               (when (integerp p)
                 (limn/pdf-mode::%page-set p)))
             (limn/pdf-mode::%select-current-hit state)
+            (limn/pdf-mode::%center-on-current-hit state)
             (limn/pdf-mode::%refresh-search-modeline)))))))
 
 ;;; v0.39: smart n / p — walk search hits when a search is active,
@@ -1437,6 +1480,7 @@
               (when (integerp p) (limn/pdf-mode::%page-set p)))
             (limn/pdf-mode::%emit-search-overlays s)
             (limn/pdf-mode::%select-current-hit s)
+            (limn/pdf-mode::%center-on-current-hit s)
             (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: next page ─────────────────────────────
           (let* ((v  (limn/pdf-mode::%focused-view))
@@ -1459,6 +1503,7 @@
               (when (integerp p) (limn/pdf-mode::%page-set p)))
             (limn/pdf-mode::%emit-search-overlays s)
             (limn/pdf-mode::%select-current-hit s)
+            (limn/pdf-mode::%center-on-current-hit s)
             (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: previous page ─────────────────────────
           (let* ((v  (limn/pdf-mode::%focused-view))
@@ -1562,7 +1607,8 @@
                        (when (integerp p)
                          (limn/pdf-mode::%page-set p))))
                    (limn/pdf-mode::%emit-search-overlays new-state)
-                   (limn/pdf-mode::%select-current-hit new-state))))
+                   (limn/pdf-mode::%select-current-hit new-state)
+                   (limn/pdf-mode::%center-on-current-hit new-state))))
               (limn/pdf-mode::%refresh-search-modeline)))))))))
 
 ;; v0.39.15: pdf-isearch-fuzzy removed per user feedback ("先移除掉.
