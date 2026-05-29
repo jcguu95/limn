@@ -63,6 +63,7 @@
    #:pdf-annotations-content-hash-sidecar-path
    #:pdf-annotations-save #:pdf-annotations-load
    #:pdf-annotations-overlay-payload
+   #:pdf-annotations-overlay-payload-with-icons
    #:pdf-annotations-for-buffer
    #:pdf-annotations-delete-at-point
    #:pdf-annotations-at-point
@@ -1155,6 +1156,39 @@
                   acc)))))
     (nreverse acc)))
 
+;; v0.40: companion payload builder that emits a small "note attached"
+;; icon for every annotation whose :note field is non-empty.  The icon
+;; is anchored at the TOP-RIGHT corner of the annotation's first rect
+;; (page-norm) — leaning slightly into the right margin so it doesn't
+;; visually compete with the highlight body but is still on the same
+;; horizontal line as the highlighted text.  Annotations without a
+;; note get only the highlight rect (no icon), so a reader can scan
+;; a page for which highlights actually carry a note.
+(defun pdf-annotations-overlay-payload-with-icons (anns)
+  "Like pdf-annotations-overlay-payload, plus an extra :type \"icon\"
+   layer for each annotation that has a non-empty :note field."
+  (let ((rects (pdf-annotations-overlay-payload anns))
+        (icons '()))
+    (dolist (a anns)
+      (let ((note (pdf-annotation-note a))
+            (first-rect (first (pdf-annotation-rects a))))
+        (when (and note (stringp note) (plusp (length note)) first-rect)
+          ;; First-rect is (x0 y0 x1 y1) in page-norm.  Anchor at the
+          ;; top-right corner, nudged a hair into the right margin.
+          (let* ((x1 (third first-rect))
+                 (y0 (second first-rect))
+                 (ix (min 0.99 (+ x1 0.005)))
+                 (iy (max 0.01 y0)))
+            (push (list :|type| "icon"
+                        :|page| (pdf-annotation-page a)
+                        :|x| ix
+                        :|y| iy
+                        :|shape| "note"
+                        :|color| "#FFAA00"
+                        :|size| 12)
+                  icons)))))
+    (append rects (nreverse icons))))
+
 (defun pdf-annotations-for-buffer (path)
   "Convenience: overlay-payload, via cache (builds on miss)."
   (let ((entry (%annotations-cache-get path)))
@@ -1189,7 +1223,7 @@
 (defun %refresh-overlays (path anns)
   (declare (ignore path))
   (%limn-call "view/overlays" :|win-id| "w1"
-               :|layers| (pdf-annotations-overlay-payload anns)))
+               :|layers| (pdf-annotations-overlay-payload-with-icons anns)))
 
 (defun %annotations-replace-by-id (path ann)
   "Load PATH's sidecar, replace the element whose id matches ANN's id with
@@ -1915,7 +1949,7 @@
           ;; returned overlays=[].  Fixed schema name.
           (limn/pdf-mode::%limn-call
            "view/overlays" :|win-id| "w1"
-           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload all))
+           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload-with-icons all))
           ;; v0.39 D-v2 (feature 2): clear the live selection band so the
           ;; user sees only the saved yellow overlay, not blue + yellow.
           (handler-case
@@ -2092,7 +2126,7 @@
                  (limn/pdf-mode:pdf-annotations-save path updated)
                  (limn/pdf-mode::%limn-call
                   "view/overlays" :|win-id| "w1"
-                  :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload updated))))
+                  :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload-with-icons updated))))
              (handler-case
                  (limn/pdf-mode::%limn-call "message/echo"
                                              :|text| "Note updated")
@@ -2368,7 +2402,7 @@
       ;; persistent annotation markup so it's visible while navigating.
       (handler-case
           (%limn-call "view/overlays" :|win-id| "w1"
-                      :|layers| (pdf-annotations-overlay-payload
+                      :|layers| (pdf-annotations-overlay-payload-with-icons
                                  (pdf-annotations-load path)))
         (error () nil))
       (setf (getf *notes-list-state* :focus) :pdf)
@@ -2431,7 +2465,7 @@
       ;; persistent annotation markup from the (possibly mutated) sidecar.
       (handler-case
           (%limn-call "view/overlays" :|win-id| "w1"
-                      :|layers| (pdf-annotations-overlay-payload
+                      :|layers| (pdf-annotations-overlay-payload-with-icons
                                  (pdf-annotations-load path)))
         (error () nil))
       (when tid
@@ -3274,7 +3308,12 @@
       (when anns
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
-         :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload anns))))
+         ;; v0.40: payload-with-icons emits a small orange "note"
+         ;; icon next to every annotation whose :note field is non-
+         ;; empty, in addition to the highlight rect.  Annotations
+         ;; without a note look exactly as before (rect only).
+         :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload-with-icons
+                    anns))))
     ;; Restore bookmarks from path-keyed sidecar (v0.37 Phase F batch 18).
     ;; C++ wire is in-memory only by design; this is where the close+
     ;; reopen "my marks survive" guarantee actually lives.
