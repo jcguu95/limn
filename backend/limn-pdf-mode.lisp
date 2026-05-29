@@ -46,11 +46,17 @@
    #:pdf-search-state-hits #:pdf-search-state-current-index
    #:pdf-search-execute #:pdf-search-overlay-payload
    #:pdf-search-advance #:pdf-search-retreat #:pdf-search-reset
+   ;; v0.39.11 A1+A4 additions
+   #:pdf-format-search-counter
+   #:pdf-search-filter-hits
+   #:pdf-search-narrow-by-substring
+   #:pdf-search-rank-fuzzy
    #:*pdf-last-search-query* #:*pdf-wrapped-message*
    ;; §C annotation
    #:make-pdf-annotation #:pdf-annotation-p
    #:pdf-annotation-id #:pdf-annotation-page #:pdf-annotation-rects
    #:pdf-annotation-color #:pdf-annotation-note #:pdf-annotation-created-at
+   #:pdf-annotation-type #:pdf-annotation-tags
    #:pdf-annotations-serialize #:pdf-annotations-deserialize
    #:pdf-annotations-sidecar-path
    #:pdf-annotations-content-hash-sidecar-path
@@ -63,6 +69,10 @@
    #:pdf-annotations-migrate
    #:pdf-annotations-export-org
    #:*pdf-annotations-schema-version*
+   ;; §C cache + query surface (v0.39.11)
+   #:pdf-annotations-on-page
+   #:pdf-annotations-pages-with-notes
+   #:pdf-annotations-with-tag
    ;; §D TOC
    #:*pdf-toc-buffer-name*
    #:format-toc-tree #:parse-toc-line-page
@@ -288,33 +298,88 @@
 (defvar *pdf-wrapped-message* "Wrapped"
   "Text shown in echo area when search wraps.")
 
-(defun pdf-search-execute (buffer-id query &key case-sensitive)
-  "Send buffer/search wire call, store result in *pdf-search-state*,
-   return state object. Empty query stored but no wire call."
+(defun %flatten-page-hits (page-hits)
+  "Wire `buffer/search` groups hits by page: each entry is
+     (:|page| P :|rects| (rect ...) :|texts| (text ...))
+   But n/p must navigate ONE OCCURRENCE at a time, not one page at
+   a time — otherwise a page with three 'path' matches counts as
+   a single index and %select-current-hit ends up spanning rect[0]
+   to rect[N-1], swallowing everything between the first and last
+   match on that page.
+
+   This helper rewrites the wire payload into a flat per-occurrence
+   list: each output hit carries exactly one rect (in :|rects|, so
+   pdf-search-overlay-payload's existing dolist still works) and the
+   single text excerpt for that occurrence."
+  (loop for hit in page-hits
+        for page  = (getf hit :|page|)
+        for rects = (getf hit :|rects|)
+        for texts = (getf hit :|texts|)
+        ;; v0.39.18 A: :|match-texts| is the EXACT matched substring per
+        ;; rect (engine extracts the glyphs inside each match quad).  Used
+        ;; as the M-w copy text — the :|texts| line excerpt is too wide.
+        for mtexts = (getf hit :|match-texts|)
+        nconc (loop for r in rects
+                    for i from 0
+                    for tx = (and (consp texts) (nth i texts))
+                    for mt = (and (consp mtexts) (nth i mtexts))
+                    collect (list :|page|        page
+                                  :|rects|       (list r)
+                                  :|texts|       (and tx (list tx))
+                                  :|match-texts| (and mt (list mt))
+                                  :|text|        (or tx "")))))
+
+(defun %do-search-wire (buffer-id query &key case-sensitive)
+  "Wire-only helper: do the buffer/search round-trip and install a
+   new pdf-search-state with flattened hits.  Does NOT touch
+   *pdf-filter-depth* or *pdf-search-overlay-history* — the caller
+   decides whether this is a fresh / (clear both) or an M-n re-search
+   (preserve history, bump depth).  Returns the new state or NIL."
   (when (and query (> (length query) 0))
-    (setf *pdf-last-search-query* query)
     (let* ((r (%limn-call "buffer/search"
                            :|buffer-id| buffer-id
                            :|query| query
                            :|case-sensitive| (if case-sensitive t :false)))
            (d (%response-data r))
-           (hits (and d (getf d :|hits|))))
+           (raw-hits (and d (getf d :|hits|)))
+           (flat-hits (%flatten-page-hits (or raw-hits '()))))
       (%set-search-state
        (make-pdf-search-state :buffer-id buffer-id
                                :query query
-                               :hits (or hits '())
+                               :hits flat-hits
                                :current-index 0))
+      (%search-state))))
+
+(defun pdf-search-execute (buffer-id query &key case-sensitive)
+  "Fresh / search: wire round-trip + reset filter depth + clear
+   overlay history + seed the narrow-line context with this search's
+   hit lines (so the FIRST M-n can intersect).  M-n uses
+   %do-search-wire directly so it can preserve history."
+  (when (and query (> (length query) 0))
+    (setf *pdf-last-search-query* query)
+    (setf *pdf-filter-depth* 0)             ; fresh search resets filter colors
+    (%set-overlay-history nil)               ; fresh search clears prior colors
+    (%set-narrow-stack nil)                  ; fresh search clears narrow stack
+    (let ((state (%do-search-wire buffer-id query :case-sensitive case-sensitive)))
+      ;; Seed narrow context from this search's hit lines.
+      (when state
+        (%set-narrow-lines
+         (%lines-from-hits (pdf-search-state-hits state))))
       ;; v0.25 search-history integration (§T)
       (let ((add (find-symbol "ADD-TO-HISTORY" :limn/history)))
         (when (and add (fboundp add))
           (handler-case
               (funcall (symbol-function add) '*search-history* query)
             (error () nil))))
-      (%search-state))))
+      state)))
 
 (defun pdf-search-reset ()
   "Clear search state for the current window and remove overlays."
   (%set-search-state nil)
+  (setf *pdf-filter-depth* 0)
+  (%set-overlay-history nil)
+  (%set-narrow-lines nil)
+  (%set-narrow-stack nil)
   (%limn-call "view/overlays" :|win-id| *current-win-id* :|layers| '()))
 
 (defun pdf-search-advance (state)
@@ -336,39 +401,443 @@
                    (length hits))))))
   state)
 
-(defun pdf-search-overlay-payload (state)
-  "Generate overlays plist list. Current hit = opacity 0.6;
-   others = 0.25. Multi-rect hits each get their own overlay entry."
-  (when (and state (pdf-search-state-hits state))
-    (let ((current-idx (pdf-search-state-current-index state))
-          (acc nil)
-          (i 0))
+(defun pdf-search-overlay-payload (state &optional color)
+  "Generate overlays plist list.  Multi-rect hits each get their own
+   overlay entry.
+
+   v0.39.14 user feedback: full-strength 0.60 yellow looked like a
+   real annotation highlight and competed visually with the page
+   text.  Dropped current/other alphas across both depths.
+
+     depth 0 (/ search):   current 0.42, other 0.18
+     depth>0 (M-n / M-f):  current 0.34, other 0.15"
+  (let* ((effective-color
+           (or color
+               (if (zerop *pdf-filter-depth*)
+                   "#FFD700"
+                   (%pdf-filter-color (1- *pdf-filter-depth*)))))
+         (alpha-current (if (zerop *pdf-filter-depth*) 0.42 0.34))
+         (alpha-other   (if (zerop *pdf-filter-depth*) 0.18 0.15)))
+    (when (and state (pdf-search-state-hits state))
+      (let ((current-idx (pdf-search-state-current-index state))
+            (acc nil)
+            (i 0))
       (dolist (hit (pdf-search-state-hits state))
         (let* ((page (getf hit :|page|))
                (rects (getf hit :|rects|))
-               (op (if (= i current-idx) 0.6 0.25)))
+               (op (if (= i current-idx) alpha-current alpha-other)))
           (dolist (rect rects)
             (push (list :|type| "rect"
                          :|page| page
                          :|rect| rect
-                         :|color| "#FFD700"
+                         :|color| effective-color
                          :|opacity| op)
                   acc)))
         (incf i))
+      (nreverse acc)))))
+
+;; v0.39.14 cumulative narrow — keep prior search colors visible.
+;;
+;; User wanted: `/ path` shows yellow; then `M-n init` ADDS cyan on
+;; top, with the yellow still there.  Previously M-n's view/overlays
+;; call replaced the whole layer list and the yellow disappeared.
+;;
+;; *pdf-search-overlay-history* is a per-window list of FROZEN layer-
+;; lists from prior search/narrow steps.  pdf-search-reset and a
+;; fresh `/` search clear it.  Each M-n appends the CURRENT payload
+;; (computed BEFORE the new search) into history, then runs the new
+;; search; the next view/overlays sends (history-flat ++ new-layers)
+;; so all colors stack visually.  n/p still navigates only the latest
+;; search's hits — which matches "the colored prior ones are
+;; reference, the current one is what I'm scrolling through".
+(defvar *pdf-search-overlay-history* (make-hash-table :test #'equal)
+  "win-id → list of frozen overlay layer-lists (each entry is itself
+   a plist-of-rects, i.e. the output of pdf-search-overlay-payload
+   at the moment that search was done).")
+
+(defun %overlay-history () (gethash *current-win-id* *pdf-search-overlay-history*))
+(defun %set-overlay-history (v)
+  (if v (setf (gethash *current-win-id* *pdf-search-overlay-history*) v)
+        (remhash *current-win-id* *pdf-search-overlay-history*))
+  v)
+
+(defun %composite-overlay-layers (state-payload)
+  "Concatenate (oldest→newest history) ++ state-payload.  Returns
+   the full :|layers| list to ship via view/overlays."
+  (let ((history (%overlay-history)))
+    (apply #'append
+           (append (reverse history)            ; oldest first for stacking
+                   (list (or state-payload '()))))))
+
+(defun %emit-search-overlays (state &optional color)
+  "Send composite (history + current) view/overlays for STATE.
+   Centralised so every search nav command treats the cumulative
+   layers uniformly."
+  (%limn-call "view/overlays"
+              :|win-id| *current-win-id*
+              :|layers| (%composite-overlay-layers
+                          (pdf-search-overlay-payload state color))))
+
+;; v0.39.15 line-narrow context — what makes M-n actually narrow.
+;;
+;; Each successful / or M-n stores the (page . normalised-line-text)
+;; pairs of its hits' lines into *pdf-narrow-lines*.  The NEXT M-n
+;; issues a fresh buffer/search but then keeps only those new hits
+;; whose (page, line) is in the stored set; the set is then tightened
+;; to those surviving hits.  Successive M-n therefore tighten
+;; recursively: M-n init after / path keeps only "init" occurrences
+;; on lines that contained "path"; another M-n return keeps only
+;; "return" occurrences on lines that contained both.
+;;
+;; Paragraph-level narrow would need block info from MuPDF that the
+;; current :texts wire field doesn't carry — line is what we have
+;; today and matches the user's "如果 paragraph 很麻煩，那我們就先做
+;; line" instruction.
+(defvar *pdf-narrow-lines* (make-hash-table :test #'equal)
+  "win-id → list of (page . normalised-line-text) tuples representing
+   the intersected line set across the current / + M-n chain.")
+
+(defun %narrow-lines () (gethash *current-win-id* *pdf-narrow-lines*))
+(defun %set-narrow-lines (v)
+  (if v (setf (gethash *current-win-id* *pdf-narrow-lines*) v)
+        (remhash *current-win-id* *pdf-narrow-lines*))
+  v)
+
+(defun %normalise-line-text (s)
+  "Lowercase + trim + collapse internal whitespace runs."
+  (when (stringp s)
+    (let* ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) s))
+           (lower (string-downcase trimmed))
+           (out (make-string-output-stream))
+           (prev-space nil))
+      (loop for ch across lower
+            do (cond
+                 ((or (char= ch #\Space) (char= ch #\Tab)
+                      (char= ch #\Newline) (char= ch #\Return))
+                  (unless prev-space
+                    (write-char #\Space out)
+                    (setf prev-space t)))
+                 (t (write-char ch out) (setf prev-space nil))))
+      (get-output-stream-string out))))
+
+(defun %lines-from-hits (hits)
+  "Extract the unique (page . normalised-line-text) tuples from HITS."
+  (let ((seen (make-hash-table :test #'equal))
+        (acc nil))
+    (dolist (h hits)
+      (let* ((page (getf h :|page|))
+             (raw  (or (getf h :|text|)
+                       (and (consp (getf h :|texts|))
+                            (first (getf h :|texts|)))))
+             (norm (and raw (%normalise-line-text raw)))
+             (key  (and (integerp page) norm
+                        (and (plusp (length norm)) (cons page norm)))))
+        (when (and key (not (gethash key seen)))
+          (setf (gethash key seen) t)
+          (push key acc))))
+    (nreverse acc)))
+
+(defun %hits-in-narrow-set (hits narrow-set)
+  "Keep only hits whose (page, line-text) is in NARROW-SET.
+   NARROW-SET is a list of (page . norm-text) cons cells; we look up
+   via a transient hash for O(N+M)."
+  (let ((tbl (make-hash-table :test #'equal)))
+    (dolist (e narrow-set) (setf (gethash e tbl) t))
+    (loop for h in hits
+          for page = (getf h :|page|)
+          for raw  = (or (getf h :|text|)
+                         (and (consp (getf h :|texts|))
+                              (first (getf h :|texts|))))
+          for norm = (and raw (%normalise-line-text raw))
+          when (and (integerp page) norm
+                    (gethash (cons page norm) tbl))
+            collect h)))
+
+;; v0.39.16 narrow-stack — C-g pops one M-n level, not the whole search.
+;;
+;; Each successful M-n pushes a snapshot of the PRIOR state onto the
+;; stack BEFORE applying the new narrow.  pdf-isearch-quit (C-g) now:
+;;   - pops one snapshot if stack non-empty (restore prior level)
+;;   - full-reset if stack empty
+;;
+;; Snapshot captures everything needed to re-render the prior level:
+;; the search-state's hits + index, the narrow-line set, the overlay
+;; history, and the filter depth (for the color).
+(defvar *pdf-narrow-stack* (make-hash-table :test #'equal)
+  "win-id → list of narrow snapshots from prior levels.  Each snapshot
+   is a plist with :|state| :|narrow| :|history| :|depth|.")
+
+(defun %narrow-stack () (gethash *current-win-id* *pdf-narrow-stack*))
+(defun %set-narrow-stack (v)
+  (if v (setf (gethash *current-win-id* *pdf-narrow-stack*) v)
+        (remhash *current-win-id* *pdf-narrow-stack*))
+  v)
+
+(defun %snapshot-search-state (s)
+  "Return a plist that fully captures S so %restore can rebuild it."
+  (when s
+    (list :|buffer-id| (pdf-search-state-buffer-id s)
+          :|query|     (pdf-search-state-query s)
+          :|hits|      (pdf-search-state-hits s)
+          :|index|     (pdf-search-state-current-index s))))
+
+(defun %restore-search-state (snap)
+  "Replace *pdf-search-states*[win-id] with a state rebuilt from SNAP."
+  (when snap
+    (%set-search-state
+     (make-pdf-search-state
+      :buffer-id    (getf snap :|buffer-id|)
+      :query        (getf snap :|query|)
+      :hits         (getf snap :|hits|)
+      :current-index (getf snap :|index|)))))
+
+(defun %push-narrow-level ()
+  "Snapshot the CURRENT level (state + narrow + history + depth) onto
+   *pdf-narrow-stack*.  Called by M-n before applying the new narrow,
+   so a subsequent C-g can restore this point."
+  (let ((snap (list :|state|   (%snapshot-search-state (%search-state))
+                    :|narrow|  (%narrow-lines)
+                    :|history| (%overlay-history)
+                    :|depth|   *pdf-filter-depth*)))
+    (%set-narrow-stack (cons snap (%narrow-stack)))))
+
+(defun %pop-narrow-level ()
+  "Restore the most recent snapshot off *pdf-narrow-stack*.  Returns
+   T on pop, NIL when stack was empty."
+  (let ((stack (%narrow-stack)))
+    (when (consp stack)
+      (let ((snap (first stack)))
+        (%set-narrow-stack (rest stack))
+        (%restore-search-state (getf snap :|state|))
+        (%set-narrow-lines    (getf snap :|narrow|))
+        (%set-overlay-history (getf snap :|history|))
+        (setf *pdf-filter-depth* (getf snap :|depth|))
+        t))))
+
+;; v0.39.11 A4 follow-up: track filter depth so successive M-n / M-f
+;; rotate colors (mild rainbow).  Reset whenever a fresh / search runs.
+(defvar *pdf-filter-depth* 0
+  "How many M-n / M-f filters have been chained on top of the latest /
+   search.  Reset by pdf-search-execute and pdf-search-reset.
+   Per-window via a hash-table would be tidier, but the current
+   single-window dogfood doesn't need it; promote later if needed.")
+
+(defparameter *pdf-filter-colors*
+  #("#00DDFF"   ; cyan — first narrow
+    "#FF66CC"   ; magenta — second
+    "#66FF66"   ; mint
+    "#FFAA00"   ; orange
+    "#AA66FF"  ) ; violet
+  "Color cycle for narrowed-result overlays.")
+
+(defun %pdf-filter-color (&optional depth)
+  (aref *pdf-filter-colors*
+        (mod (or depth *pdf-filter-depth*)
+             (length *pdf-filter-colors*))))
+
+;;; --- v0.39.11 A1: match counter -----------------------------------
+
+(defun pdf-format-search-counter (&optional state)
+  "Return string \"N / T\" (1-indexed current / total hits) for STATE
+   or the current window's state when omitted.  NIL if no active search."
+  (let ((s (or state (%search-state))))
+    (when s
+      (let ((hits (pdf-search-state-hits s)))
+        (when (and (consp hits) (plusp (length hits)))
+          (format nil "~a / ~a"
+                  (1+ (pdf-search-state-current-index s))
+                  (length hits)))))))
+
+(defun %refresh-search-modeline ()
+  "Re-emit the full modeline so the search counter (\"N / T\") appears
+   in BOTH :|left| (embedded — guaranteed visible regardless of Qt's
+   modeline column layout) and :|right|.  Called after every
+   search-state mutation."
+  (handler-case
+      (let* ((bid (and (find-package :limn/pdf-mode)
+                       (find-symbol "%FOCUSED-BUFFER-ID" :limn/pdf-mode)))
+             (path-fn (and (find-package :limn/pdf-mode)
+                           (find-symbol "*BUFFER-ID-TO-PATH*" :limn/pdf-mode)))
+             (bid-v (and bid (fboundp bid) (funcall (symbol-function bid))))
+             (path (and bid-v path-fn (boundp path-fn)
+                        (gethash bid-v (symbol-value path-fn)))))
+        (pdf-mode-update-modeline :buffer-id bid-v :path path))
+    (error () nil)))
+
+;;; v0.39.12 follow-up — auto-select the current hit on every n/p so
+;;; the user can M-w copy it, and so they visually know WHICH match is
+;;; current (otherwise "match 3 / 17" in modeline says nothing about
+;;; where on the page).  Emits view/selection-set with begin =
+;;; top-left of the hit's first rect, end = bottom-right of the
+;;; LAST rect on the same page (handles multi-rect line wraps).
+(defun %select-current-hit (state)
+  ;; v0.39.18 A (root fix): pass the hit's EXACT match quads straight to
+  ;; view/selection-set as :|rects|, plus an exact :|text| built from the
+  ;; engine's per-rect :|match-texts| (the precise glyphs inside each
+  ;; quad).  C++ paints those rects verbatim and uses :|text| as the copy
+  ;; string — neither path touches get_text_selection, so there is no
+  ;; char-rounding overselect (the old EPS gamble is gone).  Each rect is
+  ;; sent as {:page :x0 :y0 :x1 :y1} (page-norm).
+  (when state
+    (let* ((hits  (pdf-search-state-hits state))
+           (idx   (pdf-search-state-current-index state))
+           (hit   (and (consp hits) (nth idx hits)))
+           (page  (and hit (getf hit :|page|)))
+           (rects (and hit (getf hit :|rects|)))
+           (mtexts (and hit (getf hit :|match-texts|))))
+      (when (and (integerp page) (consp rects))
+        (let* ((rect-objs
+                 (loop for r in rects
+                       when (and (consp r) (>= (length r) 4))
+                         collect (list :|page| page
+                                       :|x0| (nth 0 r) :|y0| (nth 1 r)
+                                       :|x1| (nth 2 r) :|y1| (nth 3 r))))
+               ;; Join the exact match substrings (one per rect).  For a
+               ;; line-wrapped match there are >1 rects/texts; concatenate.
+               (copy-text
+                 (cond
+                   ((consp mtexts)
+                    (format nil "~{~A~}"
+                            (remove nil mtexts)))
+                   (t (or (pdf-search-state-query state) "")))))
+          (when rect-objs
+            (handler-case
+                (%limn-call "view/selection-set"
+                            :|win-id| *current-win-id*
+                            :|rects| rect-objs
+                            :|text|  copy-text
+                            :|mode|  "char")
+              (error () nil))))))))
+
+;;; v0.39.18 A (bug 2): center the current hit vertically on screen.
+;;; %page-set only top-aligns the page; if the hit is lower on the page
+;;; it lands off-screen.  view/center-on converts (page, page-norm-y) to
+;;; absolute doc Y and sets offset_y so that Y sits at screen center.
+;;; We use the vertical center of the hit's first rect.
+(defun %center-on-current-hit (state)
+  (when state
+    (let* ((hits  (pdf-search-state-hits state))
+           (idx   (pdf-search-state-current-index state))
+           (hit   (and (consp hits) (nth idx hits)))
+           (page  (and hit (getf hit :|page|)))
+           (rects (and hit (getf hit :|rects|)))
+           (first-r (and (consp rects) (first rects))))
+      (when (and (integerp page) (consp first-r) (>= (length first-r) 4))
+        (let ((cy (/ (+ (nth 1 first-r) (nth 3 first-r)) 2.0)))
+          (handler-case
+              (%limn-call "view/center-on"
+                          :|win-id| *current-win-id*
+                          :|page| page
+                          :|y| cy)
+            (error () nil)))))))
+
+;;; --- v0.39.11 A4: narrow + fuzzy filters --------------------------
+
+(defun pdf-search-filter-hits (state pred)
+  "Walk STATE's hits.  For each rect inside each hit, call (PRED page
+   rect text).  Build a new hits list keeping only rects whose PRED
+   returned non-NIL (along with their parallel :|texts| entry).  Hits
+   that lose all rects are dropped.  Returns a NEW hits list — does
+   not mutate STATE.  Order-preserving."
+  (let ((kept-hits nil))
+    (dolist (hit (pdf-search-state-hits state))
+      (let* ((page  (getf hit :|page|))
+             (rects (getf hit :|rects|))
+             (texts (getf hit :|texts|))
+             (mtexts (getf hit :|match-texts|))   ; v0.39.18 A
+             (kept-r nil)
+             (kept-t nil)
+             (kept-mt nil)
+             (i 0))
+        (dolist (r rects)
+          (let ((tx (and (consp texts) (nth i texts)))
+                (mt (and (consp mtexts) (nth i mtexts))))
+            (when (funcall pred page r (or tx ""))
+              (push r  kept-r)
+              (push tx kept-t)
+              (push mt kept-mt)))
+          (incf i))
+        (when kept-r
+          (push (list :|page|  page
+                      :|rects| (nreverse kept-r)
+                      :|texts| (nreverse kept-t)
+                      :|match-texts| (nreverse kept-mt))
+                kept-hits))))
+    (nreverse kept-hits)))
+
+(defun pdf-search-narrow-by-substring (state substring)
+  "Return new hits list keeping only rects whose :|texts| line contains
+   SUBSTRING (case-insensitive)."
+  (let ((needle (string-downcase substring)))
+    (pdf-search-filter-hits
+     state
+     (lambda (page rect text)
+       (declare (ignore page rect))
+       (and (stringp text)
+            (search needle (string-downcase text)))))))
+
+(defun pdf-search-rank-fuzzy (state query)
+  "Return new hits list: rects scored by limn/search::fuzzy-score
+   against QUERY; zero-score rects dropped.  Within each hit, rects
+   are reordered best-first; the hit list itself stays in document
+   order (we don't reorder pages, to keep next/prev intuitive)."
+  (let ((q (string-downcase query))
+        (scorer (find-symbol "FUZZY-SCORE" :limn/search)))
+    (unless (and scorer (fboundp scorer))
+      (return-from pdf-search-rank-fuzzy
+        (pdf-search-state-hits state)))
+    (let ((acc nil))
+      (dolist (hit (pdf-search-state-hits state))
+        (let* ((page  (getf hit :|page|))
+               (rects (getf hit :|rects|))
+               (texts (getf hit :|texts|))
+               (scored nil))
+          (loop for r in rects
+                for i from 0
+                for tx = (and (consp texts) (nth i texts))
+                for s = (and (stringp tx)
+                             (funcall (symbol-function scorer)
+                                      q (string-downcase tx)))
+                when (and (numberp s) (plusp s))
+                  do (push (cons s (cons r tx)) scored))
+          (when scored
+            (let* ((sorted (sort scored #'> :key #'car))
+                   (kept-r (mapcar (lambda (e) (cadr e)) sorted))
+                   (kept-t (mapcar (lambda (e) (cddr e)) sorted)))
+              (push (list :|page| page
+                          :|rects| kept-r
+                          :|texts| kept-t)
+                    acc)))))
       (nreverse acc))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §C annotation — struct + sidecar I/O + content-hash key + schema
 ;;; ═════════════════════════════════════════════════════════════════════
 
-(defvar *pdf-annotations-schema-version* 1
-  "Current sidecar schema version. Bumped on incompatible changes.")
+(defvar *pdf-annotations-schema-version* 2
+  "Current sidecar schema version. Bumped on incompatible changes.
+   v1 → v2 (v0.39.11): added :type (keyword) + :tags (list of strings) per entry.
+   Forward-compat: v2 reader accepts v1 files (missing fields default to
+   :type :highlight, :tags nil); writer always emits v2.")
 
 (defvar *uuid-counter* 0)
 (defun %fresh-uuid ()
   (format nil "u-~a-~a"
           (funcall *now-fn*)
           (incf *uuid-counter*)))
+
+;; --- v0.39.11 in-memory cache (D2) -----------------------------------
+;; Eliminates re-read-sidecar-per-mouse-event hot path. Cache entries are
+;; plain plists keyed by PATH (string=):
+;;   (:|loaded-at| TS
+;;    :|by-page|   hash-table[page → list-of-annotation]
+;;    :|all|       list-of-annotation)
+;; Built lazily by %annotations-cache-build, populated eagerly by
+;; pdf-mode-on-buffer-opened, invalidated by pdf-annotations-save.
+;; pdf-annotation-at remains pure (works on caller-supplied lists) so
+;; existing tests that don't go through a path still pass.
+(defvar *pdf-annotations-cache* (make-hash-table :test #'equal)
+  "path-string → cache-entry plist. See module comment above.")
 
 (defstruct (pdf-annotation
             (:constructor %raw-make-pdf-annotation))
@@ -377,32 +846,43 @@
   (rects     nil)               ; list of (x0 y0 x1 y1)
   (color     "#FFD700")
   (note      nil)
-  (created-at 0))
+  (created-at 0)
+  ;; v0.39.11 (schema v2):
+  ;; type — :highlight (default, current behavior) | :note (point note,
+  ;;        no text selection) | :both
+  ;; tags — list of strings (default nil)
+  (type      :highlight)
+  (tags      nil))
 
 ;; Public constructor: fills id / created-at via vtable when caller omits them.
 ;; Has to handle the case where caller doesn't pass :color either — fall back to
 ;; *pdf-annotation-color* (defcustom).
 (defun make-pdf-annotation (&key id page rects (color nil color-p)
-                                  note created-at)
+                                  note created-at
+                                  (type :highlight) tags)
   (%raw-make-pdf-annotation
    :id (or id (%fresh-uuid))
    :page (or page 0)
    :rects rects
    :color (if color-p color *pdf-annotation-color*)
    :note note
-   :created-at (or created-at (funcall *now-fn*))))
+   :created-at (or created-at (funcall *now-fn*))
+   :type (or type :highlight)
+   :tags tags))
 
 (defun pdf-annotations-serialize (anns)
   "Serialize list of pdf-annotation to a versioned schema string:
-   (:VERSION 1 :ANNOTATIONS ((:id ... :page ... ...) ...))"
+   (:VERSION 2 :ANNOTATIONS ((:id ... :page ... :type ... :tags (...) ...) ...))"
   (let ((entries
           (mapcar (lambda (a)
-                    (list :id        (pdf-annotation-id a)
-                          :page      (pdf-annotation-page a)
-                          :rects     (pdf-annotation-rects a)
-                          :color     (pdf-annotation-color a)
-                          :note      (pdf-annotation-note a)
-                          :created-at (pdf-annotation-created-at a)))
+                    (list :id         (pdf-annotation-id a)
+                          :page       (pdf-annotation-page a)
+                          :rects      (pdf-annotation-rects a)
+                          :color      (pdf-annotation-color a)
+                          :note       (pdf-annotation-note a)
+                          :created-at (pdf-annotation-created-at a)
+                          :type       (or (pdf-annotation-type a) :highlight)
+                          :tags       (pdf-annotation-tags a)))
                   anns)))
     (with-output-to-string (out)
       (write (list :version *pdf-annotations-schema-version*
@@ -423,18 +903,27 @@
     (let ((form (%try-read-form str)))
       (cond
         ((null form) nil)
-        ((and (listp form) (or (eq (getf form :version) 0)
-                                (eq (getf form :version) :v0)
-                                (eq (getf form :version) nil)))
-         ;; Either ancient (no version) or v0 — migrate first.
-         (let ((migrated (pdf-annotations-migrate form)))
+        ((and (listp form) (%plist-envelope-p form))
+         ;; Funnel any versioned form (v0, v1, v2, …) through migrate so
+         ;; entry plists get current-schema defaults before %decode-one
+         ;; sees them. %decode-one is also tolerant for safety.
+         (let* ((migrated (pdf-annotations-migrate form)))
            (%decode-entries (getf migrated :annotations))))
-        ((and (listp form) (getf form :annotations))
-         (%decode-entries (getf form :annotations)))
         ((listp form)
-         ;; Permissive: form is a raw list of entry-plists.
+         ;; Permissive: form is a raw list of entry-plists (no envelope).
          (%decode-entries form))
         (t nil)))))
+
+(defun %plist-envelope-p (form)
+  "True iff FORM looks like a (:version ... :annotations (...)) envelope
+   rather than a raw list of entry plists. Cheap structural test that
+   doesn't trip GETF's malformed-plist guard on lists-of-lists."
+  (and (listp form)
+       (keywordp (car form))
+       ;; even length is a property of a valid plist envelope; raw entry
+       ;; lists would start with a list, not a keyword, so the keywordp
+       ;; check above already excludes them — this is defence in depth.
+       (evenp (length form))))
 
 (defun %decode-entries (entries)
   (let ((acc nil))
@@ -446,17 +935,37 @@
 
 (defun %decode-one (e)
   (when (and (listp e) (getf e :id))
-    (make-pdf-annotation
-     :id        (getf e :id)
-     :page      (getf e :page 0)
-     :rects     (getf e :rects)
-     :color     (or (getf e :color) "#FFD700")
-     :note      (getf e :note)
-     :created-at (or (getf e :created-at) 0))))
+    ;; v1 sidecars lack :type and :tags — default to :highlight / nil.
+    ;; Use indicator-presence sentinel so an entry that explicitly stores
+    ;; :type nil still falls back to :highlight (matches struct default).
+    (let* ((type-cell (member :type e))
+           (type-val  (if type-cell (cadr type-cell) :highlight))
+           (tags-val  (getf e :tags)))
+      (make-pdf-annotation
+       :id        (getf e :id)
+       :page      (getf e :page 0)
+       :rects     (getf e :rects)
+       :color     (or (getf e :color) "#FFD700")
+       :note      (getf e :note)
+       :created-at (or (getf e :created-at) 0)
+       :type      (or type-val :highlight)
+       :tags      tags-val))))
+
+(defun %upgrade-entry-v1->v2 (e)
+  "Stamp v2 defaults onto an entry-plist that may be v0 or v1.
+   Adds :type :highlight and :tags nil where missing. Idempotent."
+  (if (listp e)
+      (let ((out (copy-list e)))
+        (unless (member :type out) (setf out (append out (list :type :highlight))))
+        (unless (member :tags out) (setf out (append out (list :tags nil))))
+        out)
+      e))
 
 (defun pdf-annotations-migrate (data)
   "Migrate a versioned-or-not plist up to current schema version.
-   Idempotent: returns DATA unchanged if already current."
+   Idempotent: returns DATA unchanged if already current.
+   v0 → v1: stamp :version.
+   v1 → v2: stamp :version + add default :type :highlight, :tags nil per entry."
   (cond
     ((null data) (list :version *pdf-annotations-schema-version*
                        :annotations '()))
@@ -466,9 +975,11 @@
        (cond
          ((eql v *pdf-annotations-schema-version*) data)
          ((< v *pdf-annotations-schema-version*)
-          ;; v0 → v1: same shape, just stamp version.
+          ;; Walk every entry adding defaults, then stamp current version.
           (list :version *pdf-annotations-schema-version*
-                :annotations (or (getf data :annotations) '())))
+                :annotations
+                (mapcar #'%upgrade-entry-v1->v2
+                        (or (getf data :annotations) '()))))
          (t data))))))
 
 (defun %home ()
@@ -495,9 +1006,13 @@
 
 (defun pdf-annotations-save (path anns)
   "Write ANNS list to sidecar for PATH. Returns t on success, nil on
-   silent-skip; signals error / emits message on hard fail (no silent ok)."
+   silent-skip; signals error / emits message on hard fail (no silent ok).
+   Always invalidates the in-memory cache for PATH (next read rebuilds)."
   (let ((spath (%effective-sidecar-path path))
         (data (pdf-annotations-serialize anns)))
+    ;; Invalidate first so a subsequent read can't observe stale state
+    ;; even if the write below errors (we'd rather rebuild than serve stale).
+    (%annotations-cache-invalidate path)
     (handler-case
         (progn (funcall *annotations-write-fn* spath data) t)
       (error (e)
@@ -521,20 +1036,102 @@
         (or (pdf-annotations-deserialize data) '()))
     (error () '())))
 
+;; --- v0.39.11 cache helpers + query surface (D2) ---------------------
+
+(defun %path-key (path)
+  "Normalise PATH to a string suitable for keying *pdf-annotations-cache*."
+  (cond ((null path) nil)
+        ((stringp path) path)
+        ((pathnamep path) (namestring path))
+        (t (princ-to-string path))))
+
+(defun %annotations-cache-build (path)
+  "Load sidecar for PATH, build by-page index, store in cache. Returns
+   the cache-entry plist. Safe to call repeatedly — rebuilds each call."
+  (let* ((key (%path-key path))
+         (all (pdf-annotations-load path))
+         (by-page (make-hash-table :test #'eql)))
+    (dolist (a all)
+      (let ((p (pdf-annotation-page a)))
+        (push a (gethash p by-page))))
+    ;; Preserve insertion order within each page bucket (we pushed, so reverse).
+    (maphash (lambda (k v) (setf (gethash k by-page) (nreverse v))) by-page)
+    (let ((entry (list :|loaded-at| (funcall *now-fn*)
+                       :|by-page|   by-page
+                       :|all|       all)))
+      (when key (setf (gethash key *pdf-annotations-cache*) entry))
+      entry)))
+
+(defun %annotations-cache-get (path)
+  "Return the cache entry for PATH, building on miss."
+  (let ((key (%path-key path)))
+    (or (and key (gethash key *pdf-annotations-cache*))
+        (%annotations-cache-build path))))
+
+(defun %annotations-cache-invalidate (path)
+  "Drop the cache entry for PATH. Called from pdf-annotations-save."
+  (let ((key (%path-key path)))
+    (when key (remhash key *pdf-annotations-cache*))))
+
+(defun pdf-annotations-on-page (path page)
+  "O(1) lookup: all annotations on PAGE for PATH. Builds cache on miss."
+  (let* ((entry (%annotations-cache-get path))
+         (by-page (getf entry :|by-page|)))
+    (or (and by-page (gethash page by-page)) '())))
+
+(defun pdf-annotations-pages-with-notes (path)
+  "Sorted list of pages on PATH that have at least one annotation whose
+   :type is :note or :both. Consumed by the icon-marker agent (D4)."
+  (let* ((entry (%annotations-cache-get path))
+         (by-page (getf entry :|by-page|))
+         (pages '()))
+    (when by-page
+      (maphash (lambda (p anns)
+                 (when (some (lambda (a)
+                               (let ((tp (pdf-annotation-type a)))
+                                 (or (eq tp :note) (eq tp :both))))
+                             anns)
+                   (push p pages)))
+               by-page))
+    (sort pages #'<)))
+
+(defun pdf-annotations-with-tag (path tag)
+  "Linear scan over all annotations for PATH; return those whose :tags
+   contain TAG (string=). Consumed by annotation-UX agent (D5)."
+  (let* ((entry (%annotations-cache-get path))
+         (all   (getf entry :|all|)))
+    (remove-if-not
+     (lambda (a)
+       (and (pdf-annotation-tags a)
+            (find tag (pdf-annotation-tags a) :test #'string=)))
+     all)))
+
 (defun pdf-annotations-overlay-payload (anns)
-  "Convert annotation list to view/overlays payload."
-  (mapcar (lambda (a)
-            (list :|type| "rect"
-                  :|page| (pdf-annotation-page a)
-                  ;; first rect (multi-rect anno: caller expands if needed)
-                  :|rect| (first (pdf-annotation-rects a))
-                  :|color| (pdf-annotation-color a)
-                  :|opacity| 0.6))
-          anns))
+  "Convert annotation list to view/overlays payload.  v0.39.12 follow-up:
+   emit ONE layer per rect (was: only the first rect, which made
+   multi-rect highlights — every annotation produced by v0.39.12's
+   get_text_selection persistence — render as just the first
+   character of the selected text).  Single-rect annotations from
+   older sidecars still work because the per-rect expansion is a
+   no-op for them."
+  (let ((acc nil))
+    (dolist (a anns)
+      (let ((page  (pdf-annotation-page a))
+            (color (pdf-annotation-color a)))
+        (dolist (rect (pdf-annotation-rects a))
+          (when rect
+            (push (list :|type|    "rect"
+                        :|page|    page
+                        :|rect|    rect
+                        :|color|   color
+                        :|opacity| 0.6)
+                  acc)))))
+    (nreverse acc)))
 
 (defun pdf-annotations-for-buffer (path)
-  "Convenience: load + overlay-payload."
-  (pdf-annotations-overlay-payload (pdf-annotations-load path)))
+  "Convenience: overlay-payload, via cache (builds on miss)."
+  (let ((entry (%annotations-cache-get path)))
+    (pdf-annotations-overlay-payload (getf entry :|all|))))
 
 (defun pdf-annotation-at (anns page x y)
   "First annotation in ANNS whose rect contains (page, x, y), or NIL."
@@ -547,8 +1144,10 @@
            anns))
 
 (defun pdf-annotations-at-point (path page x y)
-  "Look up + return the annotation at (page, x, y) on PATH's sidecar."
-  (pdf-annotation-at (pdf-annotations-load path) page x y))
+  "Look up + return the annotation at (page, x, y) on PATH's sidecar.
+   Goes through the page index (cache) to skip annotations on other
+   pages — significant speedup for sidecars with many pages."
+  (pdf-annotation-at (pdf-annotations-on-page path page) page x y))
 
 (defun pdf-annotations-delete-at-point (path page x y)
   "Delete the annotation at (page, x, y) from PATH's sidecar (no-op if none)."
@@ -769,20 +1368,41 @@
         (setf query limn/pdf-mode:*pdf-last-search-query*))
       (when (and (stringp query) (> (length query) 0))
         (let* ((buf (limn/pdf-mode::%focused-buffer-id))
+               (v   (limn/pdf-mode::%focused-view))
+               (cur-page (or (getf v :|page|) 0))
                (state (limn/pdf-mode:pdf-search-execute buf query)))
           (when state
-            (limn/pdf-mode::%limn-call
-             "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
-            ;; Jump view to first hit page if any.
-            (let ((hits (limn/pdf-mode:pdf-search-state-hits state)))
-              (when (and hits (consp hits))
-                (let ((p (getf (first hits) :|page|)))
-                  (when (integerp p)
-                    ;; v0.40 §W: record pre-jump position BEFORE the first
-                    ;; jump-to-hit so C-o returns to where the search began.
-                    (limn/pdf-mode::%pdf-push-mark)
-                    (limn/pdf-mode::%page-set p)))))))))))
+            ;; v0.39.11 follow-up: start from the user's CURRENT page
+            ;; (find first hit whose page >= cur-page); fall back to
+            ;; first hit if everything is behind us.  This stops the
+            ;; jarring "jump back to page 0" behaviour the user hit
+            ;; in dogfood.
+            (let* ((hits (limn/pdf-mode:pdf-search-state-hits state))
+                   (forward-idx
+                     (and (consp hits)
+                          (loop for h in hits
+                                for i from 0
+                                when (let ((p (getf h :|page|)))
+                                       (and (integerp p) (>= p cur-page)))
+                                  return i)))
+                   (start-idx (or forward-idx 0)))
+              (when (consp hits)
+                (setf (limn/pdf-mode:pdf-search-state-current-index state)
+                      start-idx)
+                ;; v0.40 §W: record pre-jump position BEFORE the first
+                ;; jump-to-hit so C-o returns to where the search began.
+                ;; Goes here (after start-idx is set, before the view moves
+                ;; via %center-on-current-hit below) so the mark captures
+                ;; the page the user searched FROM.
+                (limn/pdf-mode::%pdf-push-mark)))
+            ;; v0.39.19 A: NO %page-set here — %center-on-current-hit
+            ;; below sets the page AND the scroll offset in one redraw.
+            ;; Doing %page-set first top-aligned the page, so a fast
+            ;; n-repeat flashed "page top → recentre" (eye-strain).
+            (limn/pdf-mode::%emit-search-overlays state)
+            (limn/pdf-mode::%select-current-hit state)
+            (limn/pdf-mode::%center-on-current-hit state)
+            (limn/pdf-mode::%refresh-search-modeline)))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-next nil
   (lambda ()
@@ -798,30 +1418,24 @@
                        (= new-idx 0))
               (limn/pdf-mode::%limn-call
                "message/echo" :|text| limn/pdf-mode:*pdf-wrapped-message*)))
-          ;; navigate
-          (when (consp hits)
-            (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s)
-                              hits))
-                   (p (getf hit :|page|)))
-              (when (integerp p) (limn/pdf-mode::%page-set p))))
-          (limn/pdf-mode::%limn-call
-           "view/overlays" :|win-id| "w1"
-           :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))))))
+          ;; navigate — %center-on-current-hit (below) sets page + scroll
+          ;; in one redraw; no %page-set (would flash the page top first).
+          (limn/pdf-mode::%emit-search-overlays s)
+          (limn/pdf-mode::%select-current-hit s)
+          (limn/pdf-mode::%center-on-current-hit s)
+          (limn/pdf-mode::%refresh-search-modeline))))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-prev nil
   (lambda ()
     (let ((s (limn/pdf-mode::%search-state)))
       (when s
         (limn/pdf-mode:pdf-search-retreat s)
-        (let* ((hits (limn/pdf-mode:pdf-search-state-hits s)))
-          (when (consp hits)
-            (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s)
-                              hits))
-                   (p (getf hit :|page|)))
-              (when (integerp p) (limn/pdf-mode::%page-set p)))))
-        (limn/pdf-mode::%limn-call
-         "view/overlays" :|win-id| "w1"
-         :|layers| (limn/pdf-mode:pdf-search-overlay-payload s))))))
+        ;; %center-on-current-hit (below) sets page + scroll in one redraw;
+        ;; no %page-set (would flash the page top first).
+        (limn/pdf-mode::%emit-search-overlays s)
+        (limn/pdf-mode::%select-current-hit s)
+        (limn/pdf-mode::%center-on-current-hit s)
+        (limn/pdf-mode::%refresh-search-modeline)))))
 
 (limn/pdf-mode::%defcmd pdf-isearch-quit nil
   (lambda ()
@@ -857,7 +1471,31 @@
                (handler-case (limn/pdf-mode::%limn-call "minibuffer/close")
                  (error () nil)))))
         (t
-         (limn/pdf-mode:pdf-search-reset))))))
+         ;; v0.39.16: if any M-n level is on the stack, pop ONE level
+         ;; (restore prior narrow) instead of full-reset.  Stack
+         ;; empty → full reset (legacy behaviour).
+         (cond
+           ((limn/pdf-mode::%pop-narrow-level)
+            ;; Restored prior level — re-emit overlays + selection +
+            ;; modeline so the user sees they backed off one step.
+            (limn/pdf-mode::%emit-search-overlays
+             (limn/pdf-mode::%search-state))
+            (limn/pdf-mode::%select-current-hit
+             (limn/pdf-mode::%search-state))
+            (limn/pdf-mode::%center-on-current-hit
+             (limn/pdf-mode::%search-state))
+            (limn/pdf-mode::%refresh-search-modeline)
+            (handler-case
+                (limn/pdf-mode::%limn-call
+                 "message/echo"
+                 :|text| (format nil "Narrow level ~A"
+                                 limn/pdf-mode::*pdf-filter-depth*))
+              (error () nil)))
+           (t
+            ;; Stack empty → full reset.
+            (limn/pdf-mode:pdf-search-reset)
+            (limn/pdf-mode::%set-narrow-stack nil)
+            (limn/pdf-mode::%refresh-search-modeline))))))))
 
 ;;; v0.37 Phase D: search backward.  Same prompt as forward but the
 ;;; result-cursor starts at the last hit (vim ? semantic).  Reuses the
@@ -879,15 +1517,15 @@
             ;; so the user lands on the latest match (vim ? semantic).
             (setf (limn/pdf-mode:pdf-search-state-current-index state)
                   (1- (length hits)))
-            (limn/pdf-mode::%limn-call
-             "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload state))
-            (let* ((p (getf (nth (1- (length hits)) hits) :|page|)))
-              (when (integerp p)
-                ;; v0.40 §W: record pre-jump position so C-o returns to
-                ;; where the backward search began.
-                (limn/pdf-mode::%pdf-push-mark)
-                (limn/pdf-mode::%page-set p)))))))))
+            (limn/pdf-mode::%emit-search-overlays state)
+            ;; %center-on-current-hit (below) sets page + scroll in one
+            ;; redraw; no %page-set (would flash the page top first).
+            (limn/pdf-mode::%select-current-hit state)
+            ;; v0.40 §W: record pre-jump position BEFORE the view moves so
+            ;; C-o returns to where the backward search began.
+            (limn/pdf-mode::%pdf-push-mark)
+            (limn/pdf-mode::%center-on-current-hit state)
+            (limn/pdf-mode::%refresh-search-modeline)))))))
 
 ;;; v0.39: smart n / p — walk search hits when a search is active,
 ;;; otherwise fall back to next-page / prev-page.  This lets n/p serve
@@ -909,20 +1547,23 @@
                          (= new-idx 0))
                 (limn/pdf-mode::%limn-call
                  "message/echo" :|text| limn/pdf-mode:*pdf-wrapped-message*)))
+            ;; v0.40 §W: push to the mark ring only when jumping to a
+            ;; non-adjacent page.  Walking hit-to-hit on the same /
+            ;; neighbouring page isn't interesting to C-o; cross-section
+            ;; jumps are.  Computed BEFORE %center-on-current-hit moves the
+            ;; view, so `cur` is still the pre-jump page.
             (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s) hits))
-                   (p   (getf hit :|page|)))
-              (when (integerp p)
-                ;; v0.40 §W: push only if jumping to a non-adjacent page.
-                ;; Walking hit-to-hit on the same / neighbouring page is
-                ;; not interesting to C-o; cross-section jumps are.
-                (let* ((v  (limn/pdf-mode::%focused-view))
-                       (cur (or (getf v :|page|) 0)))
-                  (when (> (abs (- p cur)) 1)
-                    (limn/pdf-mode::%pdf-push-mark)))
-                (limn/pdf-mode::%page-set p)))
-            (limn/pdf-mode::%limn-call
-             "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))
+                   (p   (getf hit :|page|))
+                   (v   (limn/pdf-mode::%focused-view))
+                   (cur (or (getf v :|page|) 0)))
+              (when (and (integerp p) (> (abs (- p cur)) 1))
+                (limn/pdf-mode::%pdf-push-mark)))
+            ;; %center-on-current-hit sets page + scroll in one redraw;
+            ;; no %page-set (would flash the page top first).
+            (limn/pdf-mode::%emit-search-overlays s)
+            (limn/pdf-mode::%select-current-hit s)
+            (limn/pdf-mode::%center-on-current-hit s)
+            (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: next page ─────────────────────────────
           (let* ((v  (limn/pdf-mode::%focused-view))
                  (p  (or (getf v :|page|) 0))
@@ -937,26 +1578,130 @@
           ;; ── search active: retreat to previous hit ──────────────────
           (progn
             (limn/pdf-mode:pdf-search-retreat s)
+            ;; v0.40 §W: push to the mark ring only when jumping to a
+            ;; non-adjacent page (same rule as pdf-n).  Computed BEFORE
+            ;; %center-on-current-hit moves the view.
             (let* ((hits (limn/pdf-mode:pdf-search-state-hits s))
                    (hit  (nth (limn/pdf-mode:pdf-search-state-current-index s)
                                hits))
-                   (p    (getf hit :|page|)))
-              (when (integerp p)
-                ;; v0.40 §W: push only if jumping to a non-adjacent page.
-                (let* ((v  (limn/pdf-mode::%focused-view))
-                       (cur (or (getf v :|page|) 0)))
-                  (when (> (abs (- p cur)) 1)
-                    (limn/pdf-mode::%pdf-push-mark)))
-                (limn/pdf-mode::%page-set p)))
-            (limn/pdf-mode::%limn-call
-             "view/overlays" :|win-id| "w1"
-             :|layers| (limn/pdf-mode:pdf-search-overlay-payload s)))
+                   (p    (getf hit :|page|))
+                   (v    (limn/pdf-mode::%focused-view))
+                   (cur  (or (getf v :|page|) 0)))
+              (when (and (integerp p) (> (abs (- p cur)) 1))
+                (limn/pdf-mode::%pdf-push-mark)))
+            ;; %center-on-current-hit (below) sets page + scroll in one
+            ;; redraw; no %page-set (would flash the page top first).
+            (limn/pdf-mode::%emit-search-overlays s)
+            (limn/pdf-mode::%select-current-hit s)
+            (limn/pdf-mode::%center-on-current-hit s)
+            (limn/pdf-mode::%refresh-search-modeline))
           ;; ── no active search: previous page ─────────────────────────
           (let* ((v  (limn/pdf-mode::%focused-view))
                  (p  (or (getf v :|page|) 0))
                  (pc (or (getf v :|page-count|) 1)))
             (limn/pdf-mode::%page-set
              (limn/pdf-mode::%clamp-page (1- p) pc)))))))
+
+;;; --- v0.39.11 A4: pdf-isearch-narrow / pdf-isearch-fuzzy commands ---
+
+(limn/pdf-mode::%defcmd pdf-isearch-narrow nil
+  ;; v0.39.12 follow-up: re-SEARCH rather than filter.  Previous
+  ;; behaviour kept the original rects (the "the" boxes) and just
+  ;; v0.39.15 line-narrow:
+  ;;   M-n issues a fresh buffer/search for the new query, then keeps
+  ;;   only the new hits whose LINE was also a line of the prior
+  ;;   search.  Recursively tightens — three M-n in a row leaves only
+  ;;   the lines where all three queries appeared.
+  ;;
+  ;;   The prior search's overlay payload is pushed onto
+  ;;   *pdf-search-overlay-history* so its color stays visible under
+  ;;   the new color (cumulative rainbow per user spec).
+  (lambda ()
+    (let* ((s (limn/pdf-mode::%search-state))
+           (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+           (read-fn (and reader (boundp reader) (symbol-value reader))))
+      (cond
+        ((not s)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                        :|text| "No active search to narrow")
+           (error () nil)))
+        ((not read-fn) nil)
+        (t
+         (let* ((needle (funcall read-fn "Narrow search for: "))
+                (buf (limn/pdf-mode::%focused-buffer-id))
+                (v   (limn/pdf-mode::%focused-view))
+                (cur-page (or (getf v :|page|) 0))
+                (prior-payload
+                  (limn/pdf-mode:pdf-search-overlay-payload s))
+                (prior-history (limn/pdf-mode::%overlay-history))
+                (prior-narrow  (limn/pdf-mode::%narrow-lines))
+                (next-depth (1+ limn/pdf-mode::*pdf-filter-depth*)))
+           (cond
+             ((or (not (stringp needle)) (zerop (length needle))) nil)
+             (t
+              ;; v0.39.17 — snapshot the PRIOR level BEFORE %do-search-wire
+              ;; mutates %search-state.  v0.39.16 pushed AFTER the wire,
+              ;; so the snapshot captured the NEW state — C-g then
+              ;; restored to the wrong thing (user reported "順序倒過來").
+              (limn/pdf-mode::%push-narrow-level)
+              (let* ((new-state
+                       (limn/pdf-mode::%do-search-wire buf needle))
+                     (raw-new-hits
+                       (and new-state
+                            (limn/pdf-mode:pdf-search-state-hits new-state)))
+                     ;; Intersect by line.  When prior-narrow is empty
+                     ;; (shouldn't happen if pdf-search-execute seeded
+                     ;; it, but defensive), behave like the previous
+                     ;; "fresh re-search" semantic.
+                     (kept (if (consp prior-narrow)
+                               (limn/pdf-mode::%hits-in-narrow-set
+                                raw-new-hits prior-narrow)
+                               raw-new-hits)))
+                ;; History + depth bump happen regardless of result
+                ;; count so prior colors stay visible even on no-match.
+                (limn/pdf-mode::%set-overlay-history
+                 (cons prior-payload prior-history))
+                (setf limn/pdf-mode::*pdf-filter-depth* next-depth)
+                (cond
+                  ((null kept)
+                   (limn/pdf-mode::%emit-search-overlays nil)
+                   (handler-case
+                       (limn/pdf-mode::%limn-call
+                        "message/echo"
+                        :|text| (format nil
+                                        "No matches for ~s on the same lines"
+                                        needle))
+                     (error () nil)))
+                  (t
+                   ;; Tighten narrow context to the surviving hits'
+                   ;; lines so the NEXT M-n narrows further.
+                   (limn/pdf-mode::%set-narrow-lines
+                    (limn/pdf-mode::%lines-from-hits kept))
+                   ;; Replace state hits with the kept subset and pick
+                   ;; the first hit at/after the current page.
+                   (setf (limn/pdf-mode:pdf-search-state-hits new-state)
+                         kept)
+                   (let ((start
+                           (or (loop for h in kept for i from 0
+                                     when (let ((p (getf h :|page|)))
+                                            (and (integerp p)
+                                                 (>= p cur-page)))
+                                       return i)
+                               0)))
+                     (setf (limn/pdf-mode:pdf-search-state-current-index
+                            new-state)
+                           start))
+                   ;; %center-on-current-hit (below) sets page + scroll in
+                   ;; one redraw; no %page-set (would flash page top first).
+                   (limn/pdf-mode::%emit-search-overlays new-state)
+                   (limn/pdf-mode::%select-current-hit new-state)
+                   (limn/pdf-mode::%center-on-current-hit new-state))))
+              (limn/pdf-mode::%refresh-search-modeline)))))))))
+
+;; v0.39.15: pdf-isearch-fuzzy removed per user feedback ("先移除掉.
+;; 我覺得這個應該有更好的做法").  M-f keybinding also dropped from
+;; the install block.
 
 ;;; v0.37 Phase D: half-page scroll (vim C-d / C-u).  Uses offset-y
 ;;; deltas the same way pdf-scroll-down does, but with a larger step.
@@ -1033,15 +1778,20 @@
     (and bid (gethash bid limn/pdf-mode::*buffer-id-to-path*))))
 
 (defun limn/pdf-mode::%selection ()
-  "Get the current selection as a (:|page| P :|rects| ((x1 y1 x2 y2)))
-   plist.  v0.37 Phase F: the bridge's view/selection-get returns the
-   selection as :|active| / :|begin|{:|page|,:|x|,:|y|} / :|end|{...} /
-   :|mode| / :|text| — there is no :|rects| field on the wire (and
-   never has been since the wire schema settled in v0.15).  This
-   helper synthesizes a single-rect bounding box from begin/end so
-   downstream callers (%add-annotation) keep the old :|page|/:|rects|
-   contract.  Returns NIL when no selection is active or coords are
-   missing — %add-annotation treats that as a no-op."
+  "Get the current selection as a (:|page| P :|rects| ((x0 y0 x1 y1)...))
+   plist.
+
+   v0.39.12 update: view/selection-get now returns a :|rects| array
+   carrying the real per-character / per-line rects from sioyek's
+   get_text_selection (page-norm coords, each entry [x0 y0 x1 y1 page]).
+   We prefer these — they match the visible glyph extents, so
+   annotations saved on large-font titles are no longer thin strips.
+
+   Fallback path (when wire didn't include :|rects|, or none survived
+   the page filter — happens on image-only selections / older binaries):
+   synthesise a single bounding box from begin/end points so the
+   downstream contract still holds.  Returns NIL when no selection is
+   active or coords are missing."
   (let* ((r (limn/pdf-mode::%limn-call "view/selection-get" :|win-id| "w1"))
          (d (limn/pdf-mode::%response-data r)))
     (when (and d (getf d :|active|))
@@ -1050,12 +1800,29 @@
              (page (or (and b (getf b :|page|))
                        (and e (getf e :|page|))
                        0))
-             (bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
-             (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
-        (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
-          (list :|page| page
-                :|rects| (list (list (min bx ex) (min by ey)
-                                     (max bx ex) (max by ey)))))))))
+             (wire-rects (getf d :|rects|))
+             (page-rects
+               (and (consp wire-rects)
+                    (loop for r in wire-rects
+                          when (and (consp r) (>= (length r) 4))
+                            collect (let ((rp (if (>= (length r) 5)
+                                                   (nth 4 r)
+                                                   page)))
+                                       (when (or (null rp) (eql rp page))
+                                         (list (nth 0 r) (nth 1 r)
+                                               (nth 2 r) (nth 3 r))))
+                          into acc
+                          finally (return (remove nil acc))))))
+        (cond
+          (page-rects
+           (list :|page| page :|rects| page-rects))
+          (t
+           (let ((bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
+                 (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
+             (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
+               (list :|page| page
+                     :|rects| (list (list (min bx ex) (min by ey)
+                                          (max bx ex) (max by ey))))))))))))
 
 (defun limn/pdf-mode::%add-annotation (note)
   "Build + persist + paint an annotation from the current selection."
@@ -1443,23 +2210,38 @@
 ;;; §F modeline
 ;;; ═════════════════════════════════════════════════════════════════════
 
-(defun limn/pdf-mode:pdf-format-modeline (path page page-count zoom)
-  "Format \"PDF: name [P/T] Z%\". Page is 1-indexed in display."
+(defun limn/pdf-mode:pdf-format-modeline (path page page-count zoom
+                                          &optional counter)
+  "Format \"PDF: name [P/T] Z%  [N / T-matches]\". Page is 1-indexed.
+   COUNTER is the optional search-match string (\"3 / 17\") shown only
+   when a search is active.  Embedded in the left slot so it always
+   renders, regardless of whether Qt's modeline layout shows :right."
   (let ((basename (file-namestring (pathname path)))
         (zoom-pct (round (* 100 zoom))))
-    (format nil "PDF: ~a   [~a / ~a]   ~a%"
-            basename (1+ page) page-count zoom-pct)))
+    (if (and counter (stringp counter) (plusp (length counter)))
+        (format nil "PDF: ~a   [~a / ~a]   ~a%   match ~a"
+                basename (1+ page) page-count zoom-pct counter)
+        (format nil "PDF: ~a   [~a / ~a]   ~a%"
+                basename (1+ page) page-count zoom-pct))))
 
 (defun limn/pdf-mode:pdf-mode-update-modeline (&key buffer-id path)
   (declare (ignore buffer-id))
+  ;; v0.39.17 — modeline/set wire requires :|win-id|.  Missed in the
+  ;; v0.39.12 attempt, which is why the modeline label NEVER appeared
+  ;; even though all the Lisp-side plumbing looked right.  Without
+  ;; win-id the wire rejects with "modeline/set requires win-id".
   (let* ((v (limn/pdf-mode::%focused-view))
          (page (or (getf v :|page|) 0))
          (pc (or (getf v :|page-count|) 1))
          (zoom (or (getf v :|zoom|) 1.0))
+         (counter (limn/pdf-mode:pdf-format-search-counter))
          (label (limn/pdf-mode:pdf-format-modeline
                   (or path "/tmp/unknown.pdf")
-                  page pc zoom)))
-    (limn/pdf-mode::%limn-call "modeline/set" :|left| label)))
+                  page pc zoom counter)))
+    (limn/pdf-mode::%limn-call "modeline/set"
+                                :|win-id| limn/pdf-mode::*current-win-id*
+                                :|left|   label
+                                :|right|  (or counter ""))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §M mouse-driven text selection
@@ -1709,8 +2491,10 @@
     ;; Track buffer-id → path so buffer-closed can save last-position
     (when buffer-id
       (setf (gethash buffer-id limn/pdf-mode::*buffer-id-to-path*) path))
-    ;; Load + paint annotations
-    (let ((anns (limn/pdf-mode:pdf-annotations-load path)))
+    ;; Load + paint annotations.  v0.39.11 D2: populate cache eagerly so
+    ;; the first mouse-click hot path is a hash lookup, not a re-read.
+    (let* ((entry (limn/pdf-mode::%annotations-cache-build path))
+           (anns  (getf entry :|all|)))
       (when anns
         (limn/pdf-mode::%limn-call
          "view/overlays" :|win-id| "w1"
@@ -1927,6 +2711,8 @@
       ;; remaining after C-g).  pdf-isearch-quit is idempotent so binding
       ;; it here is safe even when no search is active.
       (%def km "C-g"      (intern "PDF-ISEARCH-QUIT" :cl-user))
+      ;; v0.39.15 A: line-narrow only (M-f / fuzzy was removed).
+      (%def km "M-n"      (intern "PDF-ISEARCH-NARROW" :cl-user))
       ;; annotation — H stays as annotate (M-h is left free for users
       ;; who want to bind highlight-selection somewhere out of hjkl's way).
       (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
@@ -1979,6 +2765,7 @@
                                 ("/" pdf-isearch-forward)
                                 ("?" pdf-isearch-backward)
                                 ("C-g" pdf-isearch-quit)
+                                ("M-n" pdf-isearch-narrow)
                                 ("H" pdf-annotate-selection)
                                 ("t" pdf-toc)
                                 ;; v0.37 Phase D additions

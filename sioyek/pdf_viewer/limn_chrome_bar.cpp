@@ -57,6 +57,9 @@ LimnChromeBar::LimnChromeBar(QWidget* parent) : QWidget(parent) {
 void LimnChromeBar::set_modeline(const QString& left,
                                  const QString& middle,
                                  const QString& right) {
+    fprintf(stderr,
+            "[limn-modeline] set_modeline L=%s | M=%s | R=%s\n",
+            qPrintable(left), qPrintable(middle), qPrintable(right));
     modeline_left_->setText(left);
     modeline_middle_->setText(middle);
     modeline_right_->setText(right);
@@ -94,10 +97,16 @@ void LimnChromeBar::rebuild_stylesheet(const QString& font_family) {
         ? QString()
         : QString("font-family: \"%1\", monospace;").arg(font_family);
 
+    // v0.39.13: bumped modeline_seg's font-size + padding + min-height so
+    // the row is unambiguously visible even when all three labels are
+    // empty (Qt's QHBoxLayout was collapsing the row to ~0px on first
+    // open before any modeline/set call landed — users couldn't tell
+    // the row existed at all).
     setStyleSheet(QString(R"(
         QLabel#modeline_seg {
-            background: #2c2c2c; color: #d0d0d0;
-            padding: 1px 4px;  font-size: 11px;
+            background: #3a3a3a; color: #f0f0f0;
+            padding: 3px 6px;  font-size: 12px;
+            min-height: 16px;
         }
         QLabel#echo_line {
             background: #1a1a1a; color: #e8e8e8;
