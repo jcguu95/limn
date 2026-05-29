@@ -1317,10 +1317,11 @@
                    (start-idx (or forward-idx 0)))
               (when (consp hits)
                 (setf (limn/pdf-mode:pdf-search-state-current-index state)
-                      start-idx)
-                (let* ((hit (nth start-idx hits))
-                       (p   (getf hit :|page|)))
-                  (when (integerp p) (limn/pdf-mode::%page-set p)))))
+                      start-idx)))
+            ;; v0.39.19 A: NO %page-set here — %center-on-current-hit
+            ;; below sets the page AND the scroll offset in one redraw.
+            ;; Doing %page-set first top-aligned the page, so a fast
+            ;; n-repeat flashed "page top → recentre" (eye-strain).
             (limn/pdf-mode::%emit-search-overlays state)
             (limn/pdf-mode::%select-current-hit state)
             (limn/pdf-mode::%center-on-current-hit state)
@@ -1340,12 +1341,8 @@
                        (= new-idx 0))
               (limn/pdf-mode::%limn-call
                "message/echo" :|text| limn/pdf-mode:*pdf-wrapped-message*)))
-          ;; navigate
-          (when (consp hits)
-            (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s)
-                              hits))
-                   (p (getf hit :|page|)))
-              (when (integerp p) (limn/pdf-mode::%page-set p))))
+          ;; navigate — %center-on-current-hit (below) sets page + scroll
+          ;; in one redraw; no %page-set (would flash the page top first).
           (limn/pdf-mode::%emit-search-overlays s)
           (limn/pdf-mode::%select-current-hit s)
           (limn/pdf-mode::%center-on-current-hit s)
@@ -1356,12 +1353,8 @@
     (let ((s (limn/pdf-mode::%search-state)))
       (when s
         (limn/pdf-mode:pdf-search-retreat s)
-        (let* ((hits (limn/pdf-mode:pdf-search-state-hits s)))
-          (when (consp hits)
-            (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s)
-                              hits))
-                   (p (getf hit :|page|)))
-              (when (integerp p) (limn/pdf-mode::%page-set p)))))
+        ;; %center-on-current-hit (below) sets page + scroll in one redraw;
+        ;; no %page-set (would flash the page top first).
         (limn/pdf-mode::%emit-search-overlays s)
         (limn/pdf-mode::%select-current-hit s)
         (limn/pdf-mode::%center-on-current-hit s)
@@ -1448,9 +1441,8 @@
             (setf (limn/pdf-mode:pdf-search-state-current-index state)
                   (1- (length hits)))
             (limn/pdf-mode::%emit-search-overlays state)
-            (let* ((p (getf (nth (1- (length hits)) hits) :|page|)))
-              (when (integerp p)
-                (limn/pdf-mode::%page-set p)))
+            ;; %center-on-current-hit (below) sets page + scroll in one
+            ;; redraw; no %page-set (would flash the page top first).
             (limn/pdf-mode::%select-current-hit state)
             (limn/pdf-mode::%center-on-current-hit state)
             (limn/pdf-mode::%refresh-search-modeline)))))))
@@ -1475,9 +1467,8 @@
                          (= new-idx 0))
                 (limn/pdf-mode::%limn-call
                  "message/echo" :|text| limn/pdf-mode:*pdf-wrapped-message*)))
-            (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s) hits))
-                   (p   (getf hit :|page|)))
-              (when (integerp p) (limn/pdf-mode::%page-set p)))
+            ;; %center-on-current-hit sets page + scroll in one redraw;
+            ;; no %page-set (would flash the page top first).
             (limn/pdf-mode::%emit-search-overlays s)
             (limn/pdf-mode::%select-current-hit s)
             (limn/pdf-mode::%center-on-current-hit s)
@@ -1496,11 +1487,8 @@
           ;; ── search active: retreat to previous hit ──────────────────
           (progn
             (limn/pdf-mode:pdf-search-retreat s)
-            (let* ((hits (limn/pdf-mode:pdf-search-state-hits s))
-                   (hit  (nth (limn/pdf-mode:pdf-search-state-current-index s)
-                               hits))
-                   (p    (getf hit :|page|)))
-              (when (integerp p) (limn/pdf-mode::%page-set p)))
+            ;; %center-on-current-hit (below) sets page + scroll in one
+            ;; redraw; no %page-set (would flash the page top first).
             (limn/pdf-mode::%emit-search-overlays s)
             (limn/pdf-mode::%select-current-hit s)
             (limn/pdf-mode::%center-on-current-hit s)
@@ -1601,11 +1589,9 @@
                                0)))
                      (setf (limn/pdf-mode:pdf-search-state-current-index
                             new-state)
-                           start)
-                     (let* ((hit (nth start kept))
-                            (p   (getf hit :|page|)))
-                       (when (integerp p)
-                         (limn/pdf-mode::%page-set p))))
+                           start))
+                   ;; %center-on-current-hit (below) sets page + scroll in
+                   ;; one redraw; no %page-set (would flash page top first).
                    (limn/pdf-mode::%emit-search-overlays new-state)
                    (limn/pdf-mode::%select-current-hit new-state)
                    (limn/pdf-mode::%center-on-current-hit new-state))))
