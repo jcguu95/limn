@@ -94,6 +94,10 @@
    #:pdf-mode-restore-last-position
    ;; §V workflow features
    #:pdf-recent-list
+   ;; §W position mark ring (v0.40)
+   #:*pdf-position-rings*
+   #:*pdf-position-forward-rings*
+   #:*pdf-position-ring-max*
    ;; vtable
    #:*limn-call-fn* #:*now-fn*
    #:*annotations-write-fn* #:*annotations-read-fn*
@@ -1252,10 +1256,14 @@
 
 (limn/pdf-mode::%defcmd pdf-first-page nil
   (lambda ()
+    ;; v0.40 §W: record pre-jump position so C-o (pdf-jump-back) can return.
+    (limn/pdf-mode::%pdf-push-mark)
     (limn/pdf-mode::%page-set 0)))
 
 (limn/pdf-mode::%defcmd pdf-last-page nil
   (lambda ()
+    ;; v0.40 §W: record pre-jump position so C-o can return.
+    (limn/pdf-mode::%pdf-push-mark)
     (let* ((v (limn/pdf-mode::%focused-view))
            (pc (or (getf v :|page-count|) 1)))
       (limn/pdf-mode::%page-set (1- pc)))))
@@ -1265,6 +1273,8 @@
     ;; v0.38 B11: with prefix N → page N; without prefix → last page.
     ;; This matches vim convention: `5G` jumps to page 5, plain `G`
     ;; jumps to end.  Old behavior (no prefix → page 0) was unused.
+    ;; v0.40 §W: record pre-jump position so C-o can return.
+    (limn/pdf-mode::%pdf-push-mark)
     (let* ((v (limn/pdf-mode::%focused-view))
            (pc (or (getf v :|page-count|) 1))
            (default-target (max 0 (1- pc)))
@@ -1378,7 +1388,13 @@
                    (start-idx (or forward-idx 0)))
               (when (consp hits)
                 (setf (limn/pdf-mode:pdf-search-state-current-index state)
-                      start-idx)))
+                      start-idx)
+                ;; v0.40 §W: record pre-jump position BEFORE the first
+                ;; jump-to-hit so C-o returns to where the search began.
+                ;; Goes here (after start-idx is set, before the view moves
+                ;; via %center-on-current-hit below) so the mark captures
+                ;; the page the user searched FROM.
+                (limn/pdf-mode::%pdf-push-mark)))
             ;; v0.39.19 A: NO %page-set here — %center-on-current-hit
             ;; below sets the page AND the scroll offset in one redraw.
             ;; Doing %page-set first top-aligned the page, so a fast
@@ -1505,6 +1521,9 @@
             ;; %center-on-current-hit (below) sets page + scroll in one
             ;; redraw; no %page-set (would flash the page top first).
             (limn/pdf-mode::%select-current-hit state)
+            ;; v0.40 §W: record pre-jump position BEFORE the view moves so
+            ;; C-o returns to where the backward search began.
+            (limn/pdf-mode::%pdf-push-mark)
             (limn/pdf-mode::%center-on-current-hit state)
             (limn/pdf-mode::%refresh-search-modeline)))))))
 
@@ -1528,6 +1547,17 @@
                          (= new-idx 0))
                 (limn/pdf-mode::%limn-call
                  "message/echo" :|text| limn/pdf-mode:*pdf-wrapped-message*)))
+            ;; v0.40 §W: push to the mark ring only when jumping to a
+            ;; non-adjacent page.  Walking hit-to-hit on the same /
+            ;; neighbouring page isn't interesting to C-o; cross-section
+            ;; jumps are.  Computed BEFORE %center-on-current-hit moves the
+            ;; view, so `cur` is still the pre-jump page.
+            (let* ((hit (nth (limn/pdf-mode:pdf-search-state-current-index s) hits))
+                   (p   (getf hit :|page|))
+                   (v   (limn/pdf-mode::%focused-view))
+                   (cur (or (getf v :|page|) 0)))
+              (when (and (integerp p) (> (abs (- p cur)) 1))
+                (limn/pdf-mode::%pdf-push-mark)))
             ;; %center-on-current-hit sets page + scroll in one redraw;
             ;; no %page-set (would flash the page top first).
             (limn/pdf-mode::%emit-search-overlays s)
@@ -1548,6 +1578,17 @@
           ;; ── search active: retreat to previous hit ──────────────────
           (progn
             (limn/pdf-mode:pdf-search-retreat s)
+            ;; v0.40 §W: push to the mark ring only when jumping to a
+            ;; non-adjacent page (same rule as pdf-n).  Computed BEFORE
+            ;; %center-on-current-hit moves the view.
+            (let* ((hits (limn/pdf-mode:pdf-search-state-hits s))
+                   (hit  (nth (limn/pdf-mode:pdf-search-state-current-index s)
+                               hits))
+                   (p    (getf hit :|page|))
+                   (v    (limn/pdf-mode::%focused-view))
+                   (cur  (or (getf v :|page|) 0)))
+              (when (and (integerp p) (> (abs (- p cur)) 1))
+                (limn/pdf-mode::%pdf-push-mark)))
             ;; %center-on-current-hit (below) sets page + scroll in one
             ;; redraw; no %page-set (would flash the page top first).
             (limn/pdf-mode::%emit-search-overlays s)
@@ -1977,6 +2018,9 @@
           (when (and pick (stringp pick) (plusp (length pick)))
             (let ((p (limn/pdf-mode:parse-toc-line-page pick)))
               (when (integerp p)
+                ;; v0.40 §W: record pre-jump position so C-o returns to
+                ;; where the user was when they opened the TOC.
+                (limn/pdf-mode::%pdf-push-mark)
                 (limn/pdf-mode::%page-set p)))))))))
 
 (limn/pdf-mode::%defcmd pdf-toc-jump-at-point nil
@@ -2138,6 +2182,9 @@
                   "a"))
            (bid (limn/pdf-mode::%focused-buffer-id)))
       (when bid
+        ;; v0.40 §W: record pre-jump position so C-o returns to where the
+        ;; user was before jumping to the bookmark.
+        (limn/pdf-mode::%pdf-push-mark)
         (limn/pdf-mode:pdf-jump-bookmark-name bid c)))))
 
 (limn/pdf-mode::%defcmd pdf-list-bookmarks nil
@@ -2155,6 +2202,8 @@
                               (format nil "Jump to bookmark (~{~a~^, ~}): "
                                        names))))
           (when (and pick (stringp pick) (find pick names :test #'string=))
+            ;; v0.40 §W: record pre-jump position so C-o returns.
+            (limn/pdf-mode::%pdf-push-mark)
             (limn/pdf-mode:pdf-jump-bookmark-name bid pick)))))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
@@ -2253,6 +2302,179 @@
             (error () nil)))))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
+;;; §W position-mark-ring — Emacs-style C-o / M-o jump history
+;;; ═════════════════════════════════════════════════════════════════════
+;;;
+;;; Two per-window stacks of FULL view states (page, zoom, offset-x/y):
+;;;
+;;;   *pdf-position-rings*         — back-ring: positions you jumped FROM,
+;;;                                  consumed by C-o (pdf-jump-back).
+;;;   *pdf-position-forward-rings* — forward-ring: positions you popped via
+;;;                                  C-o, consumed by M-o (pdf-jump-forward)
+;;;                                  to redo a back-jump.
+;;;
+;;; Semantics (mirroring Emacs `pop-to-mark`):
+;;;   - A new push (from a "big jump" like G, gg, /, ?, t, m-jump) ALWAYS
+;;;     clears the forward-ring.  This matches Emacs: once you mark and
+;;;     re-jump, the forward redo stack is invalidated.
+;;;   - The back-ring is capped at *pdf-position-ring-max* entries; oldest
+;;;     drops off the bottom.
+;;;
+;;; Per-window state pattern mirrors §B *pdf-search-states*: hash-table
+;;; keyed by *current-win-id*, which %wrap-cmd binds from each key event.
+;;;
+;;; Auto-push targets (B2): pdf-goto-page, pdf-first-page, pdf-last-page,
+;;; pdf-isearch-forward, pdf-isearch-backward, pdf-toc, pdf-jump-bookmark,
+;;; and the search-active branch of pdf-n/pdf-p (when n/p walks to a
+;;; non-adjacent page through search hits).  j/k continuous scroll and
+;;; J/K single-page step are intentionally NOT auto-pushed — too noisy.
+;;;
+;;; Forward-jump key choice: C-i clashes with TAB on most terminals (they
+;;; emit the same byte 0x09), so we bind M-o for pdf-jump-forward instead.
+;;; This keeps the mnemonic "o = jump" symmetric with C-o = jump-back.
+
+(defvar limn/pdf-mode::*pdf-position-ring-max* 32
+  "Hard cap on back-ring length per window.  Oldest entries drop off when
+   a push would exceed this.")
+
+(defvar limn/pdf-mode::*pdf-position-rings* (make-hash-table :test #'equal)
+  "win-id → list of position plists.  Each entry is the FULL view state
+   at the moment of push: (:|page| P :|zoom| Z :|offset-y| Y :|offset-x| X).
+   The first element of the list is the most recently pushed (stack-top).")
+
+(defvar limn/pdf-mode::*pdf-position-forward-rings* (make-hash-table :test #'equal)
+  "Forward-jump ring: positions you popped FROM via C-o, so M-o can redo
+   the back-jump.  Cleared whenever a new push happens (Emacs
+   `pop-to-mark` semantics — once you re-mark, the redo stack is invalid).")
+
+(defun limn/pdf-mode::%pdf-current-position ()
+  "Read the FULL view state for the focused window as a plist suitable
+   for view/set: (:|page| :|zoom| :|offset-y| :|offset-x|).  Returns NIL
+   if view/get fails or returns no page (e.g. no buffer focused)."
+  (let* ((v (limn/pdf-mode::%focused-view))
+         (page (getf v :|page|)))
+    (when (integerp page)
+      (list :|page|     page
+            :|zoom|     (or (getf v :|zoom|)     1.0)
+            :|offset-y| (or (getf v :|offset-y|) 0.0)
+            :|offset-x| (or (getf v :|offset-x|) 0.0)))))
+
+(defun limn/pdf-mode::%pdf-back-ring ()
+  "Back-ring (list) for the current window, or NIL if none yet."
+  (gethash limn/pdf-mode::*current-win-id*
+           limn/pdf-mode::*pdf-position-rings*))
+
+(defun limn/pdf-mode::%pdf-forward-ring ()
+  "Forward-ring (list) for the current window, or NIL if none yet."
+  (gethash limn/pdf-mode::*current-win-id*
+           limn/pdf-mode::*pdf-position-forward-rings*))
+
+(defun limn/pdf-mode::%pdf-set-back-ring (lst)
+  (if lst
+      (setf (gethash limn/pdf-mode::*current-win-id*
+                     limn/pdf-mode::*pdf-position-rings*)
+            lst)
+      (remhash limn/pdf-mode::*current-win-id*
+               limn/pdf-mode::*pdf-position-rings*))
+  lst)
+
+(defun limn/pdf-mode::%pdf-set-forward-ring (lst)
+  (if lst
+      (setf (gethash limn/pdf-mode::*current-win-id*
+                     limn/pdf-mode::*pdf-position-forward-rings*)
+            lst)
+      (remhash limn/pdf-mode::*current-win-id*
+               limn/pdf-mode::*pdf-position-forward-rings*))
+  lst)
+
+(defun limn/pdf-mode::%pdf-push-mark ()
+  "Push the current position onto this window's back-ring and CLEAR the
+   forward-ring (Emacs `pop-to-mark` semantics: a fresh push invalidates
+   the redo stack).  Caps the back-ring at *pdf-position-ring-max*.
+   Errors are swallowed — this runs as a pre-jump side-effect and must
+   never break the user's intended jump.  Returns the new ring or NIL."
+  (handler-case
+      (let ((pos (limn/pdf-mode::%pdf-current-position)))
+        (when pos
+          (let* ((old (limn/pdf-mode::%pdf-back-ring))
+                 (new (cons pos old))
+                 (capped (if (> (length new)
+                                limn/pdf-mode::*pdf-position-ring-max*)
+                             (subseq new 0
+                                     limn/pdf-mode::*pdf-position-ring-max*)
+                             new)))
+            (limn/pdf-mode::%pdf-set-back-ring capped)
+            ;; Any new push invalidates the forward-ring.
+            (limn/pdf-mode::%pdf-set-forward-ring nil)
+            capped)))
+    (error () nil)))
+
+(defun limn/pdf-mode::%pdf-jump-to (pos)
+  "Issue a view/set restoring the full POS plist for *current-win-id*."
+  (limn/pdf-mode::%limn-call
+   "view/set"
+   :|win-id|   limn/pdf-mode::*current-win-id*
+   :|page|     (getf pos :|page|)
+   :|zoom|     (getf pos :|zoom|)
+   :|offset-y| (getf pos :|offset-y|)
+   :|offset-x| (getf pos :|offset-x|)))
+
+(defun limn/pdf-mode::%pdf-pop-mark ()
+  "Pop one entry from the back-ring, push CURRENT position onto the
+   forward-ring, jump there.  Returns T on jump, NIL if back-ring empty."
+  (let ((back (limn/pdf-mode::%pdf-back-ring)))
+    (cond
+      ((null back) nil)
+      (t
+       (let ((target (first back))
+             (here   (limn/pdf-mode::%pdf-current-position)))
+         (limn/pdf-mode::%pdf-set-back-ring (rest back))
+         (when here
+           (limn/pdf-mode::%pdf-set-forward-ring
+            (cons here (limn/pdf-mode::%pdf-forward-ring))))
+         (handler-case (limn/pdf-mode::%pdf-jump-to target) (error () nil))
+         t)))))
+
+(defun limn/pdf-mode::%pdf-pop-forward ()
+  "Pop one entry from the forward-ring, push CURRENT position onto the
+   back-ring (so C-o again returns to where we were), jump there.
+   Returns T on jump, NIL if forward-ring empty.
+
+   NB: pushing onto the back-ring here does NOT clear the forward-ring
+   (that is what %pdf-push-mark does for big-jump commands).  This way
+   C-o and M-o form a proper stack-pair you can shuttle between."
+  (let ((fwd (limn/pdf-mode::%pdf-forward-ring)))
+    (cond
+      ((null fwd) nil)
+      (t
+       (let ((target (first fwd))
+             (here   (limn/pdf-mode::%pdf-current-position)))
+         (limn/pdf-mode::%pdf-set-forward-ring (rest fwd))
+         (when here
+           (let* ((old (limn/pdf-mode::%pdf-back-ring))
+                  (new (cons here old))
+                  (capped (if (> (length new)
+                                 limn/pdf-mode::*pdf-position-ring-max*)
+                              (subseq new 0
+                                      limn/pdf-mode::*pdf-position-ring-max*)
+                              new)))
+             (limn/pdf-mode::%pdf-set-back-ring capped)))
+         (handler-case (limn/pdf-mode::%pdf-jump-to target) (error () nil))
+         t)))))
+
+(limn/pdf-mode::%defcmd pdf-jump-back nil
+  (lambda ()
+    (or (limn/pdf-mode::%pdf-pop-mark)
+        (limn/pdf-mode::%limn-call "message/echo"
+                                    :|text| "No previous position"))))
+
+(limn/pdf-mode::%defcmd pdf-jump-forward nil
+  (lambda ()
+    (or (limn/pdf-mode::%pdf-pop-forward)
+        (limn/pdf-mode::%limn-call "message/echo"
+                                    :|text| "No forward position"))))
+
+;;; ═════════════════════════════════════════════════════════════════════
 ;;; §I lifecycle hooks
 ;;; ═════════════════════════════════════════════════════════════════════
 
@@ -2322,7 +2544,20 @@
                                (equal buffer-id
                                       (limn/pdf-mode:pdf-search-state-buffer-id s))))
                 (remhash win-id limn/pdf-mode::*pdf-search-states*)))
-            limn/pdf-mode::*pdf-search-states*))
+            limn/pdf-mode::*pdf-search-states*)
+  ;; v0.40 §W: drop the position-mark rings for the focused window.
+  ;; Position rings hold raw view state (page/zoom/offset) that has no
+  ;; meaning once the buffer they were captured against is gone — pages
+  ;; would resolve into whatever buffer the window shows next.  We don't
+  ;; have a robust buffer-id ↔ win-id mapping here, so we clear the
+  ;; *current-win-id* slot (the window whose buffer just closed) and
+  ;; leave the rest alone.  This mirrors the search-state cleanup but
+  ;; is intentionally less aggressive — search state is identified by
+  ;; buffer-id, position state isn't.
+  (let ((win limn/pdf-mode::*current-win-id*))
+    (when win
+      (remhash win limn/pdf-mode::*pdf-position-rings*)
+      (remhash win limn/pdf-mode::*pdf-position-forward-rings*))))
 
 (defun limn/pdf-mode:pdf-mode-on-buffer-focused (&key buffer-id)
   "Called when focus switches to BUFFER-ID. Reset stale per-buffer search."
@@ -2489,6 +2724,13 @@
       ;; v0.37 Phase D: file + session ops
       (%def km "o"        (intern "FIND-FILE"       :cl-user)) ; vim :e analog
       (%def km "q"        (intern "PDF-CLOSE"       :cl-user)) ; vim q
+      ;; v0.40 §W: position mark ring (Emacs-style jump history).
+      ;; C-o = back, M-o = forward.  C-i would be the natural forward key
+      ;; (matches Emacs `set-mark-command' family) but it clashes with TAB
+      ;; on most terminals (both emit byte 0x09), so we use M-o instead
+      ;; to keep the mnemonic symmetric with C-o.
+      (%def km "C-o"      (intern "PDF-JUMP-BACK"    :cl-user))
+      (%def km "M-o"      (intern "PDF-JUMP-FORWARD" :cl-user))
       ;; Note: ":" is intentionally NOT bound in pdf-mode — it should
       ;; pass through as a literal character.  M-x (global keymap) is
       ;; the command-palette; M-: (global keymap) evaluates a lisp form.
@@ -2535,7 +2777,10 @@
                                 ("o"   find-file)
                                 ("q"   pdf-close)
                                 ;; v0.39 W13
-                                ("M-w" pdf-copy-region-as-kill)))
+                                ("M-w" pdf-copy-region-as-kill)
+                                ;; v0.40 §W: position mark ring
+                                ("C-o" pdf-jump-back)
+                                ("M-o" pdf-jump-forward)))
                 (let* ((spec (first entry))
                        (cmd (second entry))
                        (parts
