@@ -146,3 +146,97 @@
                        (assert-equal (length h1) (length h2)
                                      "同 fixture 不同 buffer：hits 數量一致"))))
               (ignore-errors (send! "buffer/close" :|buffer-id| b2)))))))))
+
+;;; ── v0.39.18 A: search-hit selection exact-geometry fix ──────────────
+;;;
+;;; Bug 1 was: search-hit selection over-selected by one char because
+;;; %select-current-hit synthesized begin/end + an epsilon and let
+;;; sioyek's get_text_selection round to char bounds.  The fix passes
+;;; the EXACT match quads as :|rects| straight through.  These tests pin:
+;;;   (a) buffer/search returns :|match-texts| parallel to :|rects|
+;;;   (b) view/selection-set with :|rects| stores the rects byte/coord-
+;;;       exact (begin/end synthesized from the first/last rect corners)
+;;;       — no get_text_selection round-trip, no char-rounding.
+;;;   (c) :|text| passes straight through as the copy text.
+
+(deftest v0r39r18-search-returns-match-texts
+  "buffer/search hits carry :|match-texts| parallel to :|rects|."
+  (with-buffer (buf)
+    (let* ((r (pdf-search buf "the"))
+           (hits (json-get* r :|data| :|hits|)))
+      (assert-ok r "search ok")
+      (when (and (listp hits) hits)
+        (let* ((h  (first hits))
+               (rects (getf h :|rects|))
+               (mts   (getf h :|match-texts|)))
+          (assert-has-key :|match-texts| h)
+          (assert-true (listp mts) ":|match-texts| is a list")
+          (assert-equal (length rects) (length mts)
+                        ":|match-texts| parallel to :|rects|"))))))
+
+(deftest v0r39r18-explicit-rects-selection-coord-exact
+  "view/selection-set with :|rects| stores the match rect EXACTLY —
+   selection-get's begin/end equal the rect corners (no char-round)."
+  (with-buffer (buf)
+    (let* ((r (pdf-search buf "the"))
+           (hits (json-get* r :|data| :|hits|)))
+      (assert-ok r "search ok")
+      (when (and (listp hits) hits)
+        (let* ((h    (first hits))
+               (page (getf h :|page|))
+               (rect (first (getf h :|rects|))))   ; (x0 y0 x1 y1) page-norm
+          (when (and (integerp page) (consp rect) (>= (length rect) 4))
+            (let* ((x0 (nth 0 rect)) (y0 (nth 1 rect))
+                   (x1 (nth 2 rect)) (y1 (nth 3 rect))
+                   (set-r (send! "view/selection-set"
+                                 :|win-id| "w1"
+                                 :|rects| (list (list :|page| page
+                                                      :|x0| x0 :|y0| y0
+                                                      :|x1| x1 :|y1| y1))
+                                 :|text| "the"
+                                 :|mode| "char")))
+              (assert-ok set-r "explicit-rects selection-set ok")
+              (assert-equal "the" (json-get* set-r :|data| :|selected-text|)
+                            ":|text| passes through as copy text")
+              (let ((s (sel-of "w1")))
+                (assert-true (eq (getf s :|active|) t) "selection active")
+                ;; begin/end synthesized from rect corners.  Tolerance is
+                ;; 1e-4: the wire encodes outgoing floats with ~,6f (6
+                ;; decimals — see limn-bridge.lisp), so a value that left
+                ;; C++ at full double precision (the search-hit rect) and
+                ;; came back through a Lisp→wire round-trip is quantized to
+                ;; ~1e-6.  1e-4 absorbs that while still being 50× tighter
+                ;; than a char width (~0.005+ in page-norm) — so it proves
+                ;; the begin/end carry the EXACT rect corners with no
+                ;; char-boundary drift / +1-char overselect.
+                (flet ((near (a b)
+                         (and (numberp a) (numberp b)
+                              (< (abs (- a b)) 1d-4))))
+                  (assert-true (near x0 (json-get* s :|begin| :|x|))
+                               "begin.x == rect.x0 (exact, no char-round)")
+                  (assert-true (near y0 (json-get* s :|begin| :|y|))
+                               "begin.y == rect.y0 (exact)")
+                  (assert-true (near x1 (json-get* s :|end| :|x|))
+                               "end.x == rect.x1 (exact, no +1 char)")
+                  (assert-true (near y1 (json-get* s :|end| :|y|))
+                               "end.y == rect.y1 (exact)")))
+              (send! "view/selection-clear" :|win-id| "w1"))))))))
+;; NB: sel-of is defined in suites/per-window.lisp (loaded earlier in
+;; run-all.lisp) — reused here for selection-get.
+
+;;; ── v0.39.18 A: view/center-on (bug 2 — scroll hit into view) ────────
+
+(deftest v0r39r18-view-center-on-accepts-page-y
+  "view/center-on :page :y centers a doc point vertically; ok=true and
+   the view offset / page reflects the request."
+  (with-buffer (buf)
+    buf
+    (let ((r (send! "view/center-on" :|win-id| "w1" :|page| 0 :|y| 0.5)))
+      (assert-ok r "view/center-on ok"))))
+
+(deftest v0r39r18-view-center-on-bad-args-fail
+  "view/center-on without :page/:y → ok=false (not a crash)."
+  (with-buffer (buf)
+    buf
+    (let ((r (send! "view/center-on" :|win-id| "w1")))
+      (assert-fail r "missing :page/:y → ok=false"))))
