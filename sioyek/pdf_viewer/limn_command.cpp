@@ -38,8 +38,10 @@
 #include <QSaveFile>
 #include <QTextStream>
 #include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QTextFormat>
 #include <QTextBlock>
 #include <QTextLayout>
 #include <QTextLine>
@@ -116,6 +118,10 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
 
     // display/* (v0.25 face registry)
     if (cmd == "display/sync-faces")    { cmd_display_sync_faces   (id, msg); return; }
+
+    // chrome/* (markup-interaction step 2 — text side-panel layout)
+    if (cmd == "chrome/text-panel")     { cmd_chrome_text_panel    (id, msg); return; }
+    if (cmd == "chrome/focus-pane")     { cmd_chrome_focus_pane    (id, msg); return; }
 
     // view/*
     if (cmd == "view/set")              { cmd_view_set             (id, msg); return; }
@@ -1983,6 +1989,87 @@ void LimnCommand::cmd_buffer_list(const QString& id, const QJsonObject&) {
 // neither, returns fail.  Sets win->buffer_id and triggers the same
 // display refresh as cmd_view_set's text/mupdf short-circuits.
 
+// ─── chrome/text-panel ────────────────────────────────────────────────
+//
+// markup-interaction step 2. Toggle the text view between full-screen
+// (default) and side-panel layout. The M-N annotation list calls this
+// with on=true right after engine-loading its text buffer, so the list
+// appears on the left ~1/3 while the PDF keeps rendering on the right.
+// Calling with on=false (or buffer/show back to a PDF buffer) restores
+// the full-screen stack. `ratio` optionally overrides the panel width
+// fraction (0..1).
+void LimnCommand::cmd_chrome_text_panel(const QString& id, const QJsonObject& msg) {
+    if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
+    const bool on = msg.value("on").toBool(true);
+    if (on) {
+        double ratio = msg.contains("ratio") ? msg.value("ratio").toDouble() : 0.34;
+        if (ratio <= 0.0 || ratio >= 1.0) ratio = 0.34;
+        main_widget->enter_text_panel(ratio);
+    } else {
+        main_widget->exit_text_panel();
+    }
+    bridge->send_ok(id);
+}
+
+// markup-interaction step 2 (Bug-Set-B #3) — focus a pane of the open
+// notes side panel without collapsing it. Unlike buffer/show (which tears
+// the panel down and flips to the full PDF), this only:
+//   1. retargets the window's frontend buffer-id — so a subsequent
+//      view/set page/zoom either routes to the PDF (pane="pdf") or is
+//      harmlessly short-circuited (pane="text");
+//   2. paints an accent border on the focused pane (and dims the list's
+//      current-line highlight when the PDF is focused — the Emacs
+//      inactive-window convention).
+// Backend (%notes-focus-*) coordinates the matching active-buffer / mode
+// switch so keys route to the right buffer.
+void LimnCommand::cmd_chrome_focus_pane(const QString& id, const QJsonObject& msg) {
+    if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
+    QString win_id = msg.value("win-id").toString();
+    if (win_id.isEmpty()) win_id = "w1";
+    const QString buffer_id = msg.value("buffer-id").toString();
+    const QString pane      = msg.value("pane").toString();   // "text" | "pdf"
+
+    LimnWindow* win = windows ? windows->get(win_id) : nullptr;
+    if (!win) { bridge->send_fail(id, QString("unknown win-id: %1").arg(win_id)); return; }
+    if (!buffer_id.isEmpty()) win->buffer_id = buffer_id;
+
+    const bool notes_focused = (pane != "pdf");
+    QPlainTextEdit* tw    = main_widget->text_widget();
+    QStackedWidget* stack = main_widget->main_stack();
+
+    // Accent border on the focused pane; a muted border on the other so the
+    // pane geometry doesn't shift (2px reserved either way).
+    const QString accent = "#4a90d9";
+    if (tw) {
+        tw->setStyleSheet(notes_focused
+            ? QString("QPlainTextEdit { border: 2px solid %1; }").arg(accent)
+            : QString("QPlainTextEdit { border: 2px solid palette(mid); }"));
+    }
+    if (stack) {
+        stack->setStyleSheet(notes_focused
+            ? QString()
+            : QString("QStackedWidget { border: 2px solid %1; }").arg(accent));
+    }
+
+    // Current-line highlight in the list: bright while the list is focused,
+    // dim while the PDF is focused (so "where am I in the list" persists but
+    // visibly recedes).
+    if (tw && main_widget->text_panel_active()) {
+        QList<QTextEdit::ExtraSelection> extras;
+        QTextEdit::ExtraSelection sel;
+        QColor hl = tw->palette().highlight().color();
+        hl.setAlpha(notes_focused ? 70 : 28);
+        sel.format.setBackground(hl);
+        sel.format.setProperty(QTextFormat::FullWidthSelection, true);
+        QTextCursor c = tw->textCursor();
+        c.clearSelection();
+        sel.cursor = c;
+        extras.append(sel);
+        tw->setExtraSelections(extras);
+    }
+    bridge->send_ok(id);
+}
+
 void LimnCommand::cmd_buffer_show(const QString& id, const QJsonObject& msg) {
     const QString buffer_id = msg.value("buffer-id").toString();
     QString win_id          = msg.value("win-id").toString();
@@ -2027,6 +2114,15 @@ void LimnCommand::cmd_buffer_show(const QString& id, const QJsonObject& msg) {
             }
             rebuild_overlay_raster(overlay_raster.width(),
                                     overlay_raster.height());
+            // markup-interaction step 2 — switching back to a PDF buffer
+            // must also flip the visible surface back to the PDF. Without
+            // this the stack stayed on the text view (or the notes side
+            // panel lingered), so RET / q from the M-N list appeared to do
+            // nothing — the page was re-attached but never shown.
+            if (main_widget->text_panel_active()) {
+                main_widget->exit_text_panel();
+            }
+            main_widget->show_pdf_view();
             if (main_widget->opengl_widget()) {
                 main_widget->opengl_widget()->update();
             }
@@ -2106,6 +2202,11 @@ void LimnCommand::cmd_buffer_cursor_set(const QString& id, const QJsonObject& ms
         return;
     }
     text_cursors[buf] = cp_to_qsidx(s, cp_offset);
+    // markup-interaction step 2 — refresh the mirror so the current-line
+    // highlight tracks cursor moves (e.g. j/k in the notes list). Without
+    // this, buffer/cursor-set updated only the backing index and the
+    // highlighted row never moved.
+    sync_text_widget(buf);
     bridge->send_ok(id);
 }
 
@@ -2452,6 +2553,27 @@ void LimnCommand::sync_text_widget(const QString& buffer_id) {
     const int max_pos = tw->document()->characterCount() - 1;
     c.setPosition(qBound(0, qs_idx, qMax(0, max_pos)));
     tw->setTextCursor(c);
+
+    // markup-interaction step 2 — current-line highlight.
+    //
+    // The text widget is read-only with NoFocus, so Qt paints no caret or
+    // selection by default — the user had no way to tell which row was
+    // "current" (e.g. which annotation j/k had landed on). Draw a
+    // full-width highlight on the cursor's line via ExtraSelections. We
+    // gate it on the side-panel mode so the regular full-screen text view
+    // (find-file editing etc.) is visually unchanged.
+    QList<QTextEdit::ExtraSelection> extras;
+    if (main_widget->text_panel_active()) {
+        QTextEdit::ExtraSelection sel;
+        QColor hl = tw->palette().highlight().color();
+        hl.setAlpha(70);
+        sel.format.setBackground(hl);
+        sel.format.setProperty(QTextFormat::FullWidthSelection, true);
+        sel.cursor = c;
+        sel.cursor.clearSelection();
+        extras.append(sel);
+    }
+    tw->setExtraSelections(extras);
 }
 
 // ─── test/text-widget-snapshot (SPEC v0.22 §C) ────────────────────────

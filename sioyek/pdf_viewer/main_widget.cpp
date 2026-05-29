@@ -109,6 +109,48 @@ void MainWidget::show_pdf_view() {
     if (main_stack_) main_stack_->setCurrentIndex(0);
 }
 
+// markup-interaction step 2 — side-panel layout.
+//
+// The text view normally lives at index 1 of main_stack_ and is shown
+// full-screen by flipping the stack (show_text_view), which hides the
+// PDF. For the M-N annotation list we instead want the list on the LEFT
+// (~1/3) with the PDF still visible on the RIGHT (~2/3). We achieve that
+// by reparenting text_widget_ out of main_stack_ and inserting it as the
+// first pane of viewport_splitter_, then forcing main_stack_ back to the
+// PDF (index 0) so the right pane renders the page.
+void MainWidget::enter_text_panel(double ratio) {
+    if (text_panel_mode_ || !viewport_splitter_ || !main_stack_ || !text_widget_)
+        return;
+    // Pull text_widget_ out of the stack (removeWidget detaches without
+    // deleting; the widget keeps main_stack_ as parent until re-parented).
+    main_stack_->removeWidget(text_widget_);
+    viewport_splitter_->setOrientation(Qt::Horizontal);
+    viewport_splitter_->insertWidget(0, text_widget_);   // left pane
+    text_widget_->show();
+    main_stack_->setCurrentIndex(0);                     // PDF in right pane
+    // Size the panes ~ratio : (1-ratio).
+    const int total = qMax(1, viewport_splitter_->width());
+    const int left  = qBound(120, int(total * ratio), total - 120);
+    QList<int> sizes;
+    sizes << left << (total - left);
+    viewport_splitter_->setSizes(sizes);
+    text_panel_mode_ = true;
+}
+
+void MainWidget::exit_text_panel() {
+    if (!text_panel_mode_ || !main_stack_ || !text_widget_) return;
+    // Bug-Set-B #3 — clear any focus-border stylesheets applied by
+    // chrome/focus-pane so they don't linger on the full-screen PDF or the
+    // next time the text widget is shown.
+    text_widget_->setStyleSheet(QString());
+    main_stack_->setStyleSheet(QString());
+    // Move text_widget_ back into the stack at index 1 (addWidget reparents).
+    text_widget_->hide();
+    main_stack_->addWidget(text_widget_);
+    main_stack_->setCurrentIndex(0);                     // PDF full-screen
+    text_panel_mode_ = false;
+}
+
 PdfViewOpenGLWidget* MainWidget::add_split_pane(const QString& orientation) {
     if (!viewport_splitter_) return nullptr;
     // Adjust splitter orientation. v0.8 keeps it simple: each call sets

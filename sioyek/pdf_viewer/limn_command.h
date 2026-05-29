@@ -59,6 +59,15 @@ private:
     // ─── display/* (v0.25 face registry) ────────────────────────────
     void cmd_display_sync_faces   (const QString& id, const QJsonObject& msg);
 
+    // ─── chrome/* (markup-interaction step 2 — text side-panel) ──────
+    void cmd_chrome_text_panel    (const QString& id, const QJsonObject& msg);
+    // markup-interaction step 2 (Bug-Set-B #3) — two-pane focus switch.
+    // Moves keyboard/navigation focus between the notes-list pane (left)
+    // and the PDF pane (right) while the side panel stays open. Sets the
+    // window's frontend buffer-id (so view/set routes correctly) and draws
+    // an accent border on the focused pane.
+    void cmd_chrome_focus_pane    (const QString& id, const QJsonObject& msg);
+
     // ─── view/* ───────────────────────────────────────────────────────
     void cmd_view_set             (const QString& id, const QJsonObject& msg);
     void cmd_view_get             (const QString& id, const QJsonObject& msg);

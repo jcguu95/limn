@@ -2304,14 +2304,115 @@
             (%limn-call "buffer/insert" :|buffer-id| tb :|at| 0 :|text| text)))
         (%notes-goto-line (or cur 0))))))
 
+;;; ── Bug-Set-B #3 — two-pane focus switch (C-x o) ─────────────────────
+;;;
+;;; While the notes side panel is open BOTH panes are always drawn (the
+;;; list on the left, the PDF on the right).  "Focus" decides three things
+;;; in concert: (a) which buffer w1's keys route to — backend
+;;; *window-active-buffer*; (b) which buffer is w1's FRONTEND buffer-id —
+;;; so view/set page/zoom either drives the PDF or is short-circuited;
+;;; (c) the accent border + list highlight brightness (frontend, via
+;;; chrome/focus-pane).  C-x o flips between the two, like other-window in
+;;; Emacs.  notes-panel-mode (a minor mode) is activated on the PDF buffer
+;;; while the panel is open so C-x o (and q) are bound there too.
+
+(defun %notes-rt-symbol (name)
+  "Resolve a function symbol NAME in package limn/runtime, or NIL."
+  (let* ((rt  (find-package :limn/runtime))
+         (sym (and rt (find-symbol name rt))))
+    (and sym (fboundp sym) (symbol-function sym))))
+
+(defun %notes-set-active-buffer (buffer-id)
+  "Point w1's backend active-buffer at BUFFER-ID so key dispatch routes
+   there (lookup-key resolves the mode via mode-buffer-for-window)."
+  (let ((fn (%notes-rt-symbol "SET-WINDOW-ACTIVE-BUFFER")))
+    (when fn (funcall fn "w1" buffer-id))))
+
+(defun %notes-pdf-mode-buffer ()
+  "The mode-buffer for the PDF buffer, or NIL."
+  (let ((fmb (%notes-rt-symbol "FIND-MODE-BUFFER"))
+        (pdf (getf *notes-list-state* :pdf-buffer)))
+    (and fmb pdf (funcall fmb pdf))))
+
+(defun %notes-panel-minor (activate)
+  "Activate (ACTIVATE non-nil) or deactivate notes-panel-mode on the PDF
+   buffer's mode-buffer, so C-x o / q are bound while the panel is up."
+  (let ((mb   (%notes-pdf-mode-buffer))
+        (mode (intern "NOTES-PANEL-MODE" :cl-user)))
+    (when mb
+      (handler-case
+          (if activate
+              (limn/mode:activate   mb mode)
+              (limn/mode:deactivate mb mode))
+        (error () nil)))))
+
+(defun %notes-set-frontend-focus (buffer-id pane)
+  "Tell the frontend to focus PANE (\"text\"|\"pdf\") on BUFFER-ID: retarget
+   w1's frontend buffer-id and paint the focus border.  Best-effort."
+  (handler-case
+      (%limn-call "chrome/focus-pane" :|win-id| "w1"
+                  :|buffer-id| buffer-id :|pane| pane)
+    (error () nil)))
+
+(defun %notes-focus-pdf ()
+  "Move focus to the PDF pane (panel stays open).  PDF nav (j/k/n/p/…) now
+   drives the right pane; C-x o / q return."
+  (let* ((st   *notes-list-state*)
+         (pdf  (getf st :pdf-buffer))
+         (path (getf st :pdf-path)))
+    (when (and st pdf)
+      (%notes-set-frontend-focus pdf "pdf")
+      (%notes-set-active-buffer pdf)
+      (%notes-panel-minor t)
+      ;; engine-load (at panel open) cleared w1's overlays; repaint the
+      ;; persistent annotation markup so it's visible while navigating.
+      (handler-case
+          (%limn-call "view/overlays" :|win-id| "w1"
+                      :|layers| (pdf-annotations-overlay-payload
+                                 (pdf-annotations-load path)))
+        (error () nil))
+      (setf (getf *notes-list-state* :focus) :pdf)
+      (handler-case
+          (%limn-call "message/echo" :|text| "Focus: PDF  (C-x o → list, q → close)")
+        (error () nil)))))
+
+(defun %notes-focus-list ()
+  "Move focus back to the notes-list pane (panel stays open)."
+  (let* ((st  *notes-list-state*)
+         (tid (getf st :text-buffer)))
+    (when (and st tid)
+      (%notes-set-frontend-focus tid "text")
+      (%notes-set-active-buffer tid)
+      (setf (getf *notes-list-state* :focus) :notes)
+      (handler-case
+          (%limn-call "message/echo" :|text| "Focus: notes  (C-x o → PDF)")
+        (error () nil)))))
+
+(defun %notes-focus-other ()
+  "C-x o: toggle focus between the notes list and the PDF pane."
+  (when *notes-list-state*
+    (if (eq (getf *notes-list-state* :focus) :pdf)
+        (%notes-focus-list)
+        (%notes-focus-pdf))))
+
 (defun %notes-return-to-pdf ()
   "Switch w1 back to the PDF buffer, repaint annotation overlays, close
    the list buffer, and clear *notes-list-state*."
   (let* ((st   *notes-list-state*)
          (pdf  (getf st :pdf-buffer))
          (path (getf st :pdf-path))
+         (page (getf st :pdf-page))
          (tid  (getf st :text-buffer)))
     (when pdf
+      ;; Bug-Set-B #3 — drop the panel minor mode from the PDF buffer so a
+      ;; stray C-x o / q can't fire after we've left the list.
+      (handler-case (%notes-panel-minor nil) (error () nil))
+      ;; Tear down the side-panel layout first so the PDF reclaims the full
+      ;; width.  buffer/show also calls exit_text_panel as a safety net, but
+      ;; doing it explicitly keeps the intent clear and survives any future
+      ;; change to buffer/show's active-window gating.
+      (handler-case (%limn-call "chrome/text-panel" :|on| :false)
+        (error () nil))
       (%limn-call "buffer/show" :|buffer-id| pdf :|win-id| "w1")
       ;; buffer/show emits no buffer-opened event, so update the Lisp-side
       ;; active-buffer map ourselves — otherwise key dispatch keeps routing
@@ -2319,6 +2420,13 @@
       (let ((setab (find-symbol "SET-WINDOW-ACTIVE-BUFFER" :limn/runtime)))
         (when (and setab (fboundp setab))
           (funcall (symbol-function setab) "w1" pdf)))
+      ;; Restore the page the reader was on before opening the list.
+      ;; buffer/show re-opens at the window's stored page, which is
+      ;; unreliable after the text-engine detour (it can land on page 0),
+      ;; so set it explicitly.  RET overrides this afterwards with the
+      ;; annotation's own page (see %notes-visit).
+      (when page
+        (handler-case (%page-set page) (error () nil)))
       ;; engine-load on the text buffer cleared w1's overlays; repaint the
       ;; persistent annotation markup from the (possibly mutated) sidecar.
       (handler-case
@@ -2380,7 +2488,8 @@
        ;; Record the pre-list PDF position so C-o (pdf-jump-back) returns
        ;; here after a RET jump.  Captured now, while w1 still shows the PDF.
        (handler-case (%pdf-push-mark) (error () nil))
-       (let* ((sorted (%notes-sort anns))
+       (let* ((pre-page (or (getf (%focused-view) :|page|) 0))
+              (sorted (%notes-sort anns))
               (tid (getf (%response-data
                           (%limn-call "bridge/engine-load"
                                       :|win-id| "w1" :|engine| "text"
@@ -2391,16 +2500,19 @@
                  (list :text-buffer tid
                        :pdf-buffer  pdf-buf
                        :pdf-path    path
+                       :pdf-page    pre-page
                        :all         sorted
                        :entries     #()
                        :filter      nil
+                       ;; Bug-Set-B #3 — which pane currently has focus.
+                       ;; Opens on the list; C-x o flips to :pdf.
+                       :focus       :notes
                        :pending     t))
            (multiple-value-bind (vec text) (%notes-build-display sorted nil)
              (setf (getf *notes-list-state* :entries) vec)
              (when (plusp (length text))
                (%limn-call "buffer/insert" :|buffer-id| tid :|at| 0
-                           :|text| text))
-             (%limn-call "buffer/cursor-set" :|buffer-id| tid :|offset| 0))
+                           :|text| text)))
            ;; Safety net for mock/test paths where the async buffer-opened
            ;; event isn't pumped: activate synchronously too (idempotent
            ;; with the hook's activation).
@@ -2410,14 +2522,31 @@
              (when mb
                (handler-case
                    (limn/mode:activate mb (intern "NOTES-LIST-MODE" :cl-user))
-                 (error () nil))))))))))
+                 (error () nil))))
+           ;; Switch the freshly-shown text view into side-panel layout:
+           ;; the list takes the left ~1/3, the PDF keeps rendering on the
+           ;; right ~2/3.  Done after engine-load (which flips to the
+           ;; full-screen text view) so enter_text_panel reparents it.
+           (handler-case (%limn-call "chrome/text-panel" :|on| t)
+             (error () nil))
+           ;; Place the cursor on line 0 LAST — after the panel is active —
+           ;; so the current-line highlight is drawn immediately (the sync
+           ;; that paints it only highlights while panel mode is on).
+           (%limn-call "buffer/cursor-set" :|buffer-id| tid :|offset| 0)
+           ;; Bug-Set-B #3 — draw the accent border on the (focused) list
+           ;; pane.  Focus starts on the list; C-x o flips to the PDF.
+           (%notes-set-frontend-focus tid "text")))))))
 
 (defun %notes-visit ()
-  "RET: jump to the current annotation's page, then return to the PDF."
-  (let ((ann (%notes-current-ann)))
-    (when ann
-      (%page-set (pdf-annotation-page ann)))
-    (%notes-return-to-pdf)))
+  "RET: return to the PDF first, THEN jump to the current annotation's
+   page.  Order matters: while the list is up, w1's active buffer is the
+   text buffer, so a view/set page request is a no-op (text windows ignore
+   page).  We must restore the PDF buffer before navigating."
+  (let* ((ann  (%notes-current-ann))
+         (page (and ann (pdf-annotation-page ann))))
+    (%notes-return-to-pdf)
+    (when page
+      (handler-case (%page-set page) (error () nil)))))
 
 (defun %notes-edit-current ()
   "e: prompt for new note text on the current annotation; persist + refresh."
@@ -2521,6 +2650,10 @@
   (lambda () (limn/pdf-mode::%notes-rerender :reload t)))
 (limn/pdf-mode::%defcmd pdf-notes-quit nil
   (lambda () (limn/pdf-mode::%notes-return-to-pdf)))
+;; Bug-Set-B #3 — C-x o toggles focus between the notes list and the PDF
+;; pane while the side panel stays open (like Emacs other-window).
+(limn/pdf-mode::%defcmd pdf-notes-focus-other nil
+  (lambda () (limn/pdf-mode::%notes-focus-other)))
 
 ;;; v0.39 W13 — copy current PDF selection text onto the kill-ring.
 ;;; Emacs convention: M-w `copy-region-as-kill`.  PDF read-only buffers
@@ -3309,11 +3442,25 @@
     (%def km "/"       (intern "PDF-NOTES-FILTER"  :cl-user))
     (%def km "g"       (intern "PDF-NOTES-REFRESH" :cl-user))
     (%def km "q"       (intern "PDF-NOTES-QUIT"    :cl-user))
+    ;; Bug-Set-B #3 — C-x o flips focus to the PDF pane (panel stays open).
+    (%def km "C-x o"   (intern "PDF-NOTES-FOCUS-OTHER" :cl-user))
     ;; Ensure fundamental-mode exists (tests may load modules in isolation).
     (when (and fund (not (limn/mode:find-mode fund)))
       (limn/mode:define-mode fund :type :major :modeline "Fund"))
     (limn/mode:define-mode sym :type :major :parent fund :modeline "Notes")
     (setf (limn/mode:mode-keymap (limn/mode:find-mode sym)) km)
+    ;; Bug-Set-B #3 — notes-panel-mode: a minor mode activated on the PDF
+    ;; buffer while the side panel is open.  Gives the PDF side the same
+    ;; C-x o (→ list) and q (→ close) bindings, shadowing pdf-mode only for
+    ;; the panel's lifetime (deactivated in %notes-return-to-pdf).
+    (let ((pkm (limn/keys:make-keymap)))
+      (%def pkm "C-x o" (intern "PDF-NOTES-FOCUS-OTHER" :cl-user))
+      (%def pkm "q"     (intern "PDF-NOTES-QUIT"        :cl-user))
+      (limn/mode:define-mode (intern "NOTES-PANEL-MODE" :cl-user)
+        :type :minor :modeline "Notes^")
+      (setf (limn/mode:mode-keymap
+             (limn/mode:find-mode (intern "NOTES-PANEL-MODE" :cl-user)))
+            pkm))
     sym))
 
 (defvar *installed-p* nil)
