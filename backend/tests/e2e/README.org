@@ -1,83 +1,78 @@
-#+TITLE: Limn end-to-end tests
+#+TITLE: Limn 端對端（e2e）測試
 #+OPTIONS: toc:nil
 
-* What these tests are
+* 這些測試是什麼
 
-The =backend/tests/= dir already has two test tiers:
+=backend/tests/= 目錄底下原本就有兩層測試：
 
-| tier        | drives                              | layer touched           |
-|-------------+-------------------------------------+-------------------------|
-| unit        | mock client (in-memory FIFO)        | pure Lisp logic         |
-| integration | real Limn binary + raw wire JSON    | C++ + bridge protocol   |
+| 層級        | 驅動方式                              | 測到的層            |
+|-------------+---------------------------------------+---------------------|
+| unit        | mock client（in-memory FIFO）         | 純 Lisp 邏輯        |
+| integration | 真的 Limn binary + 原始 wire JSON     | C++ + bridge 協議    |
 
-Both deliberately *avoid* the real backend Lisp client (=limn.lisp= et al.).
-That's good for keeping the tests focused, but it leaves a third layer
-untested: the **Lisp client + framework runtime** acting like a real user.
+兩層都*刻意*跳過真正的 backend Lisp client（=limn.lisp= 等等）。這對保持測試
+聚焦是好事，但結果就是第三層沒測：**Lisp client + framework runtime
+照著真正使用者的方式運作**這層。
 
-The =e2e/= dir fills that gap. Each test:
+=e2e/= 目錄就是補這個洞。每個測試會：
 
-1. Spawns the real =limn= binary
-2. Loads the *real* backend modules (=limn.lisp= and friends) in the test
-   process
-3. Calls =(limn:start …)= to set up the same way an end user would
-4. Drives a scenario through Lisp-level APIs + Qt-level input injection
-5. Verifies observable effects (response data, side effects, log files)
+1. 把真的 =limn= binary spawn 起來
+2. 在測試 process 裡載入 *真實的* backend 模組（=limn.lisp= 之類）
+3. 呼叫 =(limn:start …)= 用跟使用者一模一樣的方式 setup
+4. 透過 Lisp 層 API + Qt 層 input 注入跑出一個情境
+5. 驗證觀察得到的副作用（response 資料、side effects、log 檔）
 
-* When to add an e2e test
+* 什麼時候要加 e2e 測試
 
-Add one when a feature spans multiple layers and would slip through if
-each layer is tested in isolation. Examples:
+當一個功能橫跨多層、各層分開測都會漏掉問題的時候加。例子：
 
-- batch 8 (C-g): keypress → Qt filter → backend hook → keymap walk →
-  defcommand → reader → dynamic-bound canceller → cancel → handler-case.
-  *Every* unit/integration test mocked or sidestepped at least one link.
-- batch 9 (init.lisp): module load order + start sequence + actual file IO.
+- batch 8（C-g）：keypress → Qt filter → backend hook → keymap walk →
+  defcommand → reader → 動態綁定的 canceller → cancel → handler-case。
+  *每一個* unit/integration 測試都至少 mock 掉或跳過了其中一個環節。
+- batch 9（init.lisp）：模組載入順序 + start sequence + 真正的檔案 IO。
 
-Don't add one if a focused unit test would suffice.
+如果一個聚焦的 unit test 就夠了，就不要開 e2e。
 
-* Running
+* 執行方式
 
 #+begin_src bash
-# Run all e2e tests:
+# 跑所有 e2e 測試：
 backend/tests/e2e/run-e2e.sh
 
-# Run one:
+# 跑單一個：
 sbcl --no-userinit --no-sysinit --non-interactive \
      --load backend/tests/e2e/batch8-cg-qt.lisp
 #+end_src
 
-Each script exits 0 on pass, non-zero on fail, prints a clear VERDICT
-line you can grep.
+每個 script 過了 exit 0、失敗非 0；會印一行明顯的 VERDICT 行讓你 grep。
 
-* Two flavours: -qt and -os
+* 兩種版本：-qt 和 -os
 
-Each scenario lives as a pair of drivers, designed to be the same test
-exercised at two layers:
+每個情境都會做成成對的兩個 driver，目的是同一個測試打到兩個層：
 
-| suffix          | injection mechanism                | covers                                    | runs on                  |
-|-----------------+------------------------------------+-------------------------------------------+--------------------------|
-| =batch*-qt.lisp= | =test/inject-qt-key= (QApplication::sendEvent) | Qt event filter ↓ everything Lisp-side | any host (macOS / Linux) |
-| =batch*-os.lisp= | =xdotool key= (real X11 input events) | + X server → XInput → Qt xcb              | Linux container only     |
+| suffix          | 注入機制                                          | 涵蓋層                                    | 跑得起來的環境           |
+|-----------------+---------------------------------------------------+-------------------------------------------+--------------------------|
+| =batch*-qt.lisp= | =test/inject-qt-key=（QApplication::sendEvent）   | Qt event filter ↓ 整條 Lisp 層            | 任何 host（macOS / Linux）|
+| =batch*-os.lisp= | =xdotool key=（真的 X11 input event）             | + X server → XInput → Qt xcb              | 限 Linux container       |
 
-The =-os= flavour is what makes the test layer cover the same chain a
-real user keypress goes through. We use Linux + Xvfb + xdotool because:
+=-os= 這個版本就是讓測試真的覆蓋到「真實使用者按一個鍵」的同一條鏈
+路。我們選 Linux + Xvfb + xdotool 是因為：
 
-- macOS OS-level injection needs Accessibility system permission (gated)
-- Linux X11 input subsystem has no permission gate
-- Container makes the test env reproducible
+- macOS 的 OS 層注入需要 Accessibility 系統權限（被擋住）
+- Linux X11 input 子系統沒這道權限關卡
+- Container 讓測試環境可重現
 
-Both flavours of each scenario should pass — they are not redundant,
-they are different layers of the same chain.
+兩種版本同一個情境都該 pass —— 它們不是冗餘，而是同一條鏈路的不同層。
 
-* Running
+* 執行方式（兩種版本）
 
 #+begin_src bash
-# All Qt-level tests (macOS / Linux, no container needed):
+# 全部 Qt 層測試（macOS / Linux，不需要 container）：
 backend/tests/e2e/run-e2e.sh
 
-# All OS-level tests (must be inside the Limn container):
+# 全部 OS 層測試（一定要在 Limn container 裡）：
 backend/tests/e2e/run-os-e2e.sh
 
-# Both, with container build/start if needed:
+# 兩種都跑，需要的話順便 build / 起 container：
 backend/tests/run-all-tiers.sh
 #+end_src

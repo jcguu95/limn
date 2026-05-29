@@ -56,6 +56,7 @@
    #:make-pdf-annotation #:pdf-annotation-p
    #:pdf-annotation-id #:pdf-annotation-page #:pdf-annotation-rects
    #:pdf-annotation-color #:pdf-annotation-note #:pdf-annotation-created-at
+   #:pdf-annotation-type #:pdf-annotation-tags
    #:pdf-annotations-serialize #:pdf-annotations-deserialize
    #:pdf-annotations-sidecar-path
    #:pdf-annotations-content-hash-sidecar-path
@@ -68,6 +69,10 @@
    #:pdf-annotations-migrate
    #:pdf-annotations-export-org
    #:*pdf-annotations-schema-version*
+   ;; §C cache + query surface (v0.39.11)
+   #:pdf-annotations-on-page
+   #:pdf-annotations-pages-with-notes
+   #:pdf-annotations-with-tag
    ;; §D TOC
    #:*pdf-toc-buffer-name*
    #:format-toc-tree #:parse-toc-line-page
@@ -805,8 +810,11 @@
 ;;; §C annotation — struct + sidecar I/O + content-hash key + schema
 ;;; ═════════════════════════════════════════════════════════════════════
 
-(defvar *pdf-annotations-schema-version* 1
-  "Current sidecar schema version. Bumped on incompatible changes.")
+(defvar *pdf-annotations-schema-version* 2
+  "Current sidecar schema version. Bumped on incompatible changes.
+   v1 → v2 (v0.39.11): added :type (keyword) + :tags (list of strings) per entry.
+   Forward-compat: v2 reader accepts v1 files (missing fields default to
+   :type :highlight, :tags nil); writer always emits v2.")
 
 (defvar *uuid-counter* 0)
 (defun %fresh-uuid ()
@@ -834,32 +842,43 @@
   (rects     nil)               ; list of (x0 y0 x1 y1)
   (color     "#FFD700")
   (note      nil)
-  (created-at 0))
+  (created-at 0)
+  ;; v0.39.11 (schema v2):
+  ;; type — :highlight (default, current behavior) | :note (point note,
+  ;;        no text selection) | :both
+  ;; tags — list of strings (default nil)
+  (type      :highlight)
+  (tags      nil))
 
 ;; Public constructor: fills id / created-at via vtable when caller omits them.
 ;; Has to handle the case where caller doesn't pass :color either — fall back to
 ;; *pdf-annotation-color* (defcustom).
 (defun make-pdf-annotation (&key id page rects (color nil color-p)
-                                  note created-at)
+                                  note created-at
+                                  (type :highlight) tags)
   (%raw-make-pdf-annotation
    :id (or id (%fresh-uuid))
    :page (or page 0)
    :rects rects
    :color (if color-p color *pdf-annotation-color*)
    :note note
-   :created-at (or created-at (funcall *now-fn*))))
+   :created-at (or created-at (funcall *now-fn*))
+   :type (or type :highlight)
+   :tags tags))
 
 (defun pdf-annotations-serialize (anns)
   "Serialize list of pdf-annotation to a versioned schema string:
-   (:VERSION 1 :ANNOTATIONS ((:id ... :page ... ...) ...))"
+   (:VERSION 2 :ANNOTATIONS ((:id ... :page ... :type ... :tags (...) ...) ...))"
   (let ((entries
           (mapcar (lambda (a)
-                    (list :id        (pdf-annotation-id a)
-                          :page      (pdf-annotation-page a)
-                          :rects     (pdf-annotation-rects a)
-                          :color     (pdf-annotation-color a)
-                          :note      (pdf-annotation-note a)
-                          :created-at (pdf-annotation-created-at a)))
+                    (list :id         (pdf-annotation-id a)
+                          :page       (pdf-annotation-page a)
+                          :rects      (pdf-annotation-rects a)
+                          :color      (pdf-annotation-color a)
+                          :note       (pdf-annotation-note a)
+                          :created-at (pdf-annotation-created-at a)
+                          :type       (or (pdf-annotation-type a) :highlight)
+                          :tags       (pdf-annotation-tags a)))
                   anns)))
     (with-output-to-string (out)
       (write (list :version *pdf-annotations-schema-version*
@@ -880,18 +899,27 @@
     (let ((form (%try-read-form str)))
       (cond
         ((null form) nil)
-        ((and (listp form) (or (eq (getf form :version) 0)
-                                (eq (getf form :version) :v0)
-                                (eq (getf form :version) nil)))
-         ;; Either ancient (no version) or v0 — migrate first.
-         (let ((migrated (pdf-annotations-migrate form)))
+        ((and (listp form) (%plist-envelope-p form))
+         ;; Funnel any versioned form (v0, v1, v2, …) through migrate so
+         ;; entry plists get current-schema defaults before %decode-one
+         ;; sees them. %decode-one is also tolerant for safety.
+         (let* ((migrated (pdf-annotations-migrate form)))
            (%decode-entries (getf migrated :annotations))))
-        ((and (listp form) (getf form :annotations))
-         (%decode-entries (getf form :annotations)))
         ((listp form)
-         ;; Permissive: form is a raw list of entry-plists.
+         ;; Permissive: form is a raw list of entry-plists (no envelope).
          (%decode-entries form))
         (t nil)))))
+
+(defun %plist-envelope-p (form)
+  "True iff FORM looks like a (:version ... :annotations (...)) envelope
+   rather than a raw list of entry plists. Cheap structural test that
+   doesn't trip GETF's malformed-plist guard on lists-of-lists."
+  (and (listp form)
+       (keywordp (car form))
+       ;; even length is a property of a valid plist envelope; raw entry
+       ;; lists would start with a list, not a keyword, so the keywordp
+       ;; check above already excludes them — this is defence in depth.
+       (evenp (length form))))
 
 (defun %decode-entries (entries)
   (let ((acc nil))
@@ -903,17 +931,37 @@
 
 (defun %decode-one (e)
   (when (and (listp e) (getf e :id))
-    (make-pdf-annotation
-     :id        (getf e :id)
-     :page      (getf e :page 0)
-     :rects     (getf e :rects)
-     :color     (or (getf e :color) "#FFD700")
-     :note      (getf e :note)
-     :created-at (or (getf e :created-at) 0))))
+    ;; v1 sidecars lack :type and :tags — default to :highlight / nil.
+    ;; Use indicator-presence sentinel so an entry that explicitly stores
+    ;; :type nil still falls back to :highlight (matches struct default).
+    (let* ((type-cell (member :type e))
+           (type-val  (if type-cell (cadr type-cell) :highlight))
+           (tags-val  (getf e :tags)))
+      (make-pdf-annotation
+       :id        (getf e :id)
+       :page      (getf e :page 0)
+       :rects     (getf e :rects)
+       :color     (or (getf e :color) "#FFD700")
+       :note      (getf e :note)
+       :created-at (or (getf e :created-at) 0)
+       :type      (or type-val :highlight)
+       :tags      tags-val))))
+
+(defun %upgrade-entry-v1->v2 (e)
+  "Stamp v2 defaults onto an entry-plist that may be v0 or v1.
+   Adds :type :highlight and :tags nil where missing. Idempotent."
+  (if (listp e)
+      (let ((out (copy-list e)))
+        (unless (member :type out) (setf out (append out (list :type :highlight))))
+        (unless (member :tags out) (setf out (append out (list :tags nil))))
+        out)
+      e))
 
 (defun pdf-annotations-migrate (data)
   "Migrate a versioned-or-not plist up to current schema version.
-   Idempotent: returns DATA unchanged if already current."
+   Idempotent: returns DATA unchanged if already current.
+   v0 → v1: stamp :version.
+   v1 → v2: stamp :version + add default :type :highlight, :tags nil per entry."
   (cond
     ((null data) (list :version *pdf-annotations-schema-version*
                        :annotations '()))
@@ -923,9 +971,11 @@
        (cond
          ((eql v *pdf-annotations-schema-version*) data)
          ((< v *pdf-annotations-schema-version*)
-          ;; v0 → v1: same shape, just stamp version.
+          ;; Walk every entry adding defaults, then stamp current version.
           (list :version *pdf-annotations-schema-version*
-                :annotations (or (getf data :annotations) '())))
+                :annotations
+                (mapcar #'%upgrade-entry-v1->v2
+                        (or (getf data :annotations) '()))))
          (t data))))))
 
 (defun %home ()
@@ -1053,15 +1103,26 @@
      all)))
 
 (defun pdf-annotations-overlay-payload (anns)
-  "Convert annotation list to view/overlays payload."
-  (mapcar (lambda (a)
-            (list :|type| "rect"
-                  :|page| (pdf-annotation-page a)
-                  ;; first rect (multi-rect anno: caller expands if needed)
-                  :|rect| (first (pdf-annotation-rects a))
-                  :|color| (pdf-annotation-color a)
-                  :|opacity| 0.6))
-          anns))
+  "Convert annotation list to view/overlays payload.  v0.39.12 follow-up:
+   emit ONE layer per rect (was: only the first rect, which made
+   multi-rect highlights — every annotation produced by v0.39.12's
+   get_text_selection persistence — render as just the first
+   character of the selected text).  Single-rect annotations from
+   older sidecars still work because the per-rect expansion is a
+   no-op for them."
+  (let ((acc nil))
+    (dolist (a anns)
+      (let ((page  (pdf-annotation-page a))
+            (color (pdf-annotation-color a)))
+        (dolist (rect (pdf-annotation-rects a))
+          (when rect
+            (push (list :|type|    "rect"
+                        :|page|    page
+                        :|rect|    rect
+                        :|color|   color
+                        :|opacity| 0.6)
+                  acc)))))
+    (nreverse acc)))
 
 (defun pdf-annotations-for-buffer (path)
   "Convenience: overlay-payload, via cache (builds on miss)."
@@ -1676,15 +1737,20 @@
     (and bid (gethash bid limn/pdf-mode::*buffer-id-to-path*))))
 
 (defun limn/pdf-mode::%selection ()
-  "Get the current selection as a (:|page| P :|rects| ((x1 y1 x2 y2)))
-   plist.  v0.37 Phase F: the bridge's view/selection-get returns the
-   selection as :|active| / :|begin|{:|page|,:|x|,:|y|} / :|end|{...} /
-   :|mode| / :|text| — there is no :|rects| field on the wire (and
-   never has been since the wire schema settled in v0.15).  This
-   helper synthesizes a single-rect bounding box from begin/end so
-   downstream callers (%add-annotation) keep the old :|page|/:|rects|
-   contract.  Returns NIL when no selection is active or coords are
-   missing — %add-annotation treats that as a no-op."
+  "Get the current selection as a (:|page| P :|rects| ((x0 y0 x1 y1)...))
+   plist.
+
+   v0.39.12 update: view/selection-get now returns a :|rects| array
+   carrying the real per-character / per-line rects from sioyek's
+   get_text_selection (page-norm coords, each entry [x0 y0 x1 y1 page]).
+   We prefer these — they match the visible glyph extents, so
+   annotations saved on large-font titles are no longer thin strips.
+
+   Fallback path (when wire didn't include :|rects|, or none survived
+   the page filter — happens on image-only selections / older binaries):
+   synthesise a single bounding box from begin/end points so the
+   downstream contract still holds.  Returns NIL when no selection is
+   active or coords are missing."
   (let* ((r (limn/pdf-mode::%limn-call "view/selection-get" :|win-id| "w1"))
          (d (limn/pdf-mode::%response-data r)))
     (when (and d (getf d :|active|))
@@ -1693,12 +1759,29 @@
              (page (or (and b (getf b :|page|))
                        (and e (getf e :|page|))
                        0))
-             (bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
-             (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
-        (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
-          (list :|page| page
-                :|rects| (list (list (min bx ex) (min by ey)
-                                     (max bx ex) (max by ey)))))))))
+             (wire-rects (getf d :|rects|))
+             (page-rects
+               (and (consp wire-rects)
+                    (loop for r in wire-rects
+                          when (and (consp r) (>= (length r) 4))
+                            collect (let ((rp (if (>= (length r) 5)
+                                                   (nth 4 r)
+                                                   page)))
+                                       (when (or (null rp) (eql rp page))
+                                         (list (nth 0 r) (nth 1 r)
+                                               (nth 2 r) (nth 3 r))))
+                          into acc
+                          finally (return (remove nil acc))))))
+        (cond
+          (page-rects
+           (list :|page| page :|rects| page-rects))
+          (t
+           (let ((bx (and b (getf b :|x|))) (by (and b (getf b :|y|)))
+                 (ex (and e (getf e :|x|))) (ey (and e (getf e :|y|))))
+             (when (and (numberp bx) (numberp by) (numberp ex) (numberp ey))
+               (list :|page| page
+                     :|rects| (list (list (min bx ex) (min by ey)
+                                          (max bx ex) (max by ey))))))))))))
 
 (defun limn/pdf-mode::%add-annotation (note)
   "Build + persist + paint an annotation from the current selection."
