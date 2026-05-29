@@ -148,7 +148,9 @@
                 ;; v0.40 §1.2 — mark narrow-aware
                 "mark-narrow.lisp"
                 ;; v0.40 §1.3 — isearch narrow-aware
-                "isearch-narrow.lisp"))
+                "isearch-narrow.lisp"
+                ;; v0.40 §1.4 — regex narrow-aware
+                "regex-narrow.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

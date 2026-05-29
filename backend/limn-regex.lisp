@@ -42,6 +42,10 @@
            #:*point-fn*
            #:*set-point-fn*
            #:*buffer-text-len-fn*
+           ;; v0.40 narrow — accessible-region bounds.  NIL means
+           ;; "not narrowed" → re-search-* falls back to 0 / text-len.
+           #:*point-min-fn*
+           #:*point-max-fn*
            #:reset-match-data))
 
 (in-package #:limn/regex)
@@ -66,6 +70,23 @@
 
 (defvar *buffer-text-len-fn*
   (lambda (bid) (declare (ignore bid)) 0))
+
+;; v0.40 narrow — same nil-means-no-narrow contract as limn/text-nav.
+;; Rewired by limn/excursion at its load time to query buffer-local
+;; narrow markers; when set, re-search-* and looking-{at,back} stay
+;; inside [point-min, point-max).
+(defvar *point-min-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
+(defvar *point-max-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
+(defun %pmin (bid) (or (funcall *point-min-fn* bid) 0))
+(defun %pmax (bid text)
+  "TEXT is passed in so the no-narrow fallback uses the same string the
+   caller is searching over.  Avoids depending on *buffer-text-len-fn*
+   being wired (existing regex tests only wire *buffer-text-fn*)."
+  (or (funcall *point-max-fn* bid) (length text)))
 
 ;;; ── match-data state ──────────────────────────────────────────────────────
 ;;;
@@ -281,15 +302,25 @@
    point to match end, install match-data, return new point. On failure:
    if NOERROR is nil, signal SEARCH-FAILED; if t, return nil; otherwise
    return nil. Point is unchanged on failure. BOUND, if given, is the
-   upper search limit. COUNT (default 1) iterates the search."
+   upper search limit. COUNT (default 1) iterates the search.
+   v0.40: when BOUND is omitted, defaults to (point-max) so the search
+   stays inside the accessible region; an explicit BOUND is still
+   honoured, but is clipped to point-max."
   (let* ((bid   (%current-buffer-id))
          (text  (funcall *buffer-text-fn* bid))
          (point (funcall *point-fn* bid))
          (pcre  (emacs-regex-to-pcre regex))
          (c     (or count 1))
-         (upper (or bound (length text)))
+         (pmax  (%pmax bid text))
+         (upper (if bound (min bound pmax) pmax))
          (cursor point)
          (last-end nil))
+    (when (> cursor upper)
+      ;; Point sits outside the accessible region (e.g. a recent
+      ;; narrow shrank past it).  No forward match possible.
+      (cond
+        ((null noerror) (error 'search-failed :regex regex))
+        (t (return-from re-search-forward nil))))
     (dotimes (_ c)
       (multiple-value-bind (mstart mend reg-starts reg-ends)
           (%scan-once pcre text cursor upper)
@@ -309,15 +340,24 @@
 (defun re-search-backward (regex &optional bound noerror count)
   "Search backward for REGEX from *current-buffer*'s point. On success:
    set point to match start. BOUND, if given, is the lower search limit;
-   matches whose start is < BOUND are rejected."
+   matches whose start is < BOUND are rejected.
+   v0.40: when BOUND is omitted, defaults to (point-min); an explicit
+   BOUND is honoured but clamped to >= point-min."
   (let* ((bid   (%current-buffer-id))
          (text  (funcall *buffer-text-fn* bid))
          (point (funcall *point-fn* bid))
          (pcre  (emacs-regex-to-pcre regex))
          (c     (or count 1))
-         (lower (or bound 0))
+         (pmin  (%pmin bid))
+         (lower (if bound (max bound pmin) pmin))
          (cursor point)
          (last-start nil))
+    (when (< cursor lower)
+      ;; Point sits before the accessible region.  No backward match
+      ;; possible.
+      (cond
+        ((null noerror) (error 'search-failed :regex regex))
+        (t (return-from re-search-backward nil))))
     (dotimes (_ c)
       (let ((all (cl-ppcre:all-matches pcre text
                                         :start lower
@@ -346,11 +386,15 @@
 
 (defun re-search-in-buffer (regex buf-id)
   "Find first match of REGEX in BUF-ID, without changing *current-buffer*.
-   Sets match-data; returns match-end on success, nil otherwise."
+   Sets match-data; returns match-end on success, nil otherwise.
+   v0.40: respects BUF-ID's narrowing — only matches inside
+   [point-min, point-max) qualify."
   (let* ((text (funcall *buffer-text-fn* buf-id))
-         (pcre (emacs-regex-to-pcre regex)))
+         (pcre (emacs-regex-to-pcre regex))
+         (lo   (%pmin buf-id))
+         (hi   (%pmax buf-id text)))
     (multiple-value-bind (mstart mend reg-starts reg-ends)
-        (%scan-once pcre text 0 (length text))
+        (%scan-once pcre text lo hi)
       (cond
         ((null mstart) nil)
         (t (%install-match-data mstart mend reg-starts reg-ends text)
@@ -362,26 +406,33 @@
 
 (defun looking-at (regex)
   "Return t iff REGEX matches text starting exactly at *current-buffer*'s
-   point. Point is NOT moved. Installs match-data on success."
+   point. Point is NOT moved. Installs match-data on success.
+   v0.40: the implicit upper search bound is (point-max), so a match
+   that would extend past the accessible region is rejected."
   (let* ((bid   (%current-buffer-id))
          (text  (funcall *buffer-text-fn* bid))
          (point (funcall *point-fn* bid))
+         (pmax  (%pmax bid text))
          (pcre  (emacs-regex-to-pcre regex)))
     (multiple-value-bind (mstart mend reg-starts reg-ends)
-        (%scan-once pcre text point (length text))
+        (%scan-once pcre text point pmax)
       (cond
-        ((and mstart (= mstart point))
+        ((and mstart (= mstart point) (<= mend pmax))
          (%install-match-data mstart mend reg-starts reg-ends text)
          t)
         (t nil)))))
 
 (defun looking-back (regex &optional limit)
   "Return t iff REGEX matches text ending exactly at *current-buffer*'s
-   point. Scan starts from LIMIT (default 0). Point is NOT moved."
+   point. Scan starts from LIMIT (default (point-min)). Point is NOT
+   moved.
+   v0.40: when LIMIT is omitted, defaults to (point-min); an explicit
+   LIMIT is clamped up to point-min."
   (let* ((bid   (%current-buffer-id))
          (text  (funcall *buffer-text-fn* bid))
          (point (funcall *point-fn* bid))
-         (lower (or limit 0))
+         (pmin  (%pmin bid))
+         (lower (if limit (max limit pmin) pmin))
          (pcre  (emacs-regex-to-pcre regex)))
     (loop for start from lower upto point do
       (multiple-value-bind (mstart mend reg-starts reg-ends)
@@ -473,3 +524,21 @@
     (cond
       (omit-nulls (remove-if (lambda (s) (string= s "")) parts))
       (t parts))))
+
+;;; ── v0.40 narrow integration ─────────────────────────────────────────
+;;;
+;;; limn-regex loads AFTER limn-excursion (see limn.asd), so excursion's
+;;; load-time patcher can't reach us.  Wire ourselves here, late-bound
+;;; via find-symbol so this stays a soft dependency.
+
+(eval-when (:load-toplevel :execute)
+  (let ((ex (find-package '#:limn/excursion)))
+    (when ex
+      (let ((nstart (find-symbol "NARROW-START-OF" ex))
+            (nend   (find-symbol "NARROW-END-OF"   ex)))
+        (when (and nstart (fboundp nstart))
+          (setf *point-min-fn*
+                (lambda (bid) (and bid (funcall nstart bid)))))
+        (when (and nend (fboundp nend))
+          (setf *point-max-fn*
+                (lambda (bid) (and bid (funcall nend bid)))))))))

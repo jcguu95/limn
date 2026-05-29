@@ -46,6 +46,11 @@
            ;; to bind *current-buffer* first.
            #:point-min-of
            #:point-max-of
+           ;; v0.40 — nil-returning accessors for late-loaded modules
+           ;; whose *point-{min,max}-fn* vtable contract is "nil means
+           ;; no narrowing — fall back to default bounds".
+           #:narrow-start-of
+           #:narrow-end-of
            #:narrowed-p
            ;; point helpers
            #:point
@@ -383,6 +388,17 @@
          (mp (%marker-pos m)))
     (or mp (%text-len bid))))
 
+(defun narrow-start-of (bid)
+  "Position of BID's active narrow-start, or NIL when not narrowed.
+   Designed for late-loaded modules (limn/regex etc.) whose
+   *point-min-fn* / *point-max-fn* vtable closures want the nil
+   sentinel to mean \"no narrowing — use default\"."
+  (%marker-pos (%narrow-start bid)))
+
+(defun narrow-end-of (bid)
+  "Position of BID's active narrow-end, or NIL when not narrowed."
+  (%marker-pos (%narrow-end bid)))
+
 (defun point-min ()
   "Lowest accessible point in current buffer (respects narrowing)."
   (point-min-of (current-buffer-id)))
@@ -687,6 +703,9 @@
                         (and bid (%marker-pos (%narrow-start bid)))))
         (pmax-closure (lambda (bid)
                         (and bid (%marker-pos (%narrow-end bid))))))
+    ;; Only modules that load BEFORE limn/excursion are patched here.
+    ;; Modules that load AFTER (e.g. limn/regex) wire themselves in
+    ;; their own load-time block via limn/excursion:narrow-{start,end}-of.
     (dolist (pkg-name '(#:limn/text-nav #:limn/mark #:limn/isearch))
       (let ((pkg (find-package pkg-name)))
         (when pkg
