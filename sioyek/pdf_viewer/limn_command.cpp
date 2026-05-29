@@ -3487,16 +3487,35 @@ void LimnCommand::rebuild_overlay_raster(int width, int height) {
 
             QRectF r(QPointF(std::min(x0, x1), std::min(y0, y1)),
                      QPointF(std::max(x0, x1), std::max(y0, y1)));
+
+            // v0.40 markup-interaction: optional "style" on rect overlays.
+            //   (absent) / "fill" → translucent fill block (highlights).
+            //   "underline"       → thin bar along the bottom edge only.
+            // Underline is the dedicated visual channel for transient
+            // search results, so they no longer look like persistent
+            // highlights (design: persistent markup ⟂ ephemeral feedback).
+            const QString rstyle = l.value("style").toString();
+            auto paint_one = [&]() {
+                if (rstyle == "underline") {
+                    const qreal thickness =
+                        std::max(2.0, r.height() * 0.12);
+                    QRectF ul(r.left(), r.bottom() - thickness,
+                              r.width(), thickness);
+                    painter.fillRect(ul, col);
+                } else {
+                    painter.fillRect(r, col);
+                }
+            };
             if (dv_live && current_rotation != 0) {
                 // DV gives widget-space pixels; painter has a rotation
                 // transform. Draw through an identity transform so the
                 // overlay lands at the correct widget position.
                 QTransform saved = painter.transform();
                 painter.resetTransform();
-                painter.fillRect(r, col);
+                paint_one();
                 painter.setTransform(saved);
             } else {
-                painter.fillRect(r, col);
+                paint_one();
             }
         }
         else if (type == "line") {

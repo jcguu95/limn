@@ -437,8 +437,13 @@
                (if (zerop *pdf-filter-depth*)
                    "#FFD700"
                    (%pdf-filter-color (1- *pdf-filter-depth*)))))
-         (alpha-current (if (zerop *pdf-filter-depth*) 0.42 0.34))
-         (alpha-other   (if (zerop *pdf-filter-depth*) 0.18 0.15)))
+         ;; v0.40 markup-interaction: search results render as an UNDERLINE
+         ;; (dedicated channel) rather than a fill block, so transient
+         ;; search feedback no longer looks like a persistent highlight.
+         ;; The underline bar is thin, so it needs much higher alpha than
+         ;; the old fill to stay visible; current match brighter than rest.
+         (alpha-current (if (zerop *pdf-filter-depth*) 0.95 0.85))
+         (alpha-other   (if (zerop *pdf-filter-depth*) 0.60 0.55)))
     (when (and state (pdf-search-state-hits state))
       (let ((current-idx (pdf-search-state-current-index state))
             (acc nil)
@@ -449,6 +454,7 @@
                (op (if (= i current-idx) alpha-current alpha-other)))
           (dolist (rect rects)
             (push (list :|type| "rect"
+                         :|style| "underline"
                          :|page| page
                          :|rect| rect
                          :|color| effective-color
