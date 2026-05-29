@@ -67,8 +67,12 @@ PDF 沒有原生文字游標 (point);新模型的 point 由**使用者真正指�
 
 ## 實作順序(風險低 → 高,每步可單獨驗證)
 
-1. **(丙) 搜尋結果改底線** — 立刻解掉「疊在一起分不清」最痛的部分。
-2. **(乙 Layer 1) `M-N` 清單 buffer** — 逃生門先有,不依賴 in-page targeting。
+1. ✅ **(丙) 搜尋結果改底線** — 立刻解掉「疊在一起分不清」最痛的部分。
+2. ✅ **(乙 Layer 1) `M-N` 清單 buffer** — 逃生門先有,不依賴 in-page targeting。
+   一行一標記(頁碼、預覽、tags),`RET` 跳轉並回 PDF、`n`/`p`(`j`/`k`)移動、
+   `e` 編輯 note、`t` 改 tags、`d` 刪除、`/` 篩 tag、`g` 重整、`q` 離開。
+   用 text-engine buffer + 新的 `notes-list-mode` major mode 實作;`M-N` 開清單前
+   先 push 一個 position mark,所以跳轉後 `C-o` 可回原處。
 3. **(乙 Layer 2) in-page current annotation** — click + `Tab` 選取 + focus ring,`v`/`E`/`M-t`/`D` 改對 current annotation;修掉座標 bug。
 4. **(丁) PDF 原生 toggle**。
 5. **(甲/乙 Layer 3) margin gutter / note icon** — 跟 icon-overlay 整合。

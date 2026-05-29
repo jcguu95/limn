@@ -3062,3 +3062,58 @@
                                                             (list :|buffer-id| "b1")))))
     (assert-no-error (%call-cmd "PDF-TOC")
                      "pdf-toc with empty TOC is a no-op, not an error")))
+
+;;; ─────────────────────────────────────────────────────────────────────
+;;; v0.27 step 2 — markup-interaction annotation-list buffer helpers.
+;;; Pure-function coverage for %notes-build-display and %notes-line-offset
+;;; (the in-process unit tier can reach these limn/pdf-mode internals; the
+;;; wire suite cannot).  See markup-interaction-design.md 乙 Layer 1.
+;;; ─────────────────────────────────────────────────────────────────────
+
+(deftest v027-step2-notes-build-display-lines
+  "%notes-build-display with no filter renders one line per annotation,
+   in input order, as 'p.<1-based-page>  <preview><tags-suffix>', and the
+   entries vector matches the input."
+  (let* ((pkg   (find-package '#:limn/pdf-mode))
+         (make  (and pkg (find-symbol "MAKE-PDF-ANNOTATION" pkg)))
+         (build (and pkg (find-symbol "%NOTES-BUILD-DISPLAY" pkg))))
+    (when (and make build (fboundp build))
+      (let* ((a1 (funcall make :id "a1" :page 2 :rects '() :note "hello"
+                               :created-at 1 :tags '("foo")))
+             (a2 (funcall make :id "a2" :page 0 :rects '() :note "world"
+                               :created-at 2)))
+        (multiple-value-bind (vec txt)
+            (funcall (symbol-function build) (list a1 a2) nil)
+          (assert-eql 2 (length vec) "兩個 annotation → 兩筆 entries")
+          (assert-equal (format nil "p.3  hello [foo]~%p.1  world") txt
+                        "每行 'p.<1-based>  <preview><tags>',輸入順序,無尾換行"))))))
+
+(deftest v027-step2-notes-build-display-filter
+  "%notes-build-display with a tag filter keeps only annotations carrying
+   that tag; entries vector and text shrink to the matching subset."
+  (let* ((pkg   (find-package '#:limn/pdf-mode))
+         (make  (and pkg (find-symbol "MAKE-PDF-ANNOTATION" pkg)))
+         (build (and pkg (find-symbol "%NOTES-BUILD-DISPLAY" pkg))))
+    (when (and make build (fboundp build))
+      (let* ((a1 (funcall make :id "a1" :page 2 :rects '() :note "hello"
+                               :created-at 1 :tags '("foo")))
+             (a2 (funcall make :id "a2" :page 0 :rects '() :note "world"
+                               :created-at 2 :tags '("bar"))))
+        (multiple-value-bind (vec txt)
+            (funcall (symbol-function build) (list a1 a2) "foo")
+          (assert-eql 1 (length vec) "只有 tagged foo 的留下")
+          (assert-equal "p.3  hello [foo]" txt
+                        "篩選後只剩相符那一行"))))))
+
+(deftest v027-step2-notes-line-offset
+  "%notes-line-offset returns the codepoint offset of the start of each
+   0-based line, clamping a past-the-end line to the string length."
+  (let* ((pkg (find-package '#:limn/pdf-mode))
+         (off (and pkg (find-symbol "%NOTES-LINE-OFFSET" pkg))))
+    (when (and off (fboundp off))
+      (let ((txt (format nil "abc~%def~%ghi")))
+        (assert-eql 0  (funcall (symbol-function off) txt 0) "line 0 → 0")
+        (assert-eql 4  (funcall (symbol-function off) txt 1) "line 1 → 4")
+        (assert-eql 8  (funcall (symbol-function off) txt 2) "line 2 → 8")
+        (assert-eql 11 (funcall (symbol-function off) txt 9)
+                    "out-of-range line clamps to length")))))
