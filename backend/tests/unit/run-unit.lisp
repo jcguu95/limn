@@ -144,7 +144,9 @@
                 "key-spec-v038.lisp"
                 ;; v0.40 §1.1 — text-nav narrow-aware (depends on
                 ;; with-excursion-ctx from excursion-v032.lisp)
-                "text-nav-narrow.lisp"))
+                "text-nav-narrow.lisp"
+                ;; v0.40 §1.2 — mark narrow-aware
+                "mark-narrow.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

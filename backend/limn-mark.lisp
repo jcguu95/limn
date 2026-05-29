@@ -27,6 +27,9 @@
            #:exchange-point-and-mark
            #:pop-global-mark
            #:*buffer-cursor-fn* #:*buffer-set-cursor-fn*
+           ;; v0.40 narrow — accessible-region bounds vtable.  See the
+           ;; "v0.40 narrow" comment block below for contract.
+           #:*point-min-fn* #:*point-max-fn*
            #:reset-marks #:mark-ring-for
            ;; v0.33 §C — transient-mark-mode + region command classification
            #:*transient-mark-mode*
@@ -66,6 +69,32 @@
 
 (defvar *buffer-cursor-fn*     (lambda (bid) (declare (ignore bid)) 0))
 (defvar *buffer-set-cursor-fn* (lambda (bid off) (declare (ignore bid off))))
+
+;;; ── v0.40 narrow — accessible-region bounds vtable ──────────────────
+;;;
+;;; Same contract as limn/text-nav: each fn returns the narrow boundary,
+;;; or NIL to mean "no narrowing — fall back to no clamp".  Rewired at
+;;; load time by limn/excursion to query buffer-local narrow markers.
+;;; When a buffer is narrowed, set-mark / push-mark clamp the saved
+;;; position into [point-min, point-max) so the mark can never name a
+;;; location outside the accessible region.
+
+(defvar *point-min-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
+(defvar *point-max-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
+(defun %clamp-to-narrow (pos buf-id)
+  "Clamp POS into BUF-ID's accessible region.  When neither boundary is
+   set (no narrowing), POS passes through.  When only one boundary is
+   set, only that side is clamped."
+  (when pos
+    (let ((lo (funcall *point-min-fn* buf-id))
+          (hi (funcall *point-max-fn* buf-id)))
+      (when lo (setf pos (max pos lo)))
+      (when hi (setf pos (min pos hi)))))
+  pos)
 
 (defstruct bm
   (mark nil)     ; marker (or nil) — the current mark
@@ -135,8 +164,12 @@
 (defun set-mark (pos buf-id)
   "Set the mark in BUF-ID to POS (integer), overwriting any previous
    mark. Internally stores a marker so edits fix up the position.
-   v0.33: when *transient-mark-mode* is on, also activates the region."
-  (let* ((st  (%bm buf-id))
+   v0.33: when *transient-mark-mode* is on, also activates the region.
+   v0.40: POS is clamped to [point-min, point-max) when BUF-ID is
+   narrowed, so the mark can never name a location outside the
+   accessible region."
+  (let* ((pos (%clamp-to-narrow pos buf-id))
+         (st  (%bm buf-id))
          (old (bm-mark st)))
     (%unlink old)
     (setf (bm-mark st) (%wrap-fresh pos buf-id)))
@@ -166,9 +199,11 @@
 (defun push-mark (buf-id &key pos)
   "Push a mark to the mark-ring of BUF-ID. With :pos, push that
    position; otherwise push the current cursor. Also pushes a
-   (buf-id . marker) entry on *global-mark-ring*."
+   (buf-id . marker) entry on *global-mark-ring*.
+   v0.40: P is clamped to [point-min, point-max) when BUF-ID is
+   narrowed."
   (let* ((cur (funcall *buffer-cursor-fn* buf-id))
-         (p   (or pos cur))
+         (p   (%clamp-to-narrow (or pos cur) buf-id))
          (st  (%bm buf-id))
          (old (bm-mark st)))
     (when old
@@ -198,13 +233,16 @@
 
 (defun exchange-point-and-mark (buf-id)
   "Swap BUF-ID's cursor with its mark. Signals an error when no mark
-   has been set."
+   has been set.
+   v0.40: both ends of the swap are clamped to [point-min, point-max)
+   so a narrowing that shrank since set-mark can't push cursor or mark
+   outside the accessible region."
   (let* ((st (%bm buf-id))
          (m  (bm-mark st)))
     (unless m
       (error "limn/mark: no mark set in ~s" buf-id))
-    (let ((cur  (funcall *buffer-cursor-fn* buf-id))
-          (mpos (%unwrap m)))
+    (let ((cur  (%clamp-to-narrow (funcall *buffer-cursor-fn* buf-id) buf-id))
+          (mpos (%clamp-to-narrow (%unwrap m) buf-id)))
       (funcall *buffer-set-cursor-fn* buf-id mpos)
       (%unlink m)
       (setf (bm-mark st) (%wrap-fresh cur buf-id)))))

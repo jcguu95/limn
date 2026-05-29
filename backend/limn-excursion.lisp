@@ -683,15 +683,16 @@
 ;;; that don't set up excursion at all.
 
 (eval-when (:load-toplevel :execute)
-  (let ((nav (find-package '#:limn/text-nav)))
-    (when nav
-      (let ((pmin-sym (find-symbol "*POINT-MIN-FN*" nav))
-            (pmax-sym (find-symbol "*POINT-MAX-FN*" nav)))
-        (when (and pmin-sym (boundp pmin-sym))
-          (set pmin-sym
-               (lambda (bid)
-                 (and bid (%marker-pos (%narrow-start bid))))))
-        (when (and pmax-sym (boundp pmax-sym))
-          (set pmax-sym
-               (lambda (bid)
-                 (and bid (%marker-pos (%narrow-end bid))))))))))
+  (let ((pmin-closure (lambda (bid)
+                        (and bid (%marker-pos (%narrow-start bid)))))
+        (pmax-closure (lambda (bid)
+                        (and bid (%marker-pos (%narrow-end bid))))))
+    (dolist (pkg-name '(#:limn/text-nav #:limn/mark))
+      (let ((pkg (find-package pkg-name)))
+        (when pkg
+          (let ((pmin-sym (find-symbol "*POINT-MIN-FN*" pkg))
+                (pmax-sym (find-symbol "*POINT-MAX-FN*" pkg)))
+            (when (and pmin-sym (boundp pmin-sym))
+              (set pmin-sym pmin-closure))
+            (when (and pmax-sym (boundp pmax-sym))
+              (set pmax-sym pmax-closure))))))))
