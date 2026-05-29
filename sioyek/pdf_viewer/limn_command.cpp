@@ -440,19 +440,56 @@ void LimnCommand::cmd_bridge_win_split(const QString& id, const QJsonObject& msg
     // (which itself defaults to "f1"). Explicit :frame-id puts the new
     // window in a different frame — useful for "move pane to other
     // monitor" style workflows once v0.18.1 lands real second windows.
+    // Cache every src field we need BEFORE add_tiled() — appending to the
+    // registry's QVector may reallocate and invalidate the `src` pointer.
+    const QString src_frame    = src->frame_id;
+    const QString src_buffer   = src->buffer_id;
+    const int     src_page     = src->page;
+    const float   src_zoom     = src->zoom;
+    const float   src_offset_x = src->offset_x;
+    const float   src_offset_y = src->offset_y;
+    const bool    src_dark     = src->dark_mode;
+    const int     src_rotation = src->rotation;
+
     QString target_frame = msg.value("frame-id").toString();
-    if (target_frame.isEmpty()) target_frame = src->frame_id;
+    if (target_frame.isEmpty()) target_frame = src_frame;
     if (frames && !frames->has(target_frame)) {
         bridge->send_fail(id, QString("unknown frame-id: %1").arg(target_frame));
         return;
     }
     const QString new_id = windows->allocate_id();
-    LimnWindow* w = windows->add_tiled(new_id);
-    if (w) w->frame_id = target_frame;
-    // SPEC v0.5 §5.1 — visible split only when new window is in the
-    // current frame (other-frame splits don't show on the focused widget).
-    if (main_widget && target_frame == src->frame_id) {
-        main_widget->add_split_pane(dir);
+    LimnWindow* w = windows->add_tiled(new_id);   // may invalidate `src`
+    if (w) {
+        w->frame_id = target_frame;
+        // Emacs C-x 2/3 semantics: the new window shows the SAME buffer +
+        // view-state as the one it split from. Copy the registry snapshot.
+        w->buffer_id = src_buffer;
+        w->page      = src_page;
+        w->zoom      = src_zoom;
+        w->offset_x  = src_offset_x;
+        w->offset_y  = src_offset_y;
+        w->dark_mode = src_dark;
+        w->rotation  = src_rotation;
+    }
+    // Phase 3b — visible split only when the new window is in the current
+    // frame (other-frame splits don't show on the focused widget). Create a
+    // REAL second pane with its OWN DocumentView (the "fat" approach), load
+    // the source document into it, and apply the source view-state so the new
+    // pane renders immediately and independently of the focused pane.
+    if (main_widget && target_frame == src_frame) {
+        main_widget->add_pane_for(new_id, dir);
+        Document* doc = (!src_buffer.isEmpty() && registry)
+                        ? registry->lookup(src_buffer) : nullptr;
+        if (doc && main_widget->load_into_pane(new_id, doc->get_path())) {
+            if (DocumentView* ndv = main_widget->document_view(new_id)) {
+                ndv->set_zoom_level(src_zoom, true, true);
+                ndv->goto_page(src_page);
+                ndv->set_offsets(src_offset_x, src_offset_y, true);
+            }
+        }
+        // Focus stays on the source window (Emacs C-x 2/3 keep point in the
+        // current window); this refreshes the now-two-pane focus borders.
+        main_widget->set_focused_win(windows->focused_id());
     }
     QJsonObject data;
     data.insert("win-a", win_id);
@@ -475,7 +512,20 @@ void LimnCommand::cmd_bridge_win_close(const QString& id, const QJsonObject& msg
         bridge->send_fail(id, "cannot close the last tiled window");
         return;
     }
+    // Phase 3b — destroy the visible pane too. Order matters to avoid a
+    // dangling document_view_/opengl_widget_:
+    //   1. registry->remove transfers focus to the first remaining tiled
+    //      window (if we just closed the focused one).
+    //   2. set_focused_win repoints document_view_/opengl_widget_ at that
+    //      surviving pane — so they no longer point into the pane we are
+    //      about to delete.
+    //   3. remove_pane deletes the closed pane's widgets + DocumentView.
+    const bool was_focused = (windows->focused_id() == win_id);
     windows->remove(win_id);
+    if (main_widget) {
+        if (was_focused) main_widget->set_focused_win(windows->focused_id());
+        main_widget->remove_pane(win_id);
+    }
     bridge->send_ok(id);
 }
 
@@ -503,30 +553,41 @@ void LimnCommand::cmd_bridge_win_focus(const QString& id, const QJsonObject& msg
     //      the live DV (re-open the document if it differs from live,
     //      then apply page/zoom/offset/dark-mode). Rebuild the overlay
     //      raster so the new focused window's overlays paint.
-    // Phase 2: prev focused window's DV. Today singleton; Phase 3 will
-    // route this to the prev-pane's DV via the win-id overload.
+    // Phase 3b: save the PREVIOUS focused pane's DV drift back into its
+    // LimnWindow. With per-pane DVs, document_view(prev_id) is prev's OWN
+    // DocumentView (in 3a/single-pane it's still the one DV).
     const QString prev_id = windows->focused_id();
-    DocumentView* dv = main_widget ? main_widget->document_view(prev_id) : nullptr;
+    DocumentView* prev_dv = main_widget ? main_widget->document_view(prev_id)
+                                        : nullptr;
     LimnWindow* prev = windows->get(prev_id);
-    if (prev && dv && !prev->buffer_id.isEmpty()) {
-        Document* live = dv->get_document();
+    if (prev && prev_dv && !prev->buffer_id.isEmpty()) {
+        Document* live = prev_dv->get_document();
         if (live && registry->find_id(live) == prev->buffer_id) {
-            prev->zoom     = dv->get_zoom_level();
-            prev->offset_x = dv->get_offset_x();
-            prev->offset_y = dv->get_offset_y();
+            prev->zoom     = prev_dv->get_zoom_level();
+            prev->offset_x = prev_dv->get_offset_x();
+            prev->offset_y = prev_dv->get_offset_y();
         }
     }
 
     windows->set_focused(win_id);
+    // Phase 3b: repoint document_view_/opengl_widget_ at the target pane (if
+    // a real pane exists for win_id) and refresh the focus border. After this
+    // the no-arg document_view()/opengl_widget() and open_document() all act
+    // on the target pane.
+    if (main_widget) main_widget->set_focused_win(win_id);
 
+    // Restore the target window's snapshot into ITS OWN pane DV.
+    DocumentView* dv = main_widget ? main_widget->document_view(win_id) : nullptr;
     LimnWindow* target = windows->get(win_id);
     if (target && dv && !target->buffer_id.isEmpty()) {
         Document* target_doc = registry->lookup(target->buffer_id);
         Document* live_doc   = dv->get_document();
         if (target_doc && target_doc != live_doc) {
-            // Re-attach the target buffer's document to the live DV.
-            // DocumentManager caches by canonical path, so this is a
-            // cheap lookup, not a re-parse.
+            // Re-attach the target buffer's document to the target pane's DV.
+            // After set_focused_win the focused DV IS the target pane's DV,
+            // so open_document loads into the right pane. DocumentManager
+            // caches by canonical path, so this is a cheap lookup, not a
+            // re-parse.
             main_widget->open_document(target_doc->get_path());
         }
         if (target_doc) {

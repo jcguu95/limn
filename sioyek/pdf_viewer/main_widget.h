@@ -99,13 +99,32 @@ public:
     ViewportPane         add_pane_for(const QString& win_id, const QString& orientation);
 
     // Phase 3a — mark win_id as the focused pane and repoint document_view_
-    // at that pane's DV, so the ~585 direct document_view_ accesses in
-    // _main_widget.cpp always target the focused window. No-op for unknown
-    // win_id. In 3a focus never moves (single "w1"); 3b calls this on
-    // bridge/win-focus.
+    // AND opengl_widget_ at that pane's DV/widget, so the ~585 direct
+    // document_view_ / opengl_widget() accesses in _main_widget.cpp always
+    // target the focused window. Also refreshes the focus border. No-op for
+    // unknown win_id. In 3a focus never moves (single "w1"); 3b calls this on
+    // bridge/win-focus and bridge/win-close.
     void                 set_focused_win(const QString& win_id);
 
+    // Phase 3b — load a document into a SPECIFIC pane's DocumentView (not the
+    // focused one). Used by bridge/win-split to render the new pane's content
+    // without disturbing the focused pane. Returns false for unknown win_id
+    // or open failure.
+    bool                 load_into_pane(const QString& win_id,
+                                        const std::wstring& path);
+
+    // Phase 3b — destroy the pane for win_id: detach its widgets from the
+    // splitter and delete them + its DocumentView, then drop it from panes_.
+    // Caller must have already repointed focus away from this pane (see
+    // set_focused_win) so document_view_/opengl_widget_ never dangle.
+    void                 remove_pane(const QString& win_id);
+
 private:
+    // Phase 3b — draw a focus border around the focused pane (muted border on
+    // the others to reserve geometry). No border at all when there is only
+    // one pane, so single-window mode is visually identical to v0.39.10.
+    void                 apply_pane_focus_border();
+
     class QSplitter*     viewport_splitter_= nullptr;
     PdfViewOpenGLWidget* opengl_widget_    = nullptr;
     DocumentView*        document_view_    = nullptr;

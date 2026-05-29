@@ -169,14 +169,74 @@ MainWidget::add_pane_for(const QString& win_id, const QString& orientation) {
     return pane;
 }
 
-// Phase 3a — mark win_id as focused and repoint document_view_ at its DV so
-// the ~585 direct document_view_ accesses in _main_widget.cpp keep targeting
-// the focused window. No-op for unknown win_id. In 3a this is never called.
+// Phase 3a/3b — mark win_id as focused and repoint document_view_ AND
+// opengl_widget_ at its DV/widget so the ~585 direct accesses in
+// _main_widget.cpp keep targeting the focused window. Refreshes the focus
+// border. No-op for unknown win_id.
 void MainWidget::set_focused_win(const QString& win_id) {
     auto it = panes_.find(win_id);
     if (it == panes_.end()) return;
     focused_win_id_ = win_id;
     if (it->dv) document_view_ = it->dv;
+    if (it->gl) opengl_widget_ = it->gl;
+    apply_pane_focus_border();
+}
+
+// Phase 3b — load a document into a specific pane's DocumentView, leaving the
+// focused pane untouched. Operates directly on the pane's dv/gl (not the
+// document_view_ / opengl_widget_ members) so it is focus-agnostic.
+bool MainWidget::load_into_pane(const QString& win_id,
+                                const std::wstring& path) {
+    auto it = panes_.find(win_id);
+    if (it == panes_.end() || !it->dv) return false;
+    it->dv->open_document(path, nullptr);
+    if (!it->dv->get_document()) return false;
+    if (it->dv->get_zoom_level() <= 0.0f) it->dv->set_zoom_level(1.0f, true);
+    if (it->gl) it->gl->update();
+    return true;
+}
+
+// Phase 3b — destroy a pane: detach its widgets from the splitter and delete
+// them + its DocumentView. The caller must repoint focus first (so
+// document_view_/opengl_widget_ don't point into this pane).
+void MainWidget::remove_pane(const QString& win_id) {
+    auto it = panes_.find(win_id);
+    if (it == panes_.end()) return;
+    ViewportPane pane = it.value();
+    panes_.erase(it);
+    // Never delete the still-live focused widgets out from under the app.
+    if (pane.gl == opengl_widget_ || pane.dv == document_view_) {
+        // Defensive: caller forgot to repoint focus. Refuse to delete the
+        // live widgets; just drop the registry entry to avoid a dangling
+        // document_view_ / opengl_widget_.
+        return;
+    }
+    if (pane.stack) {
+        pane.stack->setParent(nullptr);
+        delete pane.stack;          // owns gl + text as children → deletes them
+    }
+    delete pane.dv;
+    apply_pane_focus_border();
+}
+
+// Phase 3b — focus border. With a single pane there is no border (single-
+// window mode looks exactly like v0.39.10). With 2+ panes the focused pane
+// gets an accent border and the others a muted border (so geometry doesn't
+// shift). Mirrors the proven CSS from chrome/focus-pane.
+void MainWidget::apply_pane_focus_border() {
+    const QString accent = "#4a90d9";
+    const bool multi = panes_.size() > 1;
+    for (auto it = panes_.begin(); it != panes_.end(); ++it) {
+        if (!it->stack) continue;
+        if (!multi) {
+            it->stack->setStyleSheet(QString());
+            continue;
+        }
+        const bool focused = (it.key() == focused_win_id_);
+        it->stack->setStyleSheet(focused
+            ? QString("QStackedWidget { border: 2px solid %1; }").arg(accent)
+            : QString("QStackedWidget { border: 2px solid palette(mid); }"));
+    }
 }
 
 // markup-interaction step 2 — side-panel layout.
