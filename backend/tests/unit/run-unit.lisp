@@ -152,7 +152,9 @@
                 ;; v0.40 §1.4 — regex narrow-aware
                 "regex-narrow.lisp"
                 ;; v0.40 §1.5 — kill narrow-aware
-                "kill-narrow.lisp"))
+                "kill-narrow.lisp"
+                ;; v0.40 §1.6 — occur narrow-aware
+                "occur-narrow.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

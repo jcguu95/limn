@@ -707,7 +707,8 @@
     ;; Modules that load AFTER (e.g. limn/regex) wire themselves in
     ;; their own load-time block via limn/excursion:narrow-{start,end}-of.
     (dolist (pkg-name '(#:limn/text-nav #:limn/mark
-                        #:limn/isearch #:limn/kill))
+                        #:limn/isearch #:limn/kill
+                        #:limn/occur))
       (let ((pkg (find-package pkg-name)))
         (when pkg
           (let ((pmin-sym (find-symbol "*POINT-MIN-FN*" pkg))

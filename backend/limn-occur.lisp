@@ -35,7 +35,9 @@
    ;; I/O vtable
    #:*buffer-text-fn*
    #:*buffer-set-cursor-fn*
-   #:*occur-write-fn*))
+   #:*occur-write-fn*
+   ;; v0.40 narrow — accessible-region bounds (NIL = no narrowing)
+   #:*point-min-fn* #:*point-max-fn*))
 
 (in-package #:limn/occur)
 
@@ -52,6 +54,15 @@
 (defvar *occur-write-fn*
   (lambda (obid content) (declare (ignore obid content)))
   "fn (occur-buf-id content) → void — write formatted results to *occur* buffer")
+
+;; v0.40 narrow — same nil-means-no-narrow contract as limn/text-nav.
+;; Rewired at limn/excursion load time.  When set, occur only reports
+;; matches whose absolute [start, end) lies inside [point-min, point-max).
+(defvar *point-min-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
+(defvar *point-max-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
 
 ;;; ── match struct ────────────────────────────────────────────────────────────
 
@@ -177,8 +188,14 @@
 
 (defun %scan-buffer (buf-id pattern &key regexp)
   "Return a list of OCCUR-MATCH for every line in the buffer text
-   that contains PATTERN."
+   that contains PATTERN.
+   v0.40: when BUF-ID is narrowed, only matches whose absolute
+   [match-start, match-end) lies fully inside [point-min, point-max)
+   are reported.  Line numbers stay absolute (relative to the whole
+   buffer)."
   (let* ((text   (funcall *buffer-text-fn* buf-id))
+         (lo     (or (funcall *point-min-fn* buf-id) 0))
+         (hi     (or (funcall *point-max-fn* buf-id) (length text)))
          (lines  (if (string= text "")
                      '()
                      ;; split on newlines, keeping empty trailing line out
@@ -199,13 +216,17 @@
           for line-num from 1
           do (let ((found (%search-in-line pattern line :regexp regexp)))
                (when found
-                 (push (%make-occur-match
-                        :line-num  line-num
-                        :line-text line
-                        :start     (first found)
-                        :end       (second found)
-                        :offset    (+ abs-off (first found)))
-                       matches)))
+                 (let* ((m-abs-s (+ abs-off (first found)))
+                        (m-abs-e (+ abs-off (second found))))
+                   ;; v0.40: filter out matches outside narrow.
+                   (when (and (>= m-abs-s lo) (<= m-abs-e hi))
+                     (push (%make-occur-match
+                            :line-num  line-num
+                            :line-text line
+                            :start     (first found)
+                            :end       (second found)
+                            :offset    m-abs-s)
+                           matches)))))
              ;; advance past this line + newline separator
              (incf abs-off (1+ (length line))))
     (nreverse matches)))
