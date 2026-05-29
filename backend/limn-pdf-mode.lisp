@@ -40,6 +40,7 @@
    #:*pdf-zoom-out-factor*
    #:*pdf-default-zoom*              ; v0.38 B18
    #:*pdf-annotation-color*
+   #:*pdf-highlight-colors*           ; v0.39 D-v2 feature 7
    ;; §B search state
    #:*pdf-search-state* #:make-pdf-search-state
    #:pdf-search-state-buffer-id #:pdf-search-state-query
@@ -247,6 +248,26 @@
 #-:limn/custom-available
 (defvar *pdf-annotation-color* "#FFD700")
 
+;; v0.39 D-v2 (feature 7): color-coded highlights via numeric prefix-arg.
+;; `C-1 H` → yellow (default); `C-2 H` → red; etc.  Indices match user-
+;; visible 1..N (1 = default).  Falls back to *pdf-annotation-color* for
+;; unknown indices so the user can't accidentally end up with no color.
+(defvar *pdf-highlight-colors*
+  '((1 . "#FFD700")  ; yellow (default)
+    (2 . "#FF8888")  ; red
+    (3 . "#88FF88")  ; green
+    (4 . "#88CCFF")  ; blue
+    (5 . "#FFAAFF")) ; pink
+  "Alist of (PREFIX-INDEX . HEX-COLOR-STRING) for prefix-arg-driven
+   highlight colors.  Used by pdf-highlight-selection and
+   pdf-annotate-selection when invoked with a numeric prefix.")
+
+(defun %prefix->color (prefix)
+  "Resolve a numeric PREFIX (or NIL) to a hex color via *pdf-highlight-colors*.
+   NIL prefix → default yellow.  Unknown index → default yellow."
+  (or (and (integerp prefix) (cdr (assoc prefix *pdf-highlight-colors*)))
+      *pdf-annotation-color*))
+
 ;;; ═════════════════════════════════════════════════════════════════════
 ;;; §B search state + helpers
 ;;; ═════════════════════════════════════════════════════════════════════
@@ -416,8 +437,13 @@
                (if (zerop *pdf-filter-depth*)
                    "#FFD700"
                    (%pdf-filter-color (1- *pdf-filter-depth*)))))
-         (alpha-current (if (zerop *pdf-filter-depth*) 0.42 0.34))
-         (alpha-other   (if (zerop *pdf-filter-depth*) 0.18 0.15)))
+         ;; v0.40 markup-interaction: search results render as an UNDERLINE
+         ;; (dedicated channel) rather than a fill block, so transient
+         ;; search feedback no longer looks like a persistent highlight.
+         ;; The underline bar is thin, so it needs much higher alpha than
+         ;; the old fill to stay visible; current match brighter than rest.
+         (alpha-current (if (zerop *pdf-filter-depth*) 0.95 0.85))
+         (alpha-other   (if (zerop *pdf-filter-depth*) 0.60 0.55)))
     (when (and state (pdf-search-state-hits state))
       (let ((current-idx (pdf-search-state-current-index state))
             (acc nil)
@@ -428,6 +454,7 @@
                (op (if (= i current-idx) alpha-current alpha-other)))
           (dolist (rect rects)
             (push (list :|type| "rect"
+                         :|style| "underline"
                          :|page| page
                          :|rect| rect
                          :|color| effective-color
@@ -1164,6 +1191,27 @@
   (%limn-call "view/overlays" :|win-id| "w1"
                :|layers| (pdf-annotations-overlay-payload anns)))
 
+(defun %annotations-replace-by-id (path ann)
+  "Load PATH's sidecar, replace the element whose id matches ANN's id with
+   ANN (which the caller has mutated in place), save.  Returns the updated
+   list.  No-op replace if no id matches."
+  (let* ((all (pdf-annotations-load path))
+         (id  (pdf-annotation-id ann))
+         (updated (mapcar (lambda (a)
+                            (if (equal (pdf-annotation-id a) id) ann a))
+                          all)))
+    (pdf-annotations-save path updated)
+    updated))
+
+(defun %annotations-delete-by-id (path id)
+  "Remove the annotation with ID from PATH's sidecar, save, repaint
+   overlays.  Returns the remaining list."
+  (let* ((all (pdf-annotations-load path))
+         (remaining (remove id all :key #'pdf-annotation-id :test #'equal)))
+    (pdf-annotations-save path remaining)
+    (%refresh-overlays path remaining)
+    remaining))
+
 (defun pdf-annotations-export-org (anns path)
   "Format ANNS as an org-mode document."
   (let ((basename (file-namestring (pathname path))))
@@ -1824,14 +1872,25 @@
                      :|rects| (list (list (min bx ex) (min by ey)
                                           (max bx ex) (max by ey))))))))))))
 
-(defun limn/pdf-mode::%add-annotation (note)
-  "Build + persist + paint an annotation from the current selection."
+(defun limn/pdf-mode::%add-annotation (note &key color type)
+  "Build + persist + paint an annotation from the current selection.
+   v0.39 D-v2: accepts :COLOR (hex string; defaults to *pdf-annotation-color*)
+   and :TYPE (:highlight | :note | :both; defaults to :highlight, or :both
+   when NOTE is non-empty and TYPE is unspecified).  On success, clears
+   the live blue selection band so only the saved yellow overlay remains,
+   and echoes a confirmation in the minibuffer."
   (let* ((sel (limn/pdf-mode::%selection))
          (rects (and sel (getf sel :|rects|)))
          (sel-page (and sel (getf sel :|page|)))
          (v (limn/pdf-mode::%focused-view))
          (page (or sel-page (getf v :|page|) 0))
-         (path (or (limn/pdf-mode::%current-pdf-path) "/tmp/unknown.pdf")))
+         (path (or (limn/pdf-mode::%current-pdf-path) "/tmp/unknown.pdf"))
+         (effective-color (or color limn/pdf-mode:*pdf-annotation-color*))
+         (effective-type
+           (or type
+               (if (and note (stringp note) (plusp (length note)))
+                   :both
+                   :highlight))))
     (when (and rects (consp rects))
       (let* ((existing (limn/pdf-mode:pdf-annotations-load path))
              ;; replace if a different anno covers same first rect
@@ -1844,7 +1903,8 @@
                                         (first rects))))
                          existing))
              (new (limn/pdf-mode:make-pdf-annotation
-                   :page page :rects rects :note note)))
+                   :page page :rects rects :note note
+                   :color effective-color :type effective-type)))
         (let ((all (append filtered (list new))))
           (limn/pdf-mode:pdf-annotations-save path all)
           ;; v0.37 Phase F: the wire schema for view/overlays takes
@@ -1855,29 +1915,745 @@
           ;; returned overlays=[].  Fixed schema name.
           (limn/pdf-mode::%limn-call
            "view/overlays" :|win-id| "w1"
-           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload all)))))))
+           :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload all))
+          ;; v0.39 D-v2 (feature 2): clear the live selection band so the
+          ;; user sees only the saved yellow overlay, not blue + yellow.
+          (handler-case
+              (limn/pdf-mode::%limn-call
+               "view/selection-clear" :|win-id| "w1")
+            (error () nil))
+          ;; Confirmation echo so the user knows it landed.
+          (handler-case
+              (limn/pdf-mode::%limn-call
+               "message/echo"
+               :|text| (if (and note (stringp note) (plusp (length note)))
+                            "Annotation saved"
+                            "Highlight saved"))
+            (error () nil))
+          t)))))
 
-(limn/pdf-mode::%defcmd pdf-highlight-selection nil
-  (lambda ()
-    (limn/pdf-mode::%add-annotation nil)))
+;; v0.39 D-v2 (feature 1+7): H is the fast path — no prompt, type :highlight.
+;; Optional numeric prefix-arg picks a color from *pdf-highlight-colors*.
+(limn/pdf-mode::%defcmd pdf-highlight-selection "p"
+  (lambda (&optional prefix)
+    (let ((color (limn/pdf-mode::%prefix->color prefix)))
+      (limn/pdf-mode::%add-annotation nil
+                                       :color color
+                                       :type :highlight))))
 
-(limn/pdf-mode::%defcmd pdf-annotate-selection nil
-  (lambda ()
+;; v0.39 D-v2 (feature 1+7): M-h prompts for a note; type :both if note
+;; non-empty else :highlight.  Numeric prefix-arg picks color.
+(limn/pdf-mode::%defcmd pdf-annotate-selection "p"
+  (lambda (&optional prefix)
     (let* ((reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
            (read-fn (and reader (boundp reader) (symbol-value reader)))
-           (note (and read-fn (funcall read-fn "Note: "))))
-      (limn/pdf-mode::%add-annotation note))))
+           (note (and read-fn
+                      (handler-case (funcall read-fn "Note: ")
+                        (error () nil))))
+           (color (limn/pdf-mode::%prefix->color prefix))
+           (type  (if (and note (stringp note) (plusp (length note)))
+                       :both
+                       :highlight)))
+      (limn/pdf-mode::%add-annotation note :color color :type type))))
 
+;; v0.39 D-v2 (feature 8): echo result of delete.
 (limn/pdf-mode::%defcmd pdf-delete-annotation nil
   (lambda ()
     (let* ((path (limn/pdf-mode::%current-pdf-path))
            (v (limn/pdf-mode::%focused-view))
            (page (or (getf v :|page|) 0))
            (off-x (or (getf v :|offset-x|) 0.5))
-           (off-y (or (getf v :|offset-y|) 0.5)))
-      (when path
-        (limn/pdf-mode:pdf-annotations-delete-at-point
-         path page off-x off-y)))))
+           (off-y (or (getf v :|offset-y|) 0.5))
+           (deleted (and path
+                          (limn/pdf-mode:pdf-annotations-delete-at-point
+                           path page off-x off-y))))
+      (handler-case
+          (limn/pdf-mode::%limn-call
+           "message/echo"
+           :|text| (if deleted "Annotation deleted" "No annotation here"))
+        (error () nil)))))
+
+;; ── v0.39 D-v2 helpers (feature 3, 4, 5, 6) ─────────────────────────
+
+(defun limn/pdf-mode::%annotation-at-current-point ()
+  "Look up the annotation under the current view's center (offset-x/y).
+   Returns (VALUES ANNOTATION PATH PAGE) or NIL when none."
+  (let* ((path (limn/pdf-mode::%current-pdf-path))
+         (v (limn/pdf-mode::%focused-view))
+         (page (or (getf v :|page|) 0))
+         (off-x (or (getf v :|offset-x|) 0.5))
+         (off-y (or (getf v :|offset-y|) 0.5)))
+    (when path
+      (let ((ann (limn/pdf-mode:pdf-annotations-at-point
+                  path page off-x off-y)))
+        (values ann path page)))))
+
+(defun limn/pdf-mode::%annotation-preview (a &key (max-len 60))
+  "Build a short preview string for annotation A.
+   Truncates note text at MAX-LEN with an ellipsis.
+   Returns '[highlight]' for pure highlights, '[note]' for point-notes."
+  (let* ((note (limn/pdf-mode:pdf-annotation-note a))
+         (type (limn/pdf-mode:pdf-annotation-type a)))
+    (cond
+      ((and note (stringp note) (plusp (length note)))
+       (if (> (length note) max-len)
+           (concatenate 'string (subseq note 0 max-len) "…")
+           note))
+      ((eq type :note) "[note]")
+      (t "[highlight]"))))
+
+(defun limn/pdf-mode::%tags-suffix (a)
+  "Format an annotation's tags as ' [tag1, tag2]' or '' when none."
+  (let ((tags (limn/pdf-mode:pdf-annotation-tags a)))
+    (if (and tags (consp tags))
+        (format nil " [~{~a~^, ~}]" tags)
+        "")))
+
+;; v0.39 D-v2 (feature 3): show annotation note at current point.
+(limn/pdf-mode::%defcmd pdf-show-note-at-point nil
+  (lambda ()
+    (multiple-value-bind (ann path page)
+        (limn/pdf-mode::%annotation-at-current-point)
+      (declare (ignore path page))
+      (let ((text
+              (cond
+                ((null ann) "No annotation here")
+                (t
+                 (let* ((note (limn/pdf-mode:pdf-annotation-note ann))
+                        (body (cond
+                                ((and note (stringp note) (plusp (length note)))
+                                 (if (> (length note) 200)
+                                     (concatenate 'string
+                                                  (subseq note 0 200) "…")
+                                     note))
+                                (t "Highlight (no note)")))
+                        (tags (limn/pdf-mode::%tags-suffix ann)))
+                   (concatenate 'string body tags))))))
+        (handler-case
+            (limn/pdf-mode::%limn-call "message/echo" :|text| text)
+          (error () nil))))))
+
+;; v0.39 D-v2 (feature 4) / markup-interaction step 2: open the annotation
+;; list as an operable occur/tablist buffer (see markup-interaction-design.md
+;; 乙 Layer 1).  One line per annotation; RET jumps + returns to the PDF,
+;; n/p move, e edits the note, t edits tags, d deletes, / filters by tag,
+;; g refreshes, q quits.  Replaces the old completing-read picker — the
+;; list buffer is the management escape hatch that does NOT depend on
+;; in-page targeting (which step 3 fixes).
+(limn/pdf-mode::%defcmd pdf-list-notes nil
+  (lambda () (limn/pdf-mode::%open-notes-list)))
+
+;; v0.39 D-v2 (feature 5): edit the note text on the annotation at point.
+;; UX trade-off: the underlying minibuffer-read does not support an
+;; initial-input parameter, so we surface the current note in the prompt
+;; and treat an empty submission as "keep current".  C-g cancels.
+(limn/pdf-mode::%defcmd pdf-edit-note-at-point nil
+  (lambda ()
+    (multiple-value-bind (ann path page)
+        (limn/pdf-mode::%annotation-at-current-point)
+      (declare (ignore page))
+      (cond
+        ((null ann)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                         :|text| "No annotation here")
+           (error () nil)))
+        (t
+         (let* ((current (or (limn/pdf-mode:pdf-annotation-note ann) ""))
+                (preview (if (> (length current) 40)
+                             (concatenate 'string (subseq current 0 40) "…")
+                             current))
+                (prompt (format nil "Edit note [~a]: " preview))
+                (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+                (read-fn (and reader (boundp reader) (symbol-value reader)))
+                (new-note (and read-fn
+                                (handler-case (funcall read-fn prompt)
+                                  (error () nil)))))
+           ;; Empty input → keep existing; C-g → reader signals, caught
+           ;; above → also keeps existing.  Otherwise mutate + re-save.
+           (when (and new-note (stringp new-note) (plusp (length new-note)))
+             (setf (limn/pdf-mode:pdf-annotation-note ann) new-note)
+             ;; Bump type :highlight → :both if we added a note.
+             (when (eq (limn/pdf-mode:pdf-annotation-type ann) :highlight)
+               (setf (limn/pdf-mode:pdf-annotation-type ann) :both))
+             ;; Re-save the whole list (save invalidates cache).  We
+             ;; mutated the struct in place, so a re-load picks up the
+             ;; new value.
+             (let ((all (limn/pdf-mode:pdf-annotations-load path)))
+               ;; The mutated ANN might not be eq to any element in ALL
+               ;; (load builds fresh structs).  Find by id and replace.
+               (let* ((id (limn/pdf-mode:pdf-annotation-id ann))
+                      (updated
+                        (mapcar (lambda (a)
+                                  (if (equal (limn/pdf-mode:pdf-annotation-id a) id)
+                                      ann
+                                      a))
+                                all)))
+                 (limn/pdf-mode:pdf-annotations-save path updated)
+                 (limn/pdf-mode::%limn-call
+                  "view/overlays" :|win-id| "w1"
+                  :|layers| (limn/pdf-mode:pdf-annotations-overlay-payload updated))))
+             (handler-case
+                 (limn/pdf-mode::%limn-call "message/echo"
+                                             :|text| "Note updated")
+               (error () nil)))))))))
+
+;; v0.39 D-v2 (feature 6): add/remove tags on the annotation at point.
+(limn/pdf-mode::%defcmd pdf-tag-annotation nil
+  (lambda ()
+    (multiple-value-bind (ann path page)
+        (limn/pdf-mode::%annotation-at-current-point)
+      (declare (ignore page))
+      (cond
+        ((null ann)
+         (handler-case
+             (limn/pdf-mode::%limn-call "message/echo"
+                                         :|text| "No annotation here")
+           (error () nil)))
+        (t
+         (let* ((current-tags (limn/pdf-mode:pdf-annotation-tags ann))
+                (current-str (format nil "~{~a~^, ~}" (or current-tags '())))
+                (prompt (if (plusp (length current-str))
+                             (format nil "Tags (current: ~a): " current-str)
+                             "Tags (comma-separated): "))
+                (reader (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+                (read-fn (and reader (boundp reader) (symbol-value reader)))
+                (raw (and read-fn
+                           (handler-case (funcall read-fn prompt)
+                             (error () nil)))))
+           (when (stringp raw)
+             ;; Parse: split on comma, trim whitespace, drop empties.
+             ;; An entirely empty input clears the tag list.
+             (let* ((parts (limn/pdf-mode::%split-string raw #\,))
+                    (cleaned
+                      (loop for p in parts
+                             for trimmed = (string-trim
+                                            '(#\Space #\Tab #\Newline) p)
+                             when (plusp (length trimmed))
+                               collect trimmed)))
+               (setf (limn/pdf-mode:pdf-annotation-tags ann) cleaned)
+               ;; Persist: load, replace-by-id, save.
+               (let* ((all (limn/pdf-mode:pdf-annotations-load path))
+                      (id (limn/pdf-mode:pdf-annotation-id ann))
+                      (updated
+                        (mapcar (lambda (a)
+                                  (if (equal (limn/pdf-mode:pdf-annotation-id a) id)
+                                      ann
+                                      a))
+                                all)))
+                 (limn/pdf-mode:pdf-annotations-save path updated))
+               (handler-case
+                   (limn/pdf-mode::%limn-call
+                    "message/echo"
+                    :|text| (if cleaned
+                                 (format nil "Tags: ~{~a~^, ~}" cleaned)
+                                 "Tags cleared"))
+                 (error () nil))))))))))
+
+(defun limn/pdf-mode::%split-string (s ch)
+  "Split string S on character CH.  Returns list of substrings (may
+   include empty strings for adjacent delimiters)."
+  (let ((acc nil)
+        (start 0)
+        (len (length s)))
+    (dotimes (i len)
+      (when (char= (char s i) ch)
+        (push (subseq s start i) acc)
+        (setf start (1+ i))))
+    (push (subseq s start len) acc)
+    (nreverse acc)))
+
+;;; ═════════════════════════════════════════════════════════════════════
+;;; markup-interaction step 2 — annotation list buffer (乙 Layer 1)
+;;;
+;;; pdf-list-notes opens a fresh text-engine buffer in w1, fills it with
+;;; one line per annotation, and activates `notes-list-mode' on it.  The
+;;; sorted annotation vector is kept in *notes-list-state* keyed by line
+;;; index, so a command can read the cursor line → look up the annotation
+;;; → act on it.  All helpers live in package limn/pdf-mode; the user
+;;; commands (cl-user) are thin wrappers below.
+;;; ═════════════════════════════════════════════════════════════════════
+
+(in-package #:limn/pdf-mode)
+
+(defvar *notes-list-state* nil
+  "Plist describing the active annotation-list buffer, or NIL:
+     :text-buffer  the text-engine buffer-id showing the list
+     :pdf-buffer   the mupdf buffer-id to switch back to on RET/q
+     :pdf-path     the PDF path (sidecar key, for reload/persist)
+     :all          full sorted annotation list (last load)
+     :entries      vector of currently-displayed annotations (idx = line)
+     :filter       active tag filter string, or NIL
+     :pending      t until the async buffer-opened hook has activated
+                   notes-list-mode on the freshly-opened text buffer")
+
+(defvar *notes-hook-installed* nil
+  "Guard so %ensure-notes-hook adds the buffer-opened hook exactly once.")
+
+(defun %notes-sort (anns)
+  "Sort ANNS by (page, created-at).  Non-destructive (copies first)."
+  (sort (copy-list anns)
+        (lambda (a b)
+          (let ((pa (pdf-annotation-page a))
+                (pb (pdf-annotation-page b)))
+            (if (= pa pb)
+                (< (or (pdf-annotation-created-at a) 0)
+                   (or (pdf-annotation-created-at b) 0))
+                (< pa pb))))))
+
+(defun %notes-build-display (all filter)
+  "Return (values ENTRIES-VECTOR TEXT) for ALL annotations under FILTER.
+   FILTER NIL/\"\" → show everything.  TEXT has no trailing newline so the
+   buffer's line count equals (length ENTRIES-VECTOR); an empty result set
+   yields an empty vector plus a one-line placeholder string."
+  (let* ((filtered
+           (if (and filter (plusp (length filter)))
+               (remove-if-not
+                (lambda (a)
+                  (and (pdf-annotation-tags a)
+                       (find filter (pdf-annotation-tags a) :test #'string=)))
+                all)
+               all))
+         (vec (coerce filtered 'vector)))
+    (if (zerop (length vec))
+        (values vec (if (and filter (plusp (length filter)))
+                        (format nil "(no annotations tagged ~a)" filter)
+                        "(no annotations)"))
+        (values vec
+                (with-output-to-string (s)
+                  (loop for a across vec
+                        for i from 0 do
+                          (when (plusp i) (write-char #\Newline s))
+                          (format s "p.~a  ~a~a"
+                                  (1+ (pdf-annotation-page a))
+                                  (%annotation-preview a)
+                                  (%tags-suffix a))))))))
+
+(defun %notes-list-current-index ()
+  "Line index of the cursor in the list buffer, or NIL when out of range
+   (e.g. cursor on a placeholder line with no annotations)."
+  (let ((tb  (getf *notes-list-state* :text-buffer))
+        (vec (getf *notes-list-state* :entries)))
+    (when (and tb vec (plusp (length vec)))
+      (let* ((off (getf (%response-data
+                         (%limn-call "buffer/cursor-get" :|buffer-id| tb))
+                        :|offset|))
+             (txt (getf (%response-data
+                         (%limn-call "buffer/text" :|buffer-id| tb))
+                        :|text|)))
+        (when (and (integerp off) (stringp txt))
+          (let ((idx (count #\Newline txt :end (min off (length txt)))))
+            (when (< idx (length vec)) idx)))))))
+
+(defun %notes-current-ann ()
+  "Annotation under the cursor in the list buffer, or NIL."
+  (let ((idx (%notes-list-current-index))
+        (vec (getf *notes-list-state* :entries)))
+    (and idx vec (< idx (length vec)) (aref vec idx))))
+
+(defun %notes-line-offset (txt line)
+  "Codepoint offset of the start of LINE (0-based) in TXT."
+  (let ((off 0) (cur 0) (len (length txt)))
+    (loop while (< cur line) do
+      (let ((nl (position #\Newline txt :start off)))
+        (if (and nl (< nl len))
+            (progn (setf off (1+ nl)) (incf cur))
+            (progn (setf off len) (return)))))
+    off))
+
+(defun %notes-goto-line (line)
+  "Move the list-buffer cursor to the start of LINE (clamped)."
+  (let ((tb  (getf *notes-list-state* :text-buffer))
+        (vec (getf *notes-list-state* :entries)))
+    (when (and tb vec (plusp (length vec)))
+      (let* ((clamped (max 0 (min line (1- (length vec)))))
+             (txt (getf (%response-data
+                         (%limn-call "buffer/text" :|buffer-id| tb))
+                        :|text|)))
+        (when (stringp txt)
+          (%limn-call "buffer/cursor-set"
+                      :|buffer-id| tb
+                      :|offset| (%notes-line-offset txt clamped)))))))
+
+(defun %notes-move (delta)
+  "Move the cursor DELTA lines (n/p navigation)."
+  (%notes-goto-line (+ (or (%notes-list-current-index) 0) delta)))
+
+(defun %notes-rerender (&key (reload nil) (preserve-line t))
+  "Rebuild the list buffer text from *notes-list-state*.  RELOAD re-reads
+   the sidecar (after an edit/tag/delete); PRESERVE-LINE keeps the cursor
+   on the same line index where possible."
+  (let* ((tb     (getf *notes-list-state* :text-buffer))
+         (path   (getf *notes-list-state* :pdf-path))
+         (filter (getf *notes-list-state* :filter))
+         (cur    (and preserve-line (%notes-list-current-index))))
+    (when tb
+      (when reload
+        (setf (getf *notes-list-state* :all)
+              (%notes-sort (pdf-annotations-load path))))
+      (multiple-value-bind (vec text)
+          (%notes-build-display (getf *notes-list-state* :all) filter)
+        (setf (getf *notes-list-state* :entries) vec)
+        (let* ((old (getf (%response-data
+                           (%limn-call "buffer/text" :|buffer-id| tb))
+                          :|text|))
+               (oldlen (if (stringp old) (length old) 0)))
+          (when (plusp oldlen)
+            (%limn-call "buffer/delete" :|buffer-id| tb :|from| 0 :|to| oldlen))
+          (when (plusp (length text))
+            (%limn-call "buffer/insert" :|buffer-id| tb :|at| 0 :|text| text)))
+        (%notes-goto-line (or cur 0))))))
+
+;;; ── Bug-Set-B #3 — two-pane focus switch (C-x o) ─────────────────────
+;;;
+;;; While the notes side panel is open BOTH panes are always drawn (the
+;;; list on the left, the PDF on the right).  "Focus" decides three things
+;;; in concert: (a) which buffer w1's keys route to — backend
+;;; *window-active-buffer*; (b) which buffer is w1's FRONTEND buffer-id —
+;;; so view/set page/zoom either drives the PDF or is short-circuited;
+;;; (c) the accent border + list highlight brightness (frontend, via
+;;; chrome/focus-pane).  C-x o flips between the two, like other-window in
+;;; Emacs.  notes-panel-mode (a minor mode) is activated on the PDF buffer
+;;; while the panel is open so C-x o (and q) are bound there too.
+
+(defun %notes-rt-symbol (name)
+  "Resolve a function symbol NAME in package limn/runtime, or NIL."
+  (let* ((rt  (find-package :limn/runtime))
+         (sym (and rt (find-symbol name rt))))
+    (and sym (fboundp sym) (symbol-function sym))))
+
+(defun %notes-set-active-buffer (buffer-id)
+  "Point w1's backend active-buffer at BUFFER-ID so key dispatch routes
+   there (lookup-key resolves the mode via mode-buffer-for-window)."
+  (let ((fn (%notes-rt-symbol "SET-WINDOW-ACTIVE-BUFFER")))
+    (when fn (funcall fn "w1" buffer-id))))
+
+(defun %notes-pdf-mode-buffer ()
+  "The mode-buffer for the PDF buffer, or NIL."
+  (let ((fmb (%notes-rt-symbol "FIND-MODE-BUFFER"))
+        (pdf (getf *notes-list-state* :pdf-buffer)))
+    (and fmb pdf (funcall fmb pdf))))
+
+(defun %notes-panel-minor (activate)
+  "Activate (ACTIVATE non-nil) or deactivate notes-panel-mode on the PDF
+   buffer's mode-buffer, so C-x o / q are bound while the panel is up."
+  (let ((mb   (%notes-pdf-mode-buffer))
+        (mode (intern "NOTES-PANEL-MODE" :cl-user)))
+    (when mb
+      (handler-case
+          (if activate
+              (limn/mode:activate   mb mode)
+              (limn/mode:deactivate mb mode))
+        (error () nil)))))
+
+(defun %notes-set-frontend-focus (buffer-id pane)
+  "Tell the frontend to focus PANE (\"text\"|\"pdf\") on BUFFER-ID: retarget
+   w1's frontend buffer-id and paint the focus border.  Best-effort."
+  (handler-case
+      (%limn-call "chrome/focus-pane" :|win-id| "w1"
+                  :|buffer-id| buffer-id :|pane| pane)
+    (error () nil)))
+
+(defun %notes-focus-pdf ()
+  "Move focus to the PDF pane (panel stays open).  PDF nav (j/k/n/p/…) now
+   drives the right pane; C-x o / q return."
+  (let* ((st   *notes-list-state*)
+         (pdf  (getf st :pdf-buffer))
+         (path (getf st :pdf-path)))
+    (when (and st pdf)
+      (%notes-set-frontend-focus pdf "pdf")
+      (%notes-set-active-buffer pdf)
+      (%notes-panel-minor t)
+      ;; engine-load (at panel open) cleared w1's overlays; repaint the
+      ;; persistent annotation markup so it's visible while navigating.
+      (handler-case
+          (%limn-call "view/overlays" :|win-id| "w1"
+                      :|layers| (pdf-annotations-overlay-payload
+                                 (pdf-annotations-load path)))
+        (error () nil))
+      (setf (getf *notes-list-state* :focus) :pdf)
+      (handler-case
+          (%limn-call "message/echo" :|text| "Focus: PDF  (C-x o → list, q → close)")
+        (error () nil)))))
+
+(defun %notes-focus-list ()
+  "Move focus back to the notes-list pane (panel stays open)."
+  (let* ((st  *notes-list-state*)
+         (tid (getf st :text-buffer)))
+    (when (and st tid)
+      (%notes-set-frontend-focus tid "text")
+      (%notes-set-active-buffer tid)
+      (setf (getf *notes-list-state* :focus) :notes)
+      (handler-case
+          (%limn-call "message/echo" :|text| "Focus: notes  (C-x o → PDF)")
+        (error () nil)))))
+
+(defun %notes-focus-other ()
+  "C-x o: toggle focus between the notes list and the PDF pane."
+  (when *notes-list-state*
+    (if (eq (getf *notes-list-state* :focus) :pdf)
+        (%notes-focus-list)
+        (%notes-focus-pdf))))
+
+(defun %notes-return-to-pdf ()
+  "Switch w1 back to the PDF buffer, repaint annotation overlays, close
+   the list buffer, and clear *notes-list-state*."
+  (let* ((st   *notes-list-state*)
+         (pdf  (getf st :pdf-buffer))
+         (path (getf st :pdf-path))
+         (page (getf st :pdf-page))
+         (tid  (getf st :text-buffer)))
+    (when pdf
+      ;; Bug-Set-B #3 — drop the panel minor mode from the PDF buffer so a
+      ;; stray C-x o / q can't fire after we've left the list.
+      (handler-case (%notes-panel-minor nil) (error () nil))
+      ;; Tear down the side-panel layout first so the PDF reclaims the full
+      ;; width.  buffer/show also calls exit_text_panel as a safety net, but
+      ;; doing it explicitly keeps the intent clear and survives any future
+      ;; change to buffer/show's active-window gating.
+      (handler-case (%limn-call "chrome/text-panel" :|on| :false)
+        (error () nil))
+      (%limn-call "buffer/show" :|buffer-id| pdf :|win-id| "w1")
+      ;; buffer/show emits no buffer-opened event, so update the Lisp-side
+      ;; active-buffer map ourselves — otherwise key dispatch keeps routing
+      ;; to notes-list-mode after we've left the list.
+      (let ((setab (find-symbol "SET-WINDOW-ACTIVE-BUFFER" :limn/runtime)))
+        (when (and setab (fboundp setab))
+          (funcall (symbol-function setab) "w1" pdf)))
+      ;; Restore the page the reader was on before opening the list.
+      ;; buffer/show re-opens at the window's stored page, which is
+      ;; unreliable after the text-engine detour (it can land on page 0),
+      ;; so set it explicitly.  RET overrides this afterwards with the
+      ;; annotation's own page (see %notes-visit).
+      (when page
+        (handler-case (%page-set page) (error () nil)))
+      ;; engine-load on the text buffer cleared w1's overlays; repaint the
+      ;; persistent annotation markup from the (possibly mutated) sidecar.
+      (handler-case
+          (%limn-call "view/overlays" :|win-id| "w1"
+                      :|layers| (pdf-annotations-overlay-payload
+                                 (pdf-annotations-load path)))
+        (error () nil))
+      (when tid
+        (handler-case (%limn-call "buffer/close" :|buffer-id| tid)
+          (error () nil)))
+      (setf *notes-list-state* nil))))
+
+(defun %notes-on-buffer-opened (ev)
+  "buffer-opened hook (registered after limn.lisp's %on-buffer-opened, so
+   it runs LAST): when the freshly-opened text buffer is our pending list
+   buffer, replace the engine-default text-mode with notes-list-mode."
+  (let ((st *notes-list-state*))
+    (when (and st (getf st :pending)
+               (equal (getf ev :|buffer-id|) (getf st :text-buffer)))
+      (let* ((rt    (find-package :limn/runtime))
+             (mb-fn (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW" rt)))
+             (mb    (and mb-fn (funcall (symbol-function mb-fn) "w1"))))
+        (when mb
+          (handler-case
+              (limn/mode:activate mb (intern "NOTES-LIST-MODE" :cl-user))
+            (error () nil))))
+      (setf (getf *notes-list-state* :pending) nil))))
+
+(defun %ensure-notes-hook ()
+  "Register %notes-on-buffer-opened once.  Done lazily (first pdf-list-notes
+   call) so it appends AFTER limn.lisp's %on-buffer-opened — which is added
+   at session start, i.e. before any command runs — guaranteeing our hook
+   runs last and wins the major-mode activation race."
+  (unless *notes-hook-installed*
+    (let ((add (find-symbol "ADD-HOOK" :limn/hooks)))
+      (when (and add (fboundp add))
+        (funcall (symbol-function add)
+                 "event/buffer-opened" #'%notes-on-buffer-opened)
+        (setf *notes-hook-installed* t)))))
+
+(defun %open-notes-list ()
+  "Entry point for the M-N command: load annotations, open + populate a
+   text buffer, activate notes-list-mode.  Echoes a message and bails when
+   there is no PDF / no annotations."
+  (let* ((path    (%current-pdf-path))
+         (pdf-buf (%focused-buffer-id))
+         (anns    (and path (pdf-annotations-load path))))
+    (cond
+      ((null path)
+       (handler-case
+           (%limn-call "message/echo" :|text| "No PDF in current buffer")
+         (error () nil)))
+      ((null anns)
+       (handler-case
+           (%limn-call "message/echo" :|text| "No annotations in this PDF")
+         (error () nil)))
+      (t
+       (%ensure-notes-hook)
+       ;; Record the pre-list PDF position so C-o (pdf-jump-back) returns
+       ;; here after a RET jump.  Captured now, while w1 still shows the PDF.
+       (handler-case (%pdf-push-mark) (error () nil))
+       (let* ((pre-page (or (getf (%focused-view) :|page|) 0))
+              (sorted (%notes-sort anns))
+              (tid (getf (%response-data
+                          (%limn-call "bridge/engine-load"
+                                      :|win-id| "w1" :|engine| "text"
+                                      :|path| ""))
+                         :|buffer-id|)))
+         (when tid
+           (setf *notes-list-state*
+                 (list :text-buffer tid
+                       :pdf-buffer  pdf-buf
+                       :pdf-path    path
+                       :pdf-page    pre-page
+                       :all         sorted
+                       :entries     #()
+                       :filter      nil
+                       ;; Bug-Set-B #3 — which pane currently has focus.
+                       ;; Opens on the list; C-x o flips to :pdf.
+                       :focus       :notes
+                       :pending     t))
+           (multiple-value-bind (vec text) (%notes-build-display sorted nil)
+             (setf (getf *notes-list-state* :entries) vec)
+             (when (plusp (length text))
+               (%limn-call "buffer/insert" :|buffer-id| tid :|at| 0
+                           :|text| text)))
+           ;; Safety net for mock/test paths where the async buffer-opened
+           ;; event isn't pumped: activate synchronously too (idempotent
+           ;; with the hook's activation).
+           (let* ((rt    (find-package :limn/runtime))
+                  (mb-fn (and rt (find-symbol "MODE-BUFFER-FOR-WINDOW" rt)))
+                  (mb    (and mb-fn (funcall (symbol-function mb-fn) "w1"))))
+             (when mb
+               (handler-case
+                   (limn/mode:activate mb (intern "NOTES-LIST-MODE" :cl-user))
+                 (error () nil))))
+           ;; Switch the freshly-shown text view into side-panel layout:
+           ;; the list takes the left ~1/3, the PDF keeps rendering on the
+           ;; right ~2/3.  Done after engine-load (which flips to the
+           ;; full-screen text view) so enter_text_panel reparents it.
+           (handler-case (%limn-call "chrome/text-panel" :|on| t)
+             (error () nil))
+           ;; Place the cursor on line 0 LAST — after the panel is active —
+           ;; so the current-line highlight is drawn immediately (the sync
+           ;; that paints it only highlights while panel mode is on).
+           (%limn-call "buffer/cursor-set" :|buffer-id| tid :|offset| 0)
+           ;; Bug-Set-B #3 — draw the accent border on the (focused) list
+           ;; pane.  Focus starts on the list; C-x o flips to the PDF.
+           (%notes-set-frontend-focus tid "text")))))))
+
+(defun %notes-visit ()
+  "RET: return to the PDF first, THEN jump to the current annotation's
+   page.  Order matters: while the list is up, w1's active buffer is the
+   text buffer, so a view/set page request is a no-op (text windows ignore
+   page).  We must restore the PDF buffer before navigating."
+  (let* ((ann  (%notes-current-ann))
+         (page (and ann (pdf-annotation-page ann))))
+    (%notes-return-to-pdf)
+    (when page
+      (handler-case (%page-set page) (error () nil)))))
+
+(defun %notes-edit-current ()
+  "e: prompt for new note text on the current annotation; persist + refresh."
+  (let ((ann  (%notes-current-ann))
+        (path (getf *notes-list-state* :pdf-path)))
+    (when (and ann path)
+      (let* ((current (or (pdf-annotation-note ann) ""))
+             (preview (if (> (length current) 40)
+                          (concatenate 'string (subseq current 0 40) "…")
+                          current))
+             (prompt  (format nil "Edit note [~a]: " preview))
+             (reader  (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+             (read-fn (and reader (boundp reader) (symbol-value reader)))
+             (new     (and read-fn
+                           (handler-case (funcall read-fn prompt)
+                             (error () nil)))))
+        (when (and new (stringp new) (plusp (length new)))
+          (setf (pdf-annotation-note ann) new)
+          (when (eq (pdf-annotation-type ann) :highlight)
+            (setf (pdf-annotation-type ann) :both))
+          (%annotations-replace-by-id path ann)
+          (%notes-rerender :reload t)
+          (handler-case (%limn-call "message/echo" :|text| "Note updated")
+            (error () nil)))))))
+
+(defun %notes-tag-current ()
+  "t: prompt for comma-separated tags on the current annotation; persist."
+  (let ((ann  (%notes-current-ann))
+        (path (getf *notes-list-state* :pdf-path)))
+    (when (and ann path)
+      (let* ((current-tags (pdf-annotation-tags ann))
+             (current-str  (format nil "~{~a~^, ~}" (or current-tags '())))
+             (prompt (if (plusp (length current-str))
+                         (format nil "Tags (current: ~a): " current-str)
+                         "Tags (comma-separated): "))
+             (reader  (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+             (read-fn (and reader (boundp reader) (symbol-value reader)))
+             (raw     (and read-fn
+                           (handler-case (funcall read-fn prompt)
+                             (error () nil)))))
+        (when (stringp raw)
+          (let* ((parts (%split-string raw #\,))
+                 (cleaned (loop for p in parts
+                                for trimmed = (string-trim
+                                               '(#\Space #\Tab #\Newline) p)
+                                when (plusp (length trimmed))
+                                  collect trimmed)))
+            (setf (pdf-annotation-tags ann) cleaned)
+            (%annotations-replace-by-id path ann)
+            (%notes-rerender :reload t)
+            (handler-case
+                (%limn-call "message/echo"
+                            :|text| (if cleaned
+                                        (format nil "Tags: ~{~a~^, ~}" cleaned)
+                                        "Tags cleared"))
+              (error () nil))))))))
+
+(defun %notes-delete-current ()
+  "d: delete the current annotation, refresh the list."
+  (let ((ann  (%notes-current-ann))
+        (path (getf *notes-list-state* :pdf-path)))
+    (when (and ann path)
+      (%annotations-delete-by-id path (pdf-annotation-id ann))
+      (%notes-rerender :reload t)
+      (handler-case (%limn-call "message/echo" :|text| "Annotation deleted")
+        (error () nil)))))
+
+(defun %notes-filter ()
+  "/: prompt for a tag; empty input clears the filter."
+  (let* ((reader  (find-symbol "*MINIBUFFER-READ*" :limn/cmd))
+         (read-fn (and reader (boundp reader) (symbol-value reader)))
+         (raw     (and read-fn
+                       (handler-case
+                           (funcall read-fn "Filter by tag (empty = all): ")
+                         (error () nil)))))
+    (when (stringp raw)
+      (let ((tag (string-trim '(#\Space #\Tab #\Newline) raw)))
+        (setf (getf *notes-list-state* :filter)
+              (and (plusp (length tag)) tag))
+        (%notes-rerender :reload nil :preserve-line nil)))))
+
+(in-package #:cl-user)
+
+;; Thin command wrappers (cl-user-interned so the keymap's
+;; (intern "PDF-NOTES-*" :cl-user) resolves to these).
+(limn/pdf-mode::%defcmd pdf-notes-visit nil
+  (lambda () (limn/pdf-mode::%notes-visit)))
+(limn/pdf-mode::%defcmd pdf-notes-next nil
+  (lambda () (limn/pdf-mode::%notes-move 1)))
+(limn/pdf-mode::%defcmd pdf-notes-prev nil
+  (lambda () (limn/pdf-mode::%notes-move -1)))
+(limn/pdf-mode::%defcmd pdf-notes-edit nil
+  (lambda () (limn/pdf-mode::%notes-edit-current)))
+(limn/pdf-mode::%defcmd pdf-notes-tag nil
+  (lambda () (limn/pdf-mode::%notes-tag-current)))
+(limn/pdf-mode::%defcmd pdf-notes-delete nil
+  (lambda () (limn/pdf-mode::%notes-delete-current)))
+(limn/pdf-mode::%defcmd pdf-notes-filter nil
+  (lambda () (limn/pdf-mode::%notes-filter)))
+(limn/pdf-mode::%defcmd pdf-notes-refresh nil
+  (lambda () (limn/pdf-mode::%notes-rerender :reload t)))
+(limn/pdf-mode::%defcmd pdf-notes-quit nil
+  (lambda () (limn/pdf-mode::%notes-return-to-pdf)))
+;; Bug-Set-B #3 — C-x o toggles focus between the notes list and the PDF
+;; pane while the side panel stays open (like Emacs other-window).
+(limn/pdf-mode::%defcmd pdf-notes-focus-other nil
+  (lambda () (limn/pdf-mode::%notes-focus-other)))
 
 ;;; v0.39 W13 — copy current PDF selection text onto the kill-ring.
 ;;; Emacs convention: M-w `copy-region-as-kill`.  PDF read-only buffers
@@ -2645,6 +3421,48 @@
 (defun %def (km spec sym)
   (limn/keys:define-key km spec (%wrap-cmd sym)))
 
+(defun %install-notes-list-mode ()
+  "Define notes-list-mode (parent = fundamental-mode) and its keymap.
+   Idempotent — rebuilds the keymap on each call.  See markup-interaction
+   step 2.  NB: notes-list-mode is NOT registered as an engine-default mode;
+   pdf-list-notes activates it explicitly on its freshly-opened text buffer."
+  (let ((sym  (intern "NOTES-LIST-MODE" :cl-user))
+        (fund (find-symbol "FUNDAMENTAL-MODE" :limn/runtime))
+        (km   (limn/keys:make-keymap)))
+    (%def km "RET"     (intern "PDF-NOTES-VISIT"   :cl-user))
+    (%def km "n"       (intern "PDF-NOTES-NEXT"    :cl-user))
+    (%def km "j"       (intern "PDF-NOTES-NEXT"    :cl-user))
+    (%def km "<down>"  (intern "PDF-NOTES-NEXT"    :cl-user))
+    (%def km "p"       (intern "PDF-NOTES-PREV"    :cl-user))
+    (%def km "k"       (intern "PDF-NOTES-PREV"    :cl-user))
+    (%def km "<up>"    (intern "PDF-NOTES-PREV"    :cl-user))
+    (%def km "e"       (intern "PDF-NOTES-EDIT"    :cl-user))
+    (%def km "t"       (intern "PDF-NOTES-TAG"     :cl-user))
+    (%def km "d"       (intern "PDF-NOTES-DELETE"  :cl-user))
+    (%def km "/"       (intern "PDF-NOTES-FILTER"  :cl-user))
+    (%def km "g"       (intern "PDF-NOTES-REFRESH" :cl-user))
+    (%def km "q"       (intern "PDF-NOTES-QUIT"    :cl-user))
+    ;; Bug-Set-B #3 — C-x o flips focus to the PDF pane (panel stays open).
+    (%def km "C-x o"   (intern "PDF-NOTES-FOCUS-OTHER" :cl-user))
+    ;; Ensure fundamental-mode exists (tests may load modules in isolation).
+    (when (and fund (not (limn/mode:find-mode fund)))
+      (limn/mode:define-mode fund :type :major :modeline "Fund"))
+    (limn/mode:define-mode sym :type :major :parent fund :modeline "Notes")
+    (setf (limn/mode:mode-keymap (limn/mode:find-mode sym)) km)
+    ;; Bug-Set-B #3 — notes-panel-mode: a minor mode activated on the PDF
+    ;; buffer while the side panel is open.  Gives the PDF side the same
+    ;; C-x o (→ list) and q (→ close) bindings, shadowing pdf-mode only for
+    ;; the panel's lifetime (deactivated in %notes-return-to-pdf).
+    (let ((pkm (limn/keys:make-keymap)))
+      (%def pkm "C-x o" (intern "PDF-NOTES-FOCUS-OTHER" :cl-user))
+      (%def pkm "q"     (intern "PDF-NOTES-QUIT"        :cl-user))
+      (limn/mode:define-mode (intern "NOTES-PANEL-MODE" :cl-user)
+        :type :minor :modeline "Notes^")
+      (setf (limn/mode:mode-keymap
+             (limn/mode:find-mode (intern "NOTES-PANEL-MODE" :cl-user)))
+            pkm))
+    sym))
+
 (defvar *installed-p* nil)
 
 (defun install ()
@@ -2713,9 +3531,23 @@
       (%def km "C-g"      (intern "PDF-ISEARCH-QUIT" :cl-user))
       ;; v0.39.15 A: line-narrow only (M-f / fuzzy was removed).
       (%def km "M-n"      (intern "PDF-ISEARCH-NARROW" :cl-user))
-      ;; annotation — H stays as annotate (M-h is left free for users
-      ;; who want to bind highlight-selection somewhere out of hjkl's way).
-      (%def km "H"        (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
+      ;; annotation — v0.39 D-v2 split:
+      ;;   H    → fast highlight (no prompt, type :highlight)
+      ;;   M-h  → prompting annotate (note → type :both)
+      ;; Numeric prefix-arg picks a color from *pdf-highlight-colors*
+      ;; (e.g. `C-3 H` = green).
+      (%def km "H"        (intern "PDF-HIGHLIGHT-SELECTION" :cl-user))
+      (%def km "M-h"      (intern "PDF-ANNOTATE-SELECTION"  :cl-user))
+      ;; D-v2 (feature 3): show note at point.
+      (%def km "v"        (intern "PDF-SHOW-NOTE-AT-POINT"  :cl-user))
+      ;; D-v2 (feature 4): list + jump.
+      (%def km "M-N"      (intern "PDF-LIST-NOTES"          :cl-user))
+      ;; D-v2 (feature 5): edit note at point.
+      (%def km "E"        (intern "PDF-EDIT-NOTE-AT-POINT"  :cl-user))
+      ;; D-v2 (feature 6): add/remove tags.
+      (%def km "M-t"      (intern "PDF-TAG-ANNOTATION"      :cl-user))
+      ;; D-v2 (feature 8): delete annotation at point.
+      (%def km "D"        (intern "PDF-DELETE-ANNOTATION"   :cl-user))
       ;; v0.39 W13 — M-w copies the current PDF selection text onto
       ;; the kill-ring so a follow-up C-y in any text buffer pastes it.
       (%def km "M-w"      (intern "PDF-COPY-REGION-AS-KILL" :cl-user))
@@ -2766,7 +3598,14 @@
                                 ("?" pdf-isearch-backward)
                                 ("C-g" pdf-isearch-quit)
                                 ("M-n" pdf-isearch-narrow)
-                                ("H" pdf-annotate-selection)
+                                ;; v0.39 D-v2: H = fast highlight, M-h = prompting annotate
+                                ("H"   pdf-highlight-selection)
+                                ("M-h" pdf-annotate-selection)
+                                ("v"   pdf-show-note-at-point)
+                                ("M-N" pdf-list-notes)
+                                ("E"   pdf-edit-note-at-point)
+                                ("M-t" pdf-tag-annotation)
+                                ("D"   pdf-delete-annotation)
                                 ("t" pdf-toc)
                                 ;; v0.37 Phase D additions
                                 ("C-d" pdf-half-page-down)
@@ -2835,6 +3674,9 @@
           (funcall (symbol-function add) "event/mouse-drag"
                    (lambda (ev)
                      (handler-case (%on-mouse-drag ev) (error () nil)))))))
+
+    ;; markup-interaction step 2: define the annotation-list major mode.
+    (%install-notes-list-mode)
 
     (setf *installed-p* t)
     sym-pm))
