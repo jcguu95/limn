@@ -52,6 +52,16 @@ public:
     void                 show_text_view();  // stack index → text widget
     void                 show_pdf_view();   // stack index → opengl widget
 
+    // markup-interaction step 2 — side-panel layout for the text view.
+    // Instead of the full-screen stack flip (show_text_view), reparent
+    // text_widget_ out of main_stack_ and into viewport_splitter_ as a
+    // narrow LEFT pane, keeping the PDF visible in the main pane on the
+    // right. Used by the M-N annotation list so the reader can manage
+    // notes while still seeing the page. ratio = panel fraction (0..1).
+    void                 enter_text_panel(double ratio = 0.34);
+    void                 exit_text_panel();
+    bool                 text_panel_active() const { return text_panel_mode_; }
+
     // SPEC v0.5 §5.1 — real visible window split. Adds a new pane to the
     // splitter alongside the existing viewport. orientation is "h" (split
     // horizontally → side-by-side) or "v" (vertically → top/bottom).
@@ -73,4 +83,8 @@ private:
     // SPEC v0.22 §C — text-engine display
     QStackedWidget*      main_stack_       = nullptr;
     QPlainTextEdit*      text_widget_      = nullptr;
+    // markup-interaction step 2 — true when text_widget_ is currently
+    // reparented into viewport_splitter_ as a side panel (vs. living in
+    // main_stack_ as the full-screen text view).
+    bool                 text_panel_mode_  = false;
 };
