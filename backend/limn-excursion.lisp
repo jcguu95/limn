@@ -41,6 +41,11 @@
            #:save-restriction
            #:point-min
            #:point-max
+           ;; v0.40 — explicit-bid accessors used by other modules
+           ;; (limn/text-nav etc.) to query narrow bounds without having
+           ;; to bind *current-buffer* first.
+           #:point-min-of
+           #:point-max-of
            #:narrowed-p
            ;; point helpers
            #:point
@@ -364,19 +369,27 @@
              (%narrow-end bid))
          t)))
 
+(defun point-min-of (bid)
+  "Lowest accessible point in BID (respects narrowing).  Used by
+   modules whose vtable callbacks receive an explicit buf-id rather
+   than relying on *current-buffer*."
+  (let* ((m  (%narrow-start bid))
+         (mp (%marker-pos m)))
+    (or mp 0)))
+
+(defun point-max-of (bid)
+  "Highest accessible point in BID (respects narrowing)."
+  (let* ((m  (%narrow-end bid))
+         (mp (%marker-pos m)))
+    (or mp (%text-len bid))))
+
 (defun point-min ()
   "Lowest accessible point in current buffer (respects narrowing)."
-  (let* ((bid (current-buffer-id))
-         (m   (%narrow-start bid))
-         (mp  (%marker-pos m)))
-    (or mp 0)))
+  (point-min-of (current-buffer-id)))
 
 (defun point-max ()
   "Highest accessible point in current buffer (respects narrowing)."
-  (let* ((bid (current-buffer-id))
-         (m   (%narrow-end bid))
-         (mp  (%marker-pos m)))
-    (or mp (%text-len bid))))
+  (point-max-of (current-buffer-id)))
 
 (defun narrow-to-region (start end)
   "Limit point-min/point-max to [START, END)."
@@ -659,3 +672,26 @@
     (t (let ((bid (current-buffer-id)))
          (when bid (setf (gethash bid *id->name*) new-name)))))
   new-name)
+
+;;; ── v0.40 narrow integration: wire limn/text-nav's bounds vtable ─────
+;;;
+;;; text-nav loads BEFORE excursion, so we patch its *POINT-MIN-FN* /
+;;; *POINT-MAX-FN* here at excursion's load time.  The closures return
+;;; the active narrow marker position, or NIL when the buffer isn't
+;;; narrowed — text-nav's helpers fall back to 0 / (length text) in
+;;; the NIL case, so the wire-up doesn't disturb text-nav unit tests
+;;; that don't set up excursion at all.
+
+(eval-when (:load-toplevel :execute)
+  (let ((nav (find-package '#:limn/text-nav)))
+    (when nav
+      (let ((pmin-sym (find-symbol "*POINT-MIN-FN*" nav))
+            (pmax-sym (find-symbol "*POINT-MAX-FN*" nav)))
+        (when (and pmin-sym (boundp pmin-sym))
+          (set pmin-sym
+               (lambda (bid)
+                 (and bid (%marker-pos (%narrow-start bid))))))
+        (when (and pmax-sym (boundp pmax-sym))
+          (set pmax-sym
+               (lambda (bid)
+                 (and bid (%marker-pos (%narrow-end bid))))))))))

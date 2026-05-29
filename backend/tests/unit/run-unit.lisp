@@ -141,7 +141,10 @@
                 "indent-v036.lisp"
                 "query-replace-v036.lisp"
                 ;; v0.38 tests
-                "key-spec-v038.lisp"))
+                "key-spec-v038.lisp"
+                ;; v0.40 §1.1 — text-nav narrow-aware (depends on
+                ;; with-excursion-ctx from excursion-v032.lisp)
+                "text-nav-narrow.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
