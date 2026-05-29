@@ -69,6 +69,32 @@ struct LimnWindow {
     QJsonObject selection_end;
     QString     selection_mode = "char";
     QString     selection_text;
+    // v0.39.12 — actual per-character/per-line rects from MuPDF's
+    // text-selection algorithm, in page-norm coords (each entry is
+    // [x0 y0 x1 y1]).  Populated by cmd_view_selection_set when the
+    // window is focused, returned via view/selection-get so the Lisp
+    // annotation path can persist the real glyph rects instead of a
+    // thin bounding box synthesised from begin/end points (which
+    // dramatically underbooks the vertical extent on large-font
+    // titles).
+    QJsonArray  selection_rects;
+
+    // v0.39.18 A (search-hit selection fix): explicit-geometry selection.
+    // When a caller (e.g. %select-current-hit) already knows the EXACT
+    // rects + text of a selection — as search does, from MuPDF's match
+    // quads — it passes them straight through instead of round-tripping
+    // begin/end through get_text_selection (which rounds to char bounds
+    // and over-selected by a char).  When selection_explicit is true,
+    // selection_rects holds the exact page-norm rects to paint and
+    // selection_text holds the exact copy text; the begin/end +
+    // get_text_selection path is skipped for both paint and copy.
+    // In the explicit path each element of selection_rects is an object:
+    //   {"page": int, "x0": double, "y0": double, "x1": double, "y1": double}
+    // all page-norm [0,1] (vs the mouse/extraction path above, which fills
+    // selection_rects with [x0 y0 x1 y1] arrays for annotation save).  Mouse
+    // selection leaves selection_explicit false and uses the begin/end path
+    // unchanged.  selection_rects is declared once above and shared by both.
+    bool        selection_explicit = false;
 
     QJsonObject to_json() const;
 };
