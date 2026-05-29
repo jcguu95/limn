@@ -2054,6 +2054,11 @@ void LimnCommand::cmd_chrome_text_panel(const QString& id, const QJsonObject& ms
 //      inactive-window convention).
 // Backend (%notes-focus-*) coordinates the matching active-buffer / mode
 // switch so keys route to the right buffer.
+//
+// WINDOW-SYSTEM-DEBT: chrome/focus-pane hand-rolls a focus border + highlight
+// alpha for the notes panel's faux 1x2 split (always win "w1"). To be replaced
+// by the general bridge/win-focus path in Phase 3c. See
+// docs/split-frame-design.md ("待收編的既有特例 —— notes panel").
 void LimnCommand::cmd_chrome_focus_pane(const QString& id, const QJsonObject& msg) {
     if (!main_widget) { bridge->send_fail(id, "no main widget"); return; }
     QString win_id = msg.value("win-id").toString();

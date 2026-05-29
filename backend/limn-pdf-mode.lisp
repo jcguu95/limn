@@ -2340,6 +2340,12 @@
 
 ;;; ── Bug-Set-B #3 — two-pane focus switch (C-x o) ─────────────────────
 ;;;
+;;; WINDOW-SYSTEM-DEBT: %notes-focus-pdf / %notes-focus-list / %notes-focus-other
+;;; and notes-panel-mode hand-roll a 1x2 tiled split (always win "w1", single
+;;; shared DocumentView) that predates the multi-DV window system. To be
+;;; subsumed in Phase 3c on top of bridge/win-split + bridge/win-focus. See
+;;; docs/split-frame-design.md ("待收編的既有特例 —— notes panel").
+;;;
 ;;; While the notes side panel is open BOTH panes are always drawn (the
 ;;; list on the left, the PDF on the right).  "Focus" decides three things
 ;;; in concert: (a) which buffer w1's keys route to — backend
@@ -3492,6 +3498,10 @@
     ;; buffer while the side panel is open.  Gives the PDF side the same
     ;; C-x o (→ list) and q (→ close) bindings, shadowing pdf-mode only for
     ;; the panel's lifetime (deactivated in %notes-return-to-pdf).
+    ;; WINDOW-SYSTEM-DEBT: this minor mode exists only to fake other-window/
+    ;; window-close on the notes panel's hand-rolled split; folds into the
+    ;; Phase 5 global C-x o / C-x 0 bindings once Phase 3c lands. See
+    ;; docs/split-frame-design.md ("待收編的既有特例 —— notes panel").
     (let ((pkm (limn/keys:make-keymap)))
       (%def pkm "C-x o" (intern "PDF-NOTES-FOCUS-OTHER" :cl-user))
       (%def pkm "q"     (intern "PDF-NOTES-QUIT"        :cl-user))

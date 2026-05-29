@@ -91,6 +91,13 @@ MainWidget::MainWidget(QWidget* parent) : QMainWindow(parent) {
     main_stack_->setCurrentIndex(0);
     viewport_splitter_->addWidget(main_stack_);
 
+    // Phase 3a — register the initial viewport as pane "w1". document_view()
+    // (no-arg) and document_view("w1") both resolve through panes_ from here
+    // on; in 3a this pane is the only one and focus never moves, so the
+    // behaviour is identical to v0.39.10. See docs/split-frame-design.md.
+    panes_.insert("w1", ViewportPane{ document_view_, opengl_widget_,
+                                      main_stack_, text_widget_ });
+
     auto* central  = new QWidget(this);
     auto* layout   = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -109,15 +116,67 @@ void MainWidget::show_pdf_view() {
     if (main_stack_) main_stack_->setCurrentIndex(0);
 }
 
-// Phase 2 — see docs/split-frame-design.md. Today every LimnWindow maps
-// to the single document_view_; the overload exists so LimnCommand can
-// be migrated to a win-aware API without behaviour change. When Phase 3
-// (per-win DVs) lands, this becomes panes_[win_id].dv (and the no-arg
-// document_view() becomes panes_[focused_id].dv). Empty win_id falls
-// back to the focused/singleton DV — that's how non-per-win callers
-// (singleton load paths, helper sites) keep working unchanged.
-DocumentView* MainWidget::document_view(const QString& /*win_id*/) {
-    return document_view_;
+// Phase 3a — see docs/split-frame-design.md. document_view() (no-arg)
+// resolves to the focused pane's DV; document_view(win_id) resolves a
+// specific window's DV. Unknown / empty win_id falls back to
+// document_view_ (the focused-pane cache), preserving the Phase 2 contract
+// for non-per-win callers (singleton load paths, helper sites). In 3a there
+// is only the "w1" pane and focus never moves, so both forms are identical
+// to the v0.39.10 singleton.
+DocumentView* MainWidget::document_view() {
+    return document_view(focused_win_id_);
+}
+
+DocumentView* MainWidget::document_view(const QString& win_id) {
+    if (!win_id.isEmpty()) {
+        auto it = panes_.find(win_id);
+        if (it != panes_.end() && it->dv) return it->dv;
+    }
+    return document_view_;   // fallback: focused / singleton DV
+}
+
+// Phase 3a — create a fresh per-window pane. The new DocumentView shares the
+// heavy managers (db_manager_/document_manager_/checksummer_) and renderer
+// but owns its own page/zoom/offset state (the "fat" approach, decision 二).
+// NOT called by production in 3a; 3b rewires bridge/win-split onto it.
+MainWidget::ViewportPane
+MainWidget::add_pane_for(const QString& win_id, const QString& orientation) {
+    ViewportPane pane;
+    if (!viewport_splitter_) return pane;
+    viewport_splitter_->setOrientation(
+        orientation == "v" ? Qt::Vertical : Qt::Horizontal);
+
+    pane.dv = new DocumentView(db_manager_, document_manager_, checksummer_);
+    pane.gl = new PdfViewOpenGLWidget(pane.dv, pdf_renderer_, &stub_config,
+                                      false, this);
+    connect(pdf_renderer_, &PdfRenderer::render_advance,
+            pane.gl, QOverload<>::of(&QWidget::update));
+
+    // Mirror the constructor's main_stack_ layout: PDF at index 0, a
+    // read-only text-engine surface at index 1.
+    pane.stack = new QStackedWidget(this);
+    pane.stack->addWidget(pane.gl);                  // index 0 — PDF
+    pane.text  = new QPlainTextEdit(this);
+    pane.text->setReadOnly(true);
+    pane.text->setFocusPolicy(Qt::NoFocus);
+    pane.text->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    pane.text->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    pane.stack->addWidget(pane.text);                // index 1 — text engine
+    pane.stack->setCurrentIndex(0);
+
+    viewport_splitter_->addWidget(pane.stack);
+    panes_.insert(win_id, pane);
+    return pane;
+}
+
+// Phase 3a — mark win_id as focused and repoint document_view_ at its DV so
+// the ~585 direct document_view_ accesses in _main_widget.cpp keep targeting
+// the focused window. No-op for unknown win_id. In 3a this is never called.
+void MainWidget::set_focused_win(const QString& win_id) {
+    auto it = panes_.find(win_id);
+    if (it == panes_.end()) return;
+    focused_win_id_ = win_id;
+    if (it->dv) document_view_ = it->dv;
 }
 
 // markup-interaction step 2 — side-panel layout.
@@ -129,6 +188,11 @@ DocumentView* MainWidget::document_view(const QString& /*win_id*/) {
 // by reparenting text_widget_ out of main_stack_ and inserting it as the
 // first pane of viewport_splitter_, then forcing main_stack_ back to the
 // PDF (index 0) so the right pane renders the page.
+//
+// WINDOW-SYSTEM-DEBT: enter_text_panel/exit_text_panel are a hand-rolled 1x2
+// tiled split that predates the multi-DV window system. To be subsumed in
+// Phase 3c (rebuild on top of bridge/win-split). See docs/split-frame-design.md
+// ("待收編的既有特例 —— notes panel").
 void MainWidget::enter_text_panel(double ratio) {
     if (text_panel_mode_ || !viewport_splitter_ || !main_stack_ || !text_widget_)
         return;
