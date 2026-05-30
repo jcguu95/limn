@@ -104,4 +104,7 @@
     ;; v0.37 Phase B: ships sane defaults (M-x, M-r, which-key on).
     ;; Late in chain so it can use completion + which-key directly.
     (:file "limn-default-config" :depends-on ("limn-bookmark-handlers"))
-    (:file "limn" :depends-on ("limn-default-config"))))
+    (:file "limn" :depends-on ("limn-default-config"))
+    ;; limn-eval-server：給外部 limn-client 連線 eval 的 socket server。
+    ;; 放在 limn 之後，確保所有 limn 模組已載入，eval 時可存取完整狀態。
+    (:file "limn-eval-server" :depends-on ("limn"))))
