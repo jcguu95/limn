@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# limn-client — 連到 running limn 的 eval-server，送 Lisp form 並印回結果。
+#
+# emacsclient 風格：limn-client --eval '(+ 1 2)' → 印 3
+#
+# Socket 路徑：預設 /tmp/limn-eval.sock，可透過 LIMN_EVAL_SOCK 環境變數自訂。
+#
+# 使用範例：
+#   limn-client --eval '(+ 1 2)'
+#   limn-client --eval '(limn/buffer:count-buffers)'
+#   LIMN_EVAL_SOCK=/tmp/my-limn.sock limn-client --eval '(o "/tmp/x.pdf")'
+#
+# 依賴：sbcl（含 sb-bsd-sockets），無其他外部依賴。
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── 解析參數 ──────────────────────────────────────────────────────
+
+FORM=""
+SOCKET="${LIMN_EVAL_SOCK:-/tmp/limn-eval.sock}"
+QUIET=0
+
+usage() {
+    sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage 0
+            ;;
+        --eval)
+            FORM="$2"
+            shift 2
+            ;;
+        --socket|-s)
+            SOCKET="$2"
+            shift 2
+            ;;
+        -q|--quiet)
+            QUIET=1
+            shift
+            ;;
+        *)
+            echo "limn-client: unknown option: $1" >&2
+            usage 2
+            ;;
+    esac
+done
+
+if [[ -z "$FORM" ]]; then
+    echo "limn-client: --eval <form> is required" >&2
+    usage 2
+fi
+
+if [[ ! -S "$SOCKET" ]]; then
+    echo "limn-client: socket not found: $SOCKET" >&2
+    echo "  Is limn eval-server running? Start it with (limn/eval-server:start-server)" >&2
+    exit 1
+fi
+
+# ── 寫出 client 端 Lisp script 到暫存檔，避免 bash  quoting 地獄 ──
+
+CLIENT_LISP=$(mktemp /tmp/limn-client-XXXXXX.lisp)
+trap "rm -f '$CLIENT_LISP'" EXIT
+
+cat > "$CLIENT_LISP" << 'LISPEOF'
+(require :sb-bsd-sockets)
+
+;; 取命令列參數（透過環境變數傳入，避免 --script 參數解析）
+(defvar *limn-eval-form*   (sb-ext:posix-getenv "LIMN_EVAL_FORM"))
+(defvar *limn-eval-socket* (sb-ext:posix-getenv "LIMN_EVAL_SOCKET"))
+
+(unless (and *limn-eval-form* *limn-eval-socket*)
+  (format *error-output* "limn-client: LIMN_EVAL_FORM and LIMN_EVAL_SOCKET must be set~%")
+  (sb-ext:exit :code 2))
+
+(defun limn-client-send (socket-path form)
+  "連到 SOCKET-PATH，送 FORM 字串，印回所有回應。"
+  ;; make-instance 是 cl 的，local-socket 才是 sb-bsd-sockets 的
+  (let ((sock (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
+    (unwind-protect
+         (progn
+           (sb-bsd-sockets:socket-connect sock socket-path)
+           (let ((stream (sb-bsd-sockets:socket-make-stream sock
+                                     :element-type 'character
+                                     :input t :output t
+                                     :buffering :line
+                                     :external-format :utf-8)))
+             (unwind-protect
+                  (progn
+                    (write-line form stream)
+                    (force-output stream)
+                    (loop for line = (read-line stream nil :eof)
+                          until (eq line :eof)
+                          do (write-line line)))
+               (ignore-errors (close stream)))))
+      (ignore-errors (sb-bsd-sockets:socket-close sock)))))
+
+(limn-client-send *limn-eval-socket* *limn-eval-form*)
+(sb-ext:quit)
+LISPEOF
+
+# ── 透過環境變數傳遞 form 與 socket path ─────────────────────────
+
+export LIMN_EVAL_FORM="$FORM"
+export LIMN_EVAL_SOCKET="$SOCKET"
+
+exec sbcl --noprint --disable-debugger \
+    --no-userinit --no-sysinit \
+    --script "$CLIENT_LISP"

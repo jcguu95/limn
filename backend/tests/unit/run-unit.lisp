@@ -171,7 +171,9 @@
                 ;; narrow/widen §2.4 — narrow-to-defun via reader
                 "narrow-defun.lisp"
                 ;; narrow/widen §2.5 — text-mode modeline formatter
-                "narrow-text-modeline.lisp"))
+                "narrow-text-modeline.lisp"
+                ;; limn-client §1–§3 — eval-server socket eval
+                "eval-server.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
