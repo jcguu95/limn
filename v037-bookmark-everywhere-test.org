@@ -1,0 +1,502 @@
+#+TITLE: v0.37 bookmark everywhere — 測試 checklist
+#+AUTHOR: jcguu95 + Claude
+#+DATE: 2026-05-29
+#+OPTIONS: toc:2 num:nil ^:nil
+#+STARTUP: showall
+
+打勾用 ~C-c C-c~ 切換 ~[ ]~ 與 ~[X]~。
+全部走完的時間預算：~3 分鐘（A + B + C 自動）+ ~1 分鐘（D 視覺）。
+
+* ★ 最快路徑：互動 walkthrough（推薦）
+
+如果你只想以最少時間看「整個 bookmark 系統運作給我看」、不想跑
+shell 指令一條一條對 output，就跑這個：
+
+#+begin_src bash
+bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508/scripts/bookmark-walkthrough.sh
+#+end_src
+
+一條指令啟動 → 自動 ulimit / nix / 找 binary（缺就 build）/ spawn
+Limn / connect。然後進入互動 walkthrough，14 步。每一步：
+
+1. 印出 *將要 eval 的 Lisp form*
+2. 印出 *預期看到什麼*
+3. ~[SPC] + ENTER~ 注入並執行（~[s]~ skip / ~[q]~ quit early）
+4. 印出 *實際結果*
+5. ~[y] + ENTER~ match / ~[n] + ENTER~ not match / ~[s]~ unsure
+
+結尾印 *copy-paste 友善* 的 summary 區塊（含 ~[✓] [✗] [·]~ 標記）。
+
+涵蓋的 14 步驟：
+| # | scope | 預期 |
+|---+-------+------|
+| 1 | package loaded | ~T~ |
+| 2 | handlers (text/org/pdf) installed | ~T~ |
+| 3 | open fixture PDF via mupdf | buffer-id string |
+| 4 | view/set page 2 | wire ok |
+| 5 | default-pdf-record | (:path ... :page 2 :y-offset ...) |
+| 6 | wander to page 0 | wire ok |
+| 7 | default-pdf-jump on saved record | ~T~ |
+| 8 | view/get :page | ~2~（跳回原頁） |
+| 9 | find-file tmp text | fbuf-id |
+| 10 | buffer/cursor-set 11 | wire ok |
+| 11 | default-text-record | (:file ... :position 11) |
+| 12 | default-text-jump to position 0 | ~0~（cursor 移回） |
+| 13 | save + clear + load CJK name | bookmark struct (:name "第一章 🌟") |
+| 14 | M-x bookmark-set 'foo (mock minibuffer) | bookmark struct (:name "foo") |
+
+我（Claude）剛親手 autopilot 過 14/14 全綠、結尾印出 summary 沒問
+題。若你跑出來 14/14 ✓，就確定 bookmark-everywhere 在你機器上完
+全可用、可以直接 merge 或進入下面 ~D. 視覺模式~ 看真實 GUI。
+
+打完一輪：
+- [ ] walkthrough 跑完
+- [ ] summary 顯示 ~14/14 pass~
+- 若 < 14 pass，把 summary block 貼回給我（含 ~[✗]~ 那行）
+
+下面的 Test A/B/C/D 你可以當作 *深入驗證* — 想做就做，walkthrough
+14/14 綠就代表 Test A/B 的本質檢查都過了。
+
+* 0. 前置作業
+
+確認環境齊全。三個都 ✓ 才能往下走。
+
+** TODO 0.1 確認 nix 在 PATH
+
+- 指令：
+  #+begin_src bash
+  which nix
+  #+end_src
+
+- 預期：印出像 ~/nix/var/nix/profiles/default/bin/nix~ 之類路徑。
+- 不預期：~nix not found~ → 沒裝 nix 或 shell 沒 source profile。
+- [X] 通過
+
+** TODO 0.2 確認 Limn macOS binary 存在
+
+- 指令：
+  #+begin_src bash
+  ls -l /Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn
+  #+end_src
+
+- 預期：~-rwxr-xr-x ... limn~ 一筆，size > 1 MB。
+- 不預期：~No such file or directory~ → 先 build：
+  #+begin_src bash
+  bash /Users/jin/data/local/projects/sioyek-core/scripts/build-macos.sh
+  #+end_src
+- [X] 通過
+
+** TODO 0.3 確認 fixture PDF 存在
+
+- 指令：
+  #+begin_src bash
+  ls -l /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508/backend/tests/fixtures/test.pdf
+  #+end_src
+
+- 預期：~test.pdf~ 一筆、size 幾十 KB。
+- 不預期：missing → 看
+  =backend/tests/fixtures/README.md=（fixture 是 git-ignored、需另
+  外放）。
+- [X] 通過
+
+** TODO 0.4 ulimit 自動已被 1.1 / 1.2 包進去 — 可略過此步
+
+macOS 預設 ~ulimit -n~ ≈ 256，full suite 跑到 ~limn-process~ 系列
+測試會把 fd 用光、噴 ~Too many open files~。
+
+1.1 跟 1.2 的指令已經內嵌 ~ulimit -n 8192 &&~，**你不用手動做任何
+事**。這條留在這只是讓你知道「為什麼指令長這樣」。
+
+若你想驗 hard limit 夠：
+#+begin_src bash
+ulimit -Hn
+#+end_src
+印出的數字 >= 8192 就好（預設多半是 ~unlimited~ 或更大）。
+
+- [X] 略過（指令已自動處理）
+
+* 1. Test A — 單元測試（純 Lisp，~30 秒）
+
+純 Lisp 測 bookmark struct / persistence / handler dispatch / M-x
+command 註冊 / =C-x r m/b/l/d/M= keymap 綁定。完全 mock 掉 wire 跟
+minibuffer，**不需要 Limn binary**。
+
+** TODO 1.1 跑全 unit suite（自動處理 ulimit）
+
+指令本身會 ~ulimit -n 8192~ 把 FD 上限拉高，再進 nix shell 跑 SBCL。
+失敗 list 結尾你會看到 5 條，全部都不是 bookmark。
+
+- 指令（單條、可直接複製）：
+  #+begin_src bash
+  ulimit -n 8192 && \
+    cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508 && \
+    nix develop --command sbcl --script backend/tests/unit/run-unit.lisp 2>&1 | tail -12
+  #+end_src
+
+- 預期（結尾）：
+  #+begin_example
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    2742 passed, 5 failed (2747 total)
+
+    Failures:
+      [INIT-LOAD-RETURNS-NIL-WHEN-NONE-FOUND] (LIMN/RUNTIME:LOAD-INIT-FILE) = NIL
+      [V027-B-PDF-SEARCH-EXECUTE-STORES-STATE] state 不為 nil
+      [V027-B-SEARCH-RESET-CLEARS-STATE] reset 後 state nil 或 hits 空
+      [V027-I-SEARCH-STATE-CLEARED-ON-BUFFER-CLOSE] buffer-closed 後 state cleared
+      [V027-I-SEARCH-STATE-ISOLATED-PER-BUFFER] 切到 b2 後 state 不再屬 b1
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #+end_example
+
+  關鍵：
+  - ~2742 passed, 5 failed~ — 數字精準
+  - 5 條 fail 全是 ~V027-*~ / ~INIT-LOAD-*~（pre-existing baseline）
+  - **沒有 ~BOOKMARK-*~、沒有 ~Too many open files~**
+
+  我（Claude）剛在本機跑過、就是這個 output。
+
+- 不預期：
+  - 仍然看到 ~Too many open files~ → 你的 hard limit < 8192，跑下面
+    fallback：
+    #+begin_src bash
+    sudo launchctl limit maxfiles 65536 200000
+    #+end_src
+    然後重開 terminal、再跑 1.1
+  - 失敗 list 出現任何 ~BOOKMARK-*~ → 真壞了、抄條目給我
+  - 失敗 list 多於 5 條（且不是 FD 問題）→ 不該、抄給我
+
+- [ ] 通過
+
+** TODO 1.2 只看 BOOKMARK 區塊細節（選做、可略）
+
+如果 1.1 已綠，這條只是滿足好奇心：39 個 ~BOOKMARK-*~ test 區
+塊個別 pass/fail 數。
+
+- 指令：
+  #+begin_src bash
+  ulimit -n 8192 && \
+    cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508 && \
+    nix develop --command sbcl --script backend/tests/unit/run-unit.lisp 2>&1 | \
+    grep -E "^┌─ BOOKMARK|^└─ [0-9]+ passed" | \
+    awk '/BOOKMARK/{name=$0; getline; print name " ⇒ " $0; next}'
+  #+end_src
+
+- 預期：印出 *39 行*，每一行長這樣：
+  #+begin_example
+  ┌─ BOOKMARK-B1-MAKE-AND-ACCESSORS              ⇒ └─ 3 passed, 0 failed
+  ┌─ BOOKMARK-B2-ADD-AND-FIND                    ⇒ └─ 2 passed, 0 failed
+  ...
+  ┌─ BOOKMARK-HANDLERS-D5-ROUNDTRIP-WITH-HANDLER ⇒ └─ 2 passed, 0 failed
+  #+end_example
+
+  每行右側都是 ~N passed, 0 failed~（N 1 到 7）、加起來 77 個 assertion。
+
+- 不預期：
+  - 行數 < 39 → 我加的測試沒全跑、抄 stderr 給我
+  - 任何一行尾巴 ~0 failed~ 變 ~K failed~ (K > 0) → 我的 code 真
+    在你機器壞了、抄條目給我
+- [ ] 通過（或選擇略過）
+
+* 2. Test B — OS-tier driver 直跑（真實 binary，~30 秒）
+
+Spawn 真實 macOS Limn binary（headless + test-mode）、透過 wire
+socket 驅動 ~limn/bookmark-handlers~ 全部 6 個 Ω scenario。
+
+** TODO 2.1 直跑 OS-tier driver
+
+- 指令：
+  #+begin_src bash
+  cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508 && \
+    LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+    LIMN_BACKEND_DIR=/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508/backend/ \
+    nix develop --command sbcl --no-userinit --no-sysinit --non-interactive \
+      --load backend/tests/e2e/batch-os-v037-bookmark.lisp 2>&1 | tail -45
+  #+end_src
+
+- 預期（結尾數行）：
+  #+begin_example
+  ── Ω5: save → clear → load → handler still wired ──
+    ✓ Ω5a sidecar file exists
+    ✓ Ω5b store empty after clear
+    ✓ Ω5c CJK name round-tripped
+    ✓ Ω5d handler still pdf-mode
+    ✓ Ω5e record :page preserved
+
+  VERDICT: PASS
+  #+end_example
+
+  關鍵：所有 21 個 ~✓~、0 個 ~✗~、最後 ~VERDICT: PASS~。
+
+- 不預期：
+  - 任何 ~✗~ → 對應 Ω 區段壞了，看上面 detail
+  - ~Limn did not create socket within 5s~ → binary 啟動就 crash
+  - ~VERDICT: FAIL~ 結尾 → 看 ~/tmp/limn-os-v037bm.log~（binary stderr）
+
+- [ ] 通過
+
+* 3. Test C — Smoke harness（headless 模式，~30 秒）
+
+跟 Test B 本質相同，**但多測 stash/restore 邏輯** ——這是日常入
+口、確認 bookmark 系統還活著。
+
+** TODO 3.1 確認沒有殘留的 stash 檔（健康度檢查）
+
+- 指令：
+  #+begin_src bash
+  ls -la $HOME/.limn/bookmarks.lisp.smoke-stash-* 2>&1
+  #+end_src
+
+- 預期：~No such file or directory~。
+- 不預期：列出 ~bookmarks.lisp.smoke-stash-NNNNN~ 一筆以上 →
+  上次 smoke 跑完沒還原，先手動 rescue：
+  #+begin_src bash
+  mv $HOME/.limn/bookmarks.lisp.smoke-stash-* $HOME/.limn/bookmarks.lisp
+  #+end_src
+- [ ] 通過
+
+** TODO 3.2 紀錄你目前的書籤 sidecar SHA（待會比對用）
+
+- 指令：
+  #+begin_src bash
+  if [ -f $HOME/.limn/bookmarks.lisp ]; then \
+    shasum $HOME/.limn/bookmarks.lisp; \
+  else \
+    echo "(no sidecar yet — this is fine)"; \
+  fi
+  #+end_src
+
+- 把輸出記下來（複製到下面）：
+
+  #+begin_example
+  before: <把上面的 sha 貼這裡>
+  #+end_example
+
+- [ ] 紀錄完
+
+** TODO 3.3 跑 smoke headless
+
+- 指令：
+  #+begin_src bash
+  bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508/scripts/smoke-bookmark.sh --headless
+  #+end_src
+
+- 預期（開頭幾行）：
+  #+begin_example
+  → stashed existing $HOME/.limn/bookmarks.lisp → bookmarks.lisp.smoke-stash-NNNNN
+  → seeded $HOME/.limn/bookmarks.lisp with 3 sample bookmarks
+  → Using binary:  /Users/jin/.../sioyek/limn.app/Contents/MacOS/limn
+  → Using fixture: /Users/jin/.../backend/tests/fixtures/test.pdf
+  #+end_example
+
+  （若你本來沒 sidecar 那第一行就沒有，正常。）
+
+- 預期（結尾）：
+  #+begin_example
+  VERDICT: PASS
+  → restored your original bookmarks.lisp
+  #+end_example
+
+- 不預期：
+  - ~Limn binary not found~ → LIMN_BIN env 沒 set（手動加）：
+    #+begin_src bash
+    LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+      bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508/scripts/smoke-bookmark.sh --headless
+    #+end_src
+  - 中間掛掉沒到 ~restored~ → 立刻手動 rescue（見 3.5）
+  - ~VERDICT: FAIL~ → 同 Test B 的 troubleshooting
+
+- [ ] 通過
+
+** TODO 3.4 確認 sidecar 真的還原
+
+- 指令：
+  #+begin_src bash
+  if [ -f $HOME/.limn/bookmarks.lisp ]; then \
+    shasum $HOME/.limn/bookmarks.lisp; \
+  else \
+    echo "(no sidecar — this is fine if you had none originally)"; \
+  fi
+  #+end_src
+
+- 預期：SHA 跟 3.2 紀錄的 ~before:~ **一字不差**。
+- 不預期：SHA 不同 → restore 失敗、執行 3.5 rescue。
+- [ ] 通過
+
+** TODO 3.5 確認沒有 stash 殘留
+
+- 指令：
+  #+begin_src bash
+  ls -la $HOME/.limn/bookmarks.lisp.smoke-stash-* 2>&1
+  #+end_src
+
+- 預期：~No such file or directory~。
+- 不預期：列出 stash 檔 → 手動 rescue：
+  #+begin_src bash
+  mv $HOME/.limn/bookmarks.lisp.smoke-stash-* $HOME/.limn/bookmarks.lisp
+  #+end_src
+- [ ] 通過
+
+* 4. Test D — Smoke harness 視覺模式（互動，~60 秒）
+
+⚠️ **這個會真開 GUI、需要你按鍵**。**結束時必須讓腳本跑到 restore
+那行**（quit Limn 或 terminal Ctrl-C），不然 sidecar 不會還原。
+
+** TODO 4.1 啟動 visual smoke
+
+- 指令：
+  #+begin_src bash
+  bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/optimistic-brahmagupta-8cc508/scripts/smoke-bookmark.sh --visual
+  #+end_src
+
+- 預期：
+  - terminal 印 ~stashed existing ...~ + ~seeded ... with 3 sample
+    bookmarks~
+  - terminal 印一段「Try, in order: ...」中文/英文提示
+  - macOS Limn 視窗開起來、顯示 =test.pdf= 的第 1 頁
+
+- 不預期：視窗沒開 → binary path 錯，先 Ctrl-C，加 LIMN_BIN env 重
+  試（見 3.3 的 fallback 指令）
+
+- [ ] 視窗開起來了
+
+** TODO 4.2 列出 3 個 seeded 書籤
+
+- 在 Limn 視窗按：~M-x bookmark-list RET~
+  （或 ~C-x r l~ 也可，但 PDF mode 可能攔截 prefix；不行就改 M-x）
+
+- 預期：echo area / 訊息區看到類似一行：
+  #+begin_example
+  bookmarks (3): smoke-pdf-p1  [PDF-MODE] | smoke-pdf-p3  [PDF-MODE] | smoke-txt-note  [TEXT-MODE]
+  #+end_example
+
+- 不預期：
+  - ~no bookmarks~ → startup 時 ~bookmarks-load~ 沒讀到 sidecar、
+    或 sidecar 格式錯（terminal 應該有 error log）
+  - 訊息只顯示 1-2 個 → seed 檔某條 parse 失敗
+
+- [ ] 看到 3 條
+
+** TODO 4.3 跨 PDF 頁跳轉
+
+- 按：~C-x r b~ → minibuffer 出現 ~Jump to bookmark: ~
+- 輸入：~smoke-pdf-p3~ → ~RET~
+
+- 預期：
+  - PDF view 立即跳到 page 3（modeline 顯示 ~[3 / N]~ 或類似）
+  - echo area 顯示 ~bookmark: smoke-pdf-p3~
+
+- 不預期：
+  - ~C-x r b~ 沒反應 → pdf-mode 攔了 prefix，改 ~M-x
+    bookmark-jump RET smoke-pdf-p3 RET~
+  - 跳到 page 1 而不是 page 3 → wire ~view/set :page~ 沒生效，回
+    Test B 看 Ω3
+
+- [ ] 跳到 page 3
+
+** TODO 4.4 跨 buffer 跳到 text 檔（這是「bookmark everywhere」精華）
+
+- 按：~C-x r b~ → minibuffer
+- 輸入：~smoke-txt-note~ → ~RET~
+
+- 預期：
+  - Limn 切換 buffer，畫面變成 =/tmp/limn-smoke-note.txt= 的內容
+    （4 行）
+  - cursor 落在 line 2 中間左右（position 35 = "line 2: this is a
+    smoke fixture" 中間）
+  - echo area ~bookmark: smoke-txt-note~
+
+- 不預期：
+  - 還停留在 PDF view → text-engine bridge 沒拉起來、或 find-file
+    路徑錯
+  - 開了檔但 cursor 在 0 → ~buffer/cursor-set~ wire 沒到
+
+- [ ] 跳到 text 檔、cursor 在中段
+
+** TODO 4.5 從 text 檔設一個新書籤
+
+- 按：~C-x r m~ → minibuffer ~Bookmark name: ~
+- 輸入：~my-spot~ → ~RET~
+
+- 預期：echo area ~bookmark set: my-spot~
+
+- 不預期：
+  - ~bookmark-set: ... can't be bookmarked yet~ → text-mode 的
+    record-fn 沒註冊（限制 4.1 應該已經通過、回查 Test B Ω1）
+
+- [ ] 設好 my-spot
+
+** TODO 4.6 切回 terminal、不離開 Limn、確認 my-spot 已寫進 sidecar
+
+- 開**新 terminal tab/window**（讓 Limn 繼續開著），執行：
+  #+begin_src bash
+  cat $HOME/.limn/bookmarks.lisp
+  #+end_src
+
+- 預期：印出 ~(:VERSION 1 :BOOKMARKS (...))~，裡面有 4 條
+  ~:NAME~，最後一條是：
+  #+begin_example
+  (:NAME "my-spot" :HANDLER CL-USER::TEXT-MODE :RECORD (:FILE "/tmp/limn-smoke-note.txt" :POSITION ...))
+  #+end_example
+
+- 不預期：只有 3 條 → ~bookmarks-save~ 沒在 ~bookmark-set~ 後跑
+- [ ] 看到 my-spot
+
+** TODO 4.7 結束 — quit Limn 並驗 sidecar 還原
+
+- 在 Limn 視窗 quit（macOS 標準 ~Cmd-Q~），或回 smoke 啟動的
+  terminal 按 ~Ctrl-C~
+
+- 預期：terminal 最後印
+  #+begin_example
+  → restored your original bookmarks.lisp
+  #+end_example
+
+- 確認 SHA：
+  #+begin_src bash
+  if [ -f $HOME/.limn/bookmarks.lisp ]; then \
+    shasum $HOME/.limn/bookmarks.lisp; \
+  else \
+    echo "(no sidecar — fine if you had none)"; \
+  fi
+  #+end_src
+
+  跟 3.2 的 ~before:~ 一字不差。
+
+- 不預期：SHA 不同 →
+  #+begin_src bash
+  mv $HOME/.limn/bookmarks.lisp.smoke-stash-* $HOME/.limn/bookmarks.lisp
+  #+end_src
+
+- [ ] 還原成功
+
+* 5. 全部跑完
+
+** TODO 5.1 收尾健康度
+
+- 指令：
+  #+begin_src bash
+  ls -la $HOME/.limn/bookmarks.lisp* 2>&1
+  #+end_src
+
+- 預期：最多一個 ~bookmarks.lisp~（你原本的）。
+- 不預期：任何 ~*.smoke-stash-*~ 殘留 → 手動 rescue（見 3.5）。
+- [ ] 通過
+
+* Cheat sheet：失敗對照表
+
+| 症狀 | 出在哪 | 處理 |
+|------+--------+------|
+| ~Too many open files~ in PROCESS-* / COND-* | shell ~ulimit -n~ 太低（macOS 預設 256） | 走 1.1 BOOKMARK-only；或 ~ulimit -n 8192~ 後再跑 1.2 |
+| ~V027-*~ 4 條 fail | 你 sprint 前的 pre-existing baseline | 跟 bookmark 無關、忽略 |
+| 1.1 行數 < 35 | ASDF / load 早期就掛 | 回 0.x；或讀 ~run-unit.lisp~ stderr 找首條 error |
+| 1.1 任何 ~BOOKMARK-*~ fail | 真的踩到我的 code | 抄條目給我 |
+| Test B socket timeout | binary 啟動 crash | ~cat /tmp/limn-os-v037bm.log~ |
+| ~Limn binary not found~ | LIMN_BIN env | 用 fallback 指令明示 LIMN_BIN |
+| Test D ~C-x r b~ 沒反應 | pdf-mode prefix 攔 | 改 ~M-x bookmark-jump~ |
+| Test D 視窗沒開 | binary path 錯 / nix 未進殼 | Ctrl-C → 明示 LIMN_BIN 重跑 |
+| 4.7 SHA 不同 | trap 沒跑到 | ~mv ~/.limn/bookmarks.lisp.smoke-stash-* ~/.limn/bookmarks.lisp~ |
+| 任何位置 stash 殘留 | trap 被強殺 | 同上 mv |
+
+* 完成
+
+全部 ~[X]~ → bookmark-everywhere 在你機器上活著、且不會弄壞你
+~/.limn/bookmarks.lisp~。可以放心 merge / 拿去用。

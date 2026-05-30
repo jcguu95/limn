@@ -4240,6 +4240,59 @@ OS-tier ~1：
 - 不做 git diff hook（VC）—— v0.33+
 - 不做 file-lock（=.#file=）—— Emacs 有，使用率低，留 v0.33+
 
+*** v0.37 "bookmark everywhere" + dogfood polish ⏭ planned
+
+把 v0.17 ship 的「PDF-only、per-doc、in-memory」bookmark wire 升級
+成 Emacs =bookmark.el= 等價的「跨 buffer、可命名、session 持久化」
+user-Lisp 層。v0.17 的 C++ wire 一行不改、繼續 power 既有 PDF single-
+char 書籤（=m a= / =' a=）；v0.37 新加的 Lisp module 提供
+=C-x r m/b/l/d/M=、跨 mode、寫一份全域 sidecar。
+
+設計分層：
+
+| Layer | 範圍 | 命令 |
+|-------+------+------|
+| v0.17 C++ wire | 單一 PDF buffer，in-memory | =bookmark/set= 等 |
+| v0.37 Lisp =limn/bookmark= | 跨 buffer，可命名，sidecar 持久化 | =C-x r m/b/l/d/M= |
+
+新模組（皆純 Lisp，C++ 零改動）：
+
+- =backend/limn-bookmark.lisp= — core data + handler registry +
+  =~/.limn/bookmarks.lisp= sidecar persistence（atomic write
+  via .tmp + rename）
+- =backend/limn-bookmark-cmds.lisp= — M-x =bookmark-set= /
+  =bookmark-jump= / =bookmark-delete= / =bookmark-rename= /
+  =bookmark-list= / =bookmark-save= / =bookmark-load=；
+  =install-bookmark-bindings= 綁 =C-x r ?= 走 keymap 系統
+- =backend/limn-bookmark-handlers.lisp= — text-mode / org-mode /
+  pdf-mode 的 record-fn + jump-fn（透過 vtable，unit-tier 純 mock）
+
+Record schema：
+
+| Handler | Record plist |
+|---------+--------------|
+| text-mode / org-mode | =(:file PATH :position N)= |
+| pdf-mode             | =(:path PATH :page P :y-offset Y :x-offset X)= |
+
+設計原則：
+- generic bookmark 只是 nav；C++ wire 的 bookmark/* (per-doc 視覺
+  annotation) 完全不碰，兩個系統並存
+- 持久化 *一份* 全域 sidecar (=~/.limn/bookmarks.lisp=)，方便 user
+  diff / VC、不分散在 per-doc hash 檔案
+- bookmark-jump 對 unknown name / 沒註冊的 handler 都 *響亮地* error
+  （Emacs 慣例、silent fail 會藏 bug）
+
+測試：unit-tier 45 deftest / 83 assert；OS-tier
+=batch-os-v037-bookmark.lisp= 21 Ω assertion 全綠（真實 Limn binary +
+limn:start + wire round-trip + CJK 持久化）。
+
+User 端 dogfood：
+#+begin_src bash
+bash scripts/smoke-bookmark.sh
+#+end_src
+腳本自動 seed 3 個範例書籤、launch macOS Limn、~60 秒讓 user 按
+=C-x r b= 跳兩下確認。
+
 *** v0.36 query-replace + indent + current-column ⏭ planned
 
 把 v0.32 control flow + v0.34 regex 組裝成 =query-replace=——以及程式

@@ -4,6 +4,75 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.37.0 — bookmark everywhere（in flight）
+:PROPERTIES:
+:DATE: 2026-05-29
+:END:
+
+把 Sioyek 既有的「單一 PDF、單字元 key」bookmark 升級成 Emacs
+=bookmark.el= 等價的「跨 buffer、可命名、session 持久化」層。原本
+的 PDF-only bookmark （limn-pdf-mode §E）保留，兩者語意分離、互不
+覆寫；新 layer 走 =C-x r m / b / l / d / M=，舊 layer 繼續用 =m a=
+/ ='a= register-style。
+
+新模組（純 Lisp，C++ 一行不改）：
+
+** =limn/bookmark= (=backend/limn-bookmark.lisp=)
+- *Struct*：=(:name STRING :handler SYMBOL :record PLIST)=
+- *Store*：global hash =*bookmarks*=，upsert by name、list 回傳 by-
+  name sorted（UI deterministic）
+- *Handler registry*：mode-symbol → jump-fn；每個 mode 註冊自己的
+  跳轉邏輯，bookmark-jump dispatch
+- *Record-fn registry*：mode-symbol → record-fn；capture current
+  location，給 bookmark-set 用
+- *Persistence*：=~/.limn/bookmarks.lisp=（s-exp，原子寫入 .tmp +
+  rename），CJK / 非 BMP 安全
+
+** =limn/bookmark-cmds= (=backend/limn-bookmark-cmds.lisp=)
+- =M-x bookmark-set / -jump / -delete / -rename / -list / -save / -load=
+  全部走 =defcommand= 在 :cl-user 命名空間，M-x completion 看得到
+- =install-bookmark-bindings=：=C-x r m/b/l/d/M= 綁在 global-keymap
+  上（由 =install-defaults= 呼叫，符合 [feedback-fix-discipline]
+  directive 5 keymap 紀律）
+- =current-handler-symbol=：由 runtime/mode 解析 focused buffer 的
+  major mode，給 bookmark-set 做 record-fn dispatch
+
+** =limn/bookmark-handlers= (=backend/limn-bookmark-handlers.lisp=)
+- text-mode / org-mode 共用 =(:file PATH :position N)= shape
+- pdf-mode 用 =(:path PATH :page P :y-offset Y :x-offset X)= shape
+- Jump：text 走 =find-file= + =buffer/cursor-set= wire；pdf 走
+  =find-file= + =view/set :page :offset-y :offset-x= wire
+- 全部走 vtable（=*text-record-fn*= / =*pdf-jump-fn*= 等）→ 單元測試
+  可純 mock，不需 live binary
+
+** Wireup
+- =backend/limn.asd= 在 query-replace 後依序加 =limn-bookmark=、
+  =limn-bookmark-cmds=、=limn-bookmark-handlers=；
+  =limn-default-config= 後移到 handlers 之後
+- =install-defaults= 加 =install-bookmark-bindings= + 啟動時自動
+  =bookmarks-load=（first-run 無 sidecar → silent no-op）
+
+** 測試（三層全綠）
+- *Unit-tier*：=tests/unit/bookmark-v037.lisp= (21 test, 40 assert),
+  =bookmark-cmds-v037.lisp= (9 test, 21 assert),
+  =bookmark-handlers-v037.lisp= (15 test, 22 assert) — 共 45 test /
+  83 assertion（含 ship-readiness D4b/C3b regression）
+- *OS-tier*：=tests/e2e/batch-os-v037-bookmark.lisp= — Ω1..Ω6 21
+  assertion 全綠：handler 註冊、PDF record/jump、text record/jump、M-x
+  set 完整流程、CJK 持久化 round-trip
+
+** 操作示範
+從零開始 dogfood：
+- =C-x r m=  → minibuffer 提問書籤名 → 命中 PDF 當頁 / 文字檔當位
+- =C-x r b=  → completion 看所有書籤 → 選一個 → 跳過去（如有需要
+  open 檔案則自動 find-file）
+- =C-x r l=  → echo area 列出所有書籤 + 各自 handler
+- =C-x r d=  → completion 選一個刪掉
+- =C-x r M=  → completion 選舊名 + minibuffer 輸入新名
+
+User 端的 smoke 驗證：=bash scripts/smoke-bookmark.sh=（自動 seed
+3 個範例書籤、launch Limn，~60 秒）。
+
 * v0.36.0 — query-replace + indent + current-column
 :PROPERTIES:
 :DATE: 2026-05-24
