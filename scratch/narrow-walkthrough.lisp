@@ -246,5 +246,9 @@ modeline 顯示「Narrow」。Qt 視窗只有 (defun foo () 1) 那一行
   (%narrow-print-summary)
   t)
 
-;; 載入時自動跑一次。
-(narrow-walkthrough)
+;; 載入時印一行 confirm，但 NOT 自動跑（auto-call 在 load context
+;; 下可能被吃掉或 stdin 行為怪怪的）。請手動呼叫 (narrow-walkthrough)。
+(format t "~&~%── narrow-walkthrough.lisp 載入完成 ──~%")
+(format t "  *narrow-steps* 有 ~a 步~%" (length *narrow-steps*))
+(format t "  在 prompt 打：(narrow-walkthrough) 開始跑~%~%")
+(force-output)
