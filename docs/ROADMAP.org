@@ -84,6 +84,46 @@ roadmap / sub-roadmap / 進度 checklist 住在它**自己的 design doc** 裡�
   file-notify、query-replace…）。注意 §12 那些 =v0.NN ⏭ planned= 號碼是
   **制度生效前的非權威佔位標籤**（見該節開頭聲明），真正版本號 merge 時才發。
 
+* limn: next steps（DeepSeek 開發批次） ⏭ SCHEDULED 2026-05-30
+
+使用者交付的下一批開發目標,將交給 DeepSeek 接手。依本索引慣例,每項**只一行 +
+指向 design doc**;細節住在各 doc。批次原貌(pdf basics / buffers basic)保留如下,
+其中數項**沿用既有 doc**(不重造),數項**本批新開 doc**。
+
+** pdf basics
+
+- *search* —— next/prev、顯示「第幾/共幾筆」、收編 emacs isearch(不 adhoc)、確保
+  highlight、進階 narrow/fuzzy。**機制大半已 ship**(=pdf-search-state= machinery),
+  本批是整合/surface。設計：=docs/search-design.md=（新）。
+- *save view / jump-back* —— 搜尋(或跳轉)後一鍵跳回原視角;匿名 mark ring + 具名
+  view register。建立在既有 position mark ring + Bookmark Everywhere 之上。
+  設計：=docs/save-view-design.md=（新）。
+- *split frame（emacs-like，同時看 PDF 不同部分）* —— **沿用** =docs/split-frame-design.md=。
+  per-pane =DocumentView= 已 ship(3a/3b, =v0.41.0=);「同時看不同部分」靠各 pane 獨立
+  page/zoom/offset(已具備)。3c(notes 收編)deferred、Phase 4(per-DV overlay)待真正
+  多文件情境;見該 doc 與 ISSUES I-11。**本批不新增 window 工作**。
+- *highlighting / note（db design、sane object system、note+icon、annotate on highlight）*
+  —— 標記的**資料模型 / 物件系統 / 持久化**。schema v2 物件骨架已 ship(=pdf-annotation=:
+  id/page/rects/color/note/type/tags + sidecar + migration);本批決定 sidecar vs DB、
+  接出 =:note=/=:both=、margin icon、補成 sane object system。設計：
+  =docs/annotation-store-design.md=（新，**資料層**)。視覺/UX 層仍是
+  =markup-interaction-design.md=(色塊改底線、清單 buffer、focus ring、gutter)。
+
+** buffers basic
+
+- *CJK / linum-mode / face·fonts·color 管理* —— text-engine buffer 的**顯示層**。CJK
+  輸入/minibuffer/載入已 ship(v0.13/v0.16),本批補 text-engine 內顯示缺口 + 從零做
+  linum gutter 與 emacs 式 face/color 管理。設計：=docs/text-display-design.md=（新）。
+- *vim-like by default（evil-like）* —— **沿用** =docs/evil-mode-design.md=(已在 planned
+  區,leader 的前置)。本批不另開 doc。
+- *emacs-like overlay / org folding* —— overlay primitive 從「PDF 視覺疊加」擴成「text
+  buffer 區間屬性」(=invisible= + 虛擬省略號),org folding 是其第一個 client。設計：
+  =docs/folding-design.md=（新）。既有 =view/overlays=(LIMN-SPEC §12)是其前身。
+
+> 跨參照既有 planned 線:narrow/fuzzy 的比對共用 *Fuzzy Selector*
+> (=docs/completion-ui-design.md=);所有新鍵位走 *Doom =SPC= leader*
+> (=docs/leader-keys-design.md=)與 *evil*(=docs/evil-mode-design.md=)。
+
 * 近期已 ship（authoritative）
 
 | 版本 | feature | tag commit | 設計 |
