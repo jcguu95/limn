@@ -172,6 +172,23 @@
        (error (e)
          (format *error-output* ";; M-r errored: ~a~%" e)))))
 
+  ;; C-x r m/b/l/d/M — bookmark-everywhere bindings (v0.37).
+  ;; Per the Emacs convention: C-x r is the register/rectangle/bookmark
+  ;; prefix.  The per-PDF single-char layer (limn-pdf-mode §E) lives
+  ;; under `m a` / `' a` and stays untouched.
+  (handler-case
+      (limn/bookmark-cmds:install-bookmark-bindings global-keymap)
+    (error (e)
+      (format *error-output*
+              ";; bookmark bindings failed to install: ~a~%" e)))
+
+  ;; Restore previously-saved bookmarks at startup (silent no-op if no
+  ;; sidecar exists yet — first-run friendly).
+  (handler-case (limn/bookmark:bookmarks-load)
+    (error (e)
+      (format *error-output*
+              ";; bookmark sidecar load failed: ~a~%" e)))
+
   ;; Enable which-key by default — popup hints after prefix-key idle.
   ;; Users wanting it off can call (limn/which-key:which-key-mode -1)
   ;; in their init.lisp.

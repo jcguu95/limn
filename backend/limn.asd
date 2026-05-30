@@ -91,7 +91,11 @@
     ;; themselves later in their own modules.  Pure Lisp; coexists
     ;; with limn-pdf-mode §E's per-doc single-char bookmark system.
     (:file "limn-bookmark" :depends-on ("limn-query-replace"))
+    ;; bookmark-cmds: M-x bookmark-set/jump/list/delete/rename + the
+    ;; keymap installer.  Needs limn/cmd, limn/keys, limn/completion,
+    ;; and the limn/bookmark core — so loaded right after them.
+    (:file "limn-bookmark-cmds" :depends-on ("limn-bookmark"))
     ;; v0.37 Phase B: ships sane defaults (M-x, M-r, which-key on).
     ;; Late in chain so it can use completion + which-key directly.
-    (:file "limn-default-config" :depends-on ("limn-bookmark"))
+    (:file "limn-default-config" :depends-on ("limn-bookmark-cmds"))
     (:file "limn" :depends-on ("limn-default-config"))))
