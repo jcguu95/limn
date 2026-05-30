@@ -85,12 +85,10 @@ LimnCommand::LimnCommand(LimnBridge*         bridge,
     // back the chrome text surfaces. These IDs are intentionally
     // bracketed with asterisks so they never collide with the auto-
     // allocated t1 / t2 / ... ids for user-opened text buffers.
-    text_buffers.insert("*minibuffer*", GapBuffer());
-    text_buffers.insert("*echo-area*",  GapBuffer());
-    text_buffers.insert("*messages*",   GapBuffer());
-    text_cursors.insert("*minibuffer*", 0);
-    text_cursors.insert("*echo-area*",  0);
-    text_cursors.insert("*messages*",   0);
+    text_buffers.insert("*minibuffer*", TextBuffer());
+    text_buffers.insert("*echo-area*",  TextBuffer());
+    text_buffers.insert("*messages*",   TextBuffer());
+    // (cursor defaults to 0 inside each TextBuffer — no separate hash to init)
 }
 
 // ─── Dispatch ──────────────────────────────────────────────────────────
@@ -168,6 +166,7 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "buffer/cursor-set")    { cmd_buffer_cursor_set   (id, msg); return; }
     if (cmd == "buffer/insert")        { cmd_buffer_insert       (id, msg); return; }
     if (cmd == "buffer/delete")        { cmd_buffer_delete       (id, msg); return; }
+    if (cmd == "buffer/narrow")        { cmd_buffer_narrow       (id, msg); return; }
     if (cmd == "buffer/load-file")     { cmd_buffer_load_file    (id, msg); return; }
     if (cmd == "buffer/save")          { cmd_buffer_save         (id, msg); return; }
     if (cmd == "buffer/codepoint-rects"){ cmd_buffer_codepoint_rects(id, msg); return; }
@@ -277,8 +276,7 @@ void LimnCommand::cmd_bridge_engine_load(const QString& id, const QJsonObject& m
     // primitives (minibuffer / echo area / *Messages* / modeline).
     if (engine == "text") {
         const QString tid = QString("t%1").arg(next_text_seq++);
-        text_buffers.insert(tid, GapBuffer());
-        text_cursors.insert(tid, 0);
+        text_buffers.insert(tid, TextBuffer());
         win->buffer_id     = tid;
         win->page          = 0;
         win->zoom          = 1.0f;
@@ -834,6 +832,14 @@ void LimnCommand::cmd_minibuffer_open(const QString& id, const QJsonObject& msg)
 
 void LimnCommand::cmd_minibuffer_close(const QString& id, const QJsonObject&) {
     minibuffer_open = false;
+    // v0.40 Phase 3 — reset cursor for a clean re-open.  Pre-refactor,
+    // TextBuffer wasn't tracking cursor inside the buffer object so
+    // close left text_cursors["*minibuffer*"] untouched; tests that
+    // expected a fresh cursor on next access happened to pass because
+    // of test ordering.  Now that cursor lives in TextBuffer, give
+    // minibuffer/close the same "back to scratch" semantics the
+    // Emacs convention has — the buffer is closed, point goes home.
+    text_buffers["*minibuffer*"].set_cursor_qs(0);
     if (auto* c = chrome_of(main_widget))
         c->set_minibuffer(false, QString(), QString());
     bridge->send_ok(id);
@@ -856,14 +862,14 @@ void LimnCommand::cmd_minibuffer_set_text(const QString& id, const QJsonObject& 
         return;
     }
     {
-        GapBuffer& mb = text_buffers["*minibuffer*"];
+        TextBuffer& mb = text_buffers["*minibuffer*"];
         mb.clear();
         mb.insert(0, msg.value("text").toString());
         // After set-text, cursor goes to end — Emacs convention, lets the
         // user keep typing to extend. v0.12 batch 20 added cursor-aware
         // insertion in minibuffer_handle_key; this keeps set-text+typing
         // composable.
-        text_cursors["*minibuffer*"] = mb.length();
+        mb.set_cursor_qs(mb.length());
         if (auto* c = chrome_of(main_widget))
             c->set_minibuffer(true, minibuffer_prompt, mb.to_qstring());
     }
@@ -877,12 +883,12 @@ void LimnCommand::cmd_minibuffer_get(const QString& id, const QJsonObject&) {
     const QString mb_text = text_buffers["*minibuffer*"].to_qstring();
     data.insert("text",   mb_text);
     // v0.16: :cursor is codepoint count from start of buffer (matches
-    // buffer/cursor-get :offset). Internally text_cursors holds UTF-16
-    // index; convert at the wire boundary so non-BMP characters (emoji,
+    // buffer/cursor-get :offset). Internally TextBuffer stores cursor as a
+    // UTF-16 index; convert at the wire boundary so non-BMP characters (emoji,
     // CJK Ext-B) don't double-count.
     {
         // mb_text already materialised above — reuse it for cp conversion.
-        int qs_idx = text_cursors["*minibuffer*"];
+        int qs_idx = text_buffers["*minibuffer*"].cursor_qs();
         int cp = qsidx_to_cp(mb_text, qs_idx);
         if (cp < 0 && qs_idx > 0) cp = qsidx_to_cp(mb_text, qs_idx - 1);
         if (cp < 0) cp = 0;
@@ -916,10 +922,10 @@ void LimnCommand::handle_ime_event(const QString& preedit, const QString& commit
     }
     if (!commit.isEmpty()) {
         if (minibuffer_open) {
-            GapBuffer& buf = text_buffers["*minibuffer*"];
-            int&       cur = text_cursors["*minibuffer*"];
-            buf.insert(cur, commit);
-            cur += commit.length();
+            TextBuffer& buf = text_buffers["*minibuffer*"];
+            // TextBuffer::insert advances cursor automatically when
+            // insert position is at-or-before cursor.
+            buf.insert(buf.cursor_qs(), commit);
             const QString updated = buf.to_qstring();
             if (auto* c = chrome_of(main_widget))
                 c->set_minibuffer(true, minibuffer_prompt, updated);
@@ -946,10 +952,8 @@ void LimnCommand::handle_ime_event(const QString& preedit, const QString& commit
             LimnWindow* fw    = (windows && !fid.isEmpty())
                                   ? windows->get(fid) : nullptr;
             if (fw && text_buffers.contains(fw->buffer_id)) {
-                GapBuffer& buf = text_buffers[fw->buffer_id];
-                int&       cur = text_cursors[fw->buffer_id];
-                buf.insert(cur, commit);
-                cur += commit.length();
+                TextBuffer& buf = text_buffers[fw->buffer_id];
+                buf.insert(buf.cursor_qs(), commit);
                 if (main_widget) sync_text_widget(fw->buffer_id);
                 QJsonObject changed_ev;
                 changed_ev.insert("buffer-id", fw->buffer_id);
@@ -1004,12 +1008,12 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     // at end). emits minibuffer-input with updated text. Maps to A2 TODO
     // entry. v0.12.
     if (key == "BS") {
-        GapBuffer& buf = text_buffers["*minibuffer*"];
+        TextBuffer& buf = text_buffers["*minibuffer*"];
         if (buf.length() > 0) {
             // v0.16: delete a WHOLE codepoint to the left of cursor — for
             // BMP that's 1 UTF-16 unit, for non-BMP it's 2 (the surrogate
             // pair). Otherwise we'd leave dangling surrogates.
-            int cur = text_cursors["*minibuffer*"];
+            int cur = buf.cursor_qs();
             if (cur > 0 && cur <= buf.length()) {
                 const QString s = buf.to_qstring();
                 int del_units = 1;
@@ -1019,7 +1023,8 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
                     del_units = 2;
                 }
                 buf.remove(cur - del_units, del_units);
-                text_cursors["*minibuffer*"] = cur - del_units;
+                // remove() shifts cursor automatically when deletion is
+                // before the cursor.
             }
             const QString updated = buf.to_qstring();
             if (auto* c = chrome_of(main_widget))
@@ -1032,27 +1037,32 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
     // Left / Right — move cursor without modifying text. v0.16: step by
     // a whole codepoint (skip surrogate pair as one unit).
     if (key == "<left>" || key == "<right>") {
-        const QString s = text_buffers["*minibuffer*"].to_qstring();
-        int cur = text_cursors["*minibuffer*"];
+        TextBuffer& mb = text_buffers["*minibuffer*"];
+        const QString s = mb.to_qstring();
+        int cur = mb.cursor_qs();
         const int len = s.length();
         if (key == "<left>" && cur > 0) {
             int step = 1;
             if (cur >= 2 && s.at(cur - 1).isLowSurrogate()
                 && s.at(cur - 2).isHighSurrogate()) step = 2;
-            text_cursors["*minibuffer*"] = cur - step;
+            mb.set_cursor_qs(cur - step);
         }
         if (key == "<right>" && cur < len) {
             int step = 1;
             if (cur + 1 < len && s.at(cur).isHighSurrogate()
                 && s.at(cur + 1).isLowSurrogate()) step = 2;
-            text_cursors["*minibuffer*"] = cur + step;
+            mb.set_cursor_qs(cur + step);
         }
         return true;
     }
     // Home / End — cursor to start / end.
-    if (key == "<home>") { text_cursors["*minibuffer*"] = 0; return true; }
+    if (key == "<home>") {
+        text_buffers["*minibuffer*"].set_cursor_qs(0);
+        return true;
+    }
     if (key == "<end>") {
-        text_cursors["*minibuffer*"] = text_buffers["*minibuffer*"].length();
+        TextBuffer& mb = text_buffers["*minibuffer*"];
+        mb.set_cursor_qs(mb.length());
         return true;
     }
     // Printable single-character key → accumulate into text.
@@ -1066,13 +1076,13 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
         to_append = " ";
     }
     if (!to_append.isEmpty()) {
-        GapBuffer& buf = text_buffers["*minibuffer*"];
-        int cur = text_cursors["*minibuffer*"];
+        TextBuffer& buf = text_buffers["*minibuffer*"];
+        int cur = buf.cursor_qs();
         // Insert at cursor (not append at end) — let Left/Right move
         // cursor and have typing land there. v0.12 batch 20.
         if (cur < 0 || cur > buf.length()) cur = buf.length();
         buf.insert(cur, to_append);
-        text_cursors["*minibuffer*"] = cur + to_append.length();
+        // insert() auto-advances cursor.
         const QString updated = buf.to_qstring();
         if (auto* c = chrome_of(main_widget))
             c->set_minibuffer(true, minibuffer_prompt, updated);
@@ -1108,7 +1118,7 @@ void LimnCommand::cmd_message_echo(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, "message/echo: text must be non-empty");
         return;
     }
-    GapBuffer& log = text_buffers["*messages*"];
+    TextBuffer& log = text_buffers["*messages*"];
     if (!log.is_empty()) log.insert(log.length(), "\n");
     log.insert(log.length(), text);
     text_buffers["*echo-area*"].clear();
@@ -1123,7 +1133,7 @@ void LimnCommand::cmd_message_log(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, "message/log: text must be non-empty");
         return;
     }
-    GapBuffer& log = text_buffers["*messages*"];
+    TextBuffer& log = text_buffers["*messages*"];
     if (!log.is_empty()) log.insert(log.length(), "\n");
     log.insert(log.length(), text);
     bridge->send_ok(id);
@@ -1933,7 +1943,6 @@ void LimnCommand::cmd_buffer_close(const QString& id, const QJsonObject& msg) {
             return;
         }
         text_buffers.remove(buffer_id);
-        text_cursors.remove(buffer_id);
         buffer_paths.remove(buffer_id);   // v0.22 §A
         for (const QString& wid : windows->all_ids()) {
             LimnWindow* w = windows->get(wid);
@@ -1965,7 +1974,7 @@ void LimnCommand::cmd_buffer_close(const QString& id, const QJsonObject& msg) {
 //
 // v0.39 W20 — enumerate every buffer the C++ side knows about:
 //   - PDF (mupdf) buffers from `registry` (id → Document)
-//   - text-engine buffers from `text_buffers` (id → GapBuffer),
+//   - text-engine buffers from `text_buffers` (id → TextBuffer),
 //     with their disk path from `buffer_paths` if buffer/load-file
 //     was called.  Reserved chrome buffers (*minibuffer*, *echo-area*,
 //     *messages*) are included so callers can introspect them; the
@@ -2179,7 +2188,7 @@ namespace {
 // Validate "this buffer-id is a text-engine buffer in our registry".
 // Returns true and outputs buffer-id; false and sends fail otherwise.
 bool resolve_text_buffer(LimnBridge* bridge,
-                         const QHash<QString, GapBuffer>& text_buffers,
+                         const QHash<QString, TextBuffer>& text_buffers,
                          const QString& id, const QJsonObject& msg,
                          QString& out_buf) {
     const QString buf = msg.value("buffer-id").toString();
@@ -2207,7 +2216,7 @@ void LimnCommand::cmd_buffer_cursor_get(const QString& id, const QJsonObject& ms
     QString buf;
     if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
     const QString s = text_buffers.value(buf).to_qstring();
-    int qs_idx = text_cursors.value(buf, 0);
+    int qs_idx = text_buffers.value(buf).cursor_qs();
     int cp = qsidx_to_cp(s, qs_idx);
     // If cursor somehow lands mid-surrogate (shouldn't with v0.16 setters,
     // but defensive against pre-v0.16 leftovers): snap to the nearest
@@ -2234,7 +2243,7 @@ void LimnCommand::cmd_buffer_cursor_set(const QString& id, const QJsonObject& ms
                               .arg(cp_offset).arg(total_cp));
         return;
     }
-    text_cursors[buf] = cp_to_qsidx(s, cp_offset);
+    text_buffers[buf].set_cursor_qs(cp_to_qsidx(s, cp_offset));
     // markup-interaction step 2 — refresh the mirror so the current-line
     // highlight tracks cursor moves (e.g. j/k in the notes list). Without
     // this, buffer/cursor-set updated only the backing index and the
@@ -2251,13 +2260,12 @@ void LimnCommand::cmd_buffer_insert(const QString& id, const QJsonObject& msg) {
         bridge->send_fail(id, "missing or empty 'text'");
         return;
     }
-    GapBuffer& content = text_buffers[buf];
-    int& cursor        = text_cursors[buf];           // UTF-16 index internally
+    TextBuffer& tb = text_buffers[buf];
 
     int qs_at;
     int cp_pos;          // v0.23.1 §D8 — capture pre-insertion cp position
     {
-        const QString s    = content.to_qstring();
+        const QString s    = tb.to_qstring();
         const int total_cp = cp_count(s);
         if (msg.contains("at") && msg.value("at").isDouble()) {
             const int cp_at = msg.value("at").toInt();
@@ -2269,15 +2277,14 @@ void LimnCommand::cmd_buffer_insert(const QString& id, const QJsonObject& msg) {
             qs_at  = cp_to_qsidx(s, cp_at);
             cp_pos = cp_at;
         } else {
-            qs_at  = cursor;
-            cp_pos = qsidx_to_cp(s, cursor);
+            qs_at  = tb.cursor_qs();
+            cp_pos = qsidx_to_cp(s, qs_at);
         }
     }
-    content.insert(qs_at, text);
-    // Cursor shifts (in UTF-16 internal units): AT-or-BEFORE-cursor
-    // insertion pushes cursor right by text's UTF-16 length; AFTER-cursor
-    // insertion leaves cursor in place.
-    if (qs_at <= cursor) cursor += text.length();
+    // TextBuffer::insert clamps qs_at into [begv_qs, zv_qs] (no-op if no
+    // narrow) and advances cursor automatically; narrow markers fix up
+    // matching limn/marker insertion-type semantics.
+    tb.insert(qs_at, text);
     sync_text_widget(buf);   // v0.22 §C — keep display in sync
 
     // v0.23.1 §D8 — emit buffer-modified for the Lisp undo subsystem.
@@ -2304,8 +2311,8 @@ void LimnCommand::cmd_buffer_delete(const QString& id, const QJsonObject& msg) {
     }
     const int cp_from = msg.value("from").toInt();
     const int cp_to   = msg.value("to").toInt();
-    GapBuffer& content = text_buffers[buf];
-    const QString s    = content.to_qstring();
+    TextBuffer& tb     = text_buffers[buf];
+    const QString s    = tb.to_qstring();
     const int total_cp = cp_count(s);
     if (cp_from < 0 || cp_to > total_cp || cp_from > cp_to) {
         bridge->send_fail(id, QString("range [%1, %2) out of buffer (cp-len=%3)")
@@ -2318,11 +2325,9 @@ void LimnCommand::cmd_buffer_delete(const QString& id, const QJsonObject& msg) {
     // payload's :before field carries the data the Lisp undo system
     // needs to reverse the operation.
     const QString removed = s.mid(qs_from, qs_to - qs_from);
-    content.remove(qs_from, qs_to - qs_from);
-    // Adjust cursor (UTF-16 internal) based on its position vs deleted range:
-    int& cursor = text_cursors[buf];
-    if (cursor >= qs_to)        cursor -= (qs_to - qs_from);  // shift left
-    else if (cursor > qs_from)  cursor = qs_from;             // snap to start
+    // TextBuffer::remove clips the range to [begv_qs, zv_qs), shifts
+    // cursor, and fixes up narrow markers.
+    tb.remove(qs_from, qs_to - qs_from);
     sync_text_widget(buf);   // v0.22 §C — keep display in sync
 
     {
@@ -2336,6 +2341,60 @@ void LimnCommand::cmd_buffer_delete(const QString& id, const QJsonObject& msg) {
         bridge->push_event("buffer-modified", ev);
     }
     bridge->send_ok(id);
+}
+
+// ─── v0.40 Phase 3 — buffer/narrow ────────────────────────────────────
+//
+// Tells the C++ side that BUFFER-ID is now narrowed to [start, end)
+// (codepoint coords) or, with `{clear: true}`, that any narrow should
+// be removed.  Narrow state lives inside TextBuffer; after the call,
+// sync_text_widget renders only the accessible slice and every wire
+// mutation handler (cursor-set / insert / delete) is automatically
+// constrained because they go through TextBuffer methods that clamp.
+//
+// Response includes effective begv/zv (in codepoint coords) so Lisp
+// can confirm the C++ side agrees with its narrow markers.
+
+void LimnCommand::cmd_buffer_narrow(const QString& id, const QJsonObject& msg) {
+    QString buf;
+    if (!resolve_text_buffer(bridge, text_buffers, id, msg, buf)) return;
+    TextBuffer& tb = text_buffers[buf];
+
+    if (msg.value("clear").toBool(false)) {
+        tb.widen();
+        sync_text_widget(buf);
+        QJsonObject data;
+        data.insert("buffer-id", buf);
+        data.insert("narrowed",  false);
+        bridge->send_ok(id, data);
+        return;
+    }
+
+    if (!msg.contains("start") || !msg.value("start").isDouble() ||
+        !msg.contains("end")   || !msg.value("end").isDouble()) {
+        bridge->send_fail(id, "buffer/narrow: missing or invalid 'start' / 'end' (or pass {clear: true})");
+        return;
+    }
+    const int cp_start = msg.value("start").toInt();
+    const int cp_end   = msg.value("end").toInt();
+    const QString s    = tb.to_qstring();
+    const int total_cp = cp_count(s);
+    if (cp_start < 0 || cp_end > total_cp || cp_start > cp_end) {
+        bridge->send_fail(id, QString("buffer/narrow: range [%1, %2) out of buffer (cp-len=%3)")
+                              .arg(cp_start).arg(cp_end).arg(total_cp));
+        return;
+    }
+    const int qs_start = cp_to_qsidx(s, cp_start);
+    const int qs_end   = cp_to_qsidx(s, cp_end);
+    tb.narrow_to_qs(qs_start, qs_end);
+    sync_text_widget(buf);
+
+    QJsonObject data;
+    data.insert("buffer-id", buf);
+    data.insert("narrowed",  true);
+    data.insert("start",     cp_start);
+    data.insert("end",       cp_end);
+    bridge->send_ok(id, data);
 }
 
 // ─── SPEC v0.22 §A — text-engine file I/O ──────────────────────────────
@@ -2370,10 +2429,15 @@ void LimnCommand::cmd_buffer_load_file(const QString& id, const QJsonObject& msg
     const QString content = in.readAll();
     f.close();
 
-    GapBuffer& gb = text_buffers[buf];
-    gb.clear();
-    if (!content.isEmpty()) gb.insert(0, content);
-    text_cursors[buf] = 0;
+    TextBuffer& tb = text_buffers[buf];
+    tb.clear();   // clear() also drops any narrow + cursor=0
+    if (!content.isEmpty()) {
+        tb.insert(0, content);
+        // insert() advances the cursor by content.length() (we
+        // inserted at-or-before cursor=0).  load-file's contract is
+        // "cursor at start of fresh content" — explicitly snap back.
+        tb.set_cursor_qs(0);
+    }
     buffer_paths[buf] = path;
     sync_text_widget(buf);   // v0.22 §C — keep display in sync
 
@@ -2573,7 +2637,13 @@ void LimnCommand::sync_text_widget(const QString& buffer_id) {
     LimnWindow* win = windows->get(focused_id);
     if (!win || win->buffer_id != buffer_id) return;
 
-    const QString s = text_buffers.value(buffer_id).to_qstring();
+    // v0.40 Phase 3 — show the widget only the accessible region.  When
+    // the buffer is narrowed, text_for_widget() returns the [BEGV, ZV)
+    // slice and cursor_for_widget_qs() returns the cursor as an offset
+    // within that slice (= absolute cursor - BEGV).  When not narrowed
+    // both reduce to the full content.
+    const TextBuffer& tb = text_buffers.value(buffer_id);
+    const QString s = tb.text_for_widget();
     // setPlainText is O(n) per call. For v0.22 this is the simplest
     // path; future work can do delta updates by tracking the last mirror.
     // We avoid recursive scroll-to-cursor by NOT calling moveCursor.
@@ -2581,7 +2651,7 @@ void LimnCommand::sync_text_widget(const QString& buffer_id) {
         tw->setPlainText(s);
     }
     // Mirror cursor position (UTF-16 offset → QTextCursor position).
-    const int qs_idx = text_cursors.value(buffer_id, 0);
+    const int qs_idx = tb.cursor_for_widget_qs();
     QTextCursor c = tw->textCursor();
     const int max_pos = tw->document()->characterCount() - 1;
     c.setPosition(qBound(0, qs_idx, qMax(0, max_pos)));
@@ -2832,7 +2902,7 @@ QJsonObject bookmark_to_json(const LimnCommand::BookmarkRecord& b) {
 // Resolve mupdf buffer-id (rejects text-engine and unknown). Returns
 // Document* or nullptr with fail-response already sent.
 Document* resolve_mupdf_buffer(LimnBridge* bridge, LimnBufferRegistry* reg,
-                                const QHash<QString,GapBuffer>& text_bufs,
+                                const QHash<QString,TextBuffer>& text_bufs,
                                 const QString& id, const QString& buffer_id) {
     if (buffer_id.isEmpty()) {
         bridge->send_fail(id, "missing 'buffer-id'");

@@ -87,6 +87,7 @@ HEADERS += \
     pdf_viewer/limn_buffer_registry.h \
     pdf_viewer/limn_bridge.h \
     pdf_viewer/gap_buffer.h \
+    pdf_viewer/limn_text_buffer.h \
     pdf_viewer/limn_command.h \
     pdf_viewer/limn_engine_mupdf.h \
     pdf_viewer/limn_input.h \

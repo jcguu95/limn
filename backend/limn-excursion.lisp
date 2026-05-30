@@ -356,14 +356,20 @@
       (funcall (find-symbol "SET-BUFFER-LOCAL-VALUE" lpkg)
                '*narrow-end-marker* m bid))))
 
-(defun %make-narrow-marker (bid pos)
-  "Create a marker at POS in BID. Returns the marker."
+(defun %make-narrow-marker (bid pos &key (insertion-type :before))
+  "Create a marker at POS in BID with the given INSERTION-TYPE.
+   v0.40 Phase 3 — narrow-end is created with :after so that an insert
+   AT the end pushes the end forward (extending the narrow), matching
+   Emacs's `ZV += nchars`.  narrow-start stays :before so an insert AT
+   the start is *inside* the narrow."
   (let ((mpkg (find-package '#:limn/marker)))
     (when mpkg
       (let* ((make (find-symbol "MAKE-MARKER" mpkg))
              (setm (find-symbol "SET-MARKER" mpkg))
+             (sit  (find-symbol "SET-MARKER-INSERTION-TYPE" mpkg))
              (m    (and make (funcall make))))
         (when (and m setm) (funcall setm m pos bid))
+        (when (and m sit)  (funcall sit  m insertion-type))
         m))))
 
 (defun %marker-pos (m)
@@ -564,8 +570,35 @@
   "Highest accessible point in current buffer (respects narrowing)."
   (point-max-of (current-buffer-id)))
 
+(defun %push-narrow-wire (bid &key clear)
+  "Best-effort sync of the current narrow state to C++ via buffer/narrow.
+   When CLEAR is t the C++ side widens; otherwise the active narrow
+   marker positions are pushed.  Errors are swallowed because the wire
+   may not be live (unit tests).  Late-bound on limn:call so this
+   module can load before limn.lisp."
+  (let* ((pkg (find-package '#:limn))
+         (call (and pkg (find-symbol "CALL" pkg))))
+    (when (and call (fboundp call))
+      (handler-case
+          (cond
+            (clear
+             (funcall call "buffer/narrow"
+                      :|buffer-id| bid :|clear| t))
+            (t
+             (let ((s (%marker-pos (%narrow-start bid)))
+                   (e (%marker-pos (%narrow-end   bid))))
+               (when (and s e)
+                 (funcall call "buffer/narrow"
+                          :|buffer-id| bid
+                          :|start|     s
+                          :|end|       e)))))
+        (error () nil)))))
+
 (defun narrow-to-region (start end)
-  "Limit point-min/point-max to [START, END)."
+  "Limit point-min/point-max to [START, END).
+   v0.40 Phase 3: also push the new narrow range to the C++ side via
+   buffer/narrow, so the QPlainTextEdit widget physically shows only
+   the accessible region."
   (when (> start end)
     (error "narrow-to-region: start (~a) > end (~a)" start end))
   (let* ((bid (current-buffer-id))
@@ -577,18 +610,22 @@
     ;; release any pre-existing markers to keep marker-count tidy
     (%release-marker (%narrow-start bid))
     (%release-marker (%narrow-end   bid))
-    (%set-narrow-start bid (%make-narrow-marker bid s))
-    (%set-narrow-end   bid (%make-narrow-marker bid e))
+    (%set-narrow-start bid (%make-narrow-marker bid s :insertion-type :before))
+    (%set-narrow-end   bid (%make-narrow-marker bid e :insertion-type :after))
+    (%push-narrow-wire bid)
     nil))
 
 (defun widen ()
-  "Remove narrowing in current buffer."
+  "Remove narrowing in current buffer.
+   v0.40 Phase 3: also tells C++ to widen so the widget restores the
+   full content."
   (let ((bid (current-buffer-id)))
     (when bid
       (%release-marker (%narrow-start bid))
       (%release-marker (%narrow-end   bid))
       (%set-narrow-start bid nil)
-      (%set-narrow-end   bid nil)))
+      (%set-narrow-end   bid nil)
+      (%push-narrow-wire bid :clear t)))
   nil)
 
 (defmacro save-restriction (&body body)
@@ -612,12 +649,17 @@
            (cond
              ((and ,saved-s-pos ,saved-e-pos)
               (%set-narrow-start
-               ,bid (%make-narrow-marker ,bid ,saved-s-pos))
+               ,bid (%make-narrow-marker ,bid ,saved-s-pos
+                                          :insertion-type :before))
               (%set-narrow-end
-               ,bid (%make-narrow-marker ,bid ,saved-e-pos)))
+               ,bid (%make-narrow-marker ,bid ,saved-e-pos
+                                          :insertion-type :after))
+              ;; v0.40 Phase 3 — sync the restored narrow to C++.
+              (%push-narrow-wire ,bid))
              (t
               (%set-narrow-start ,bid nil)
-              (%set-narrow-end   ,bid nil))))))))
+              (%set-narrow-end   ,bid nil)
+              (%push-narrow-wire ,bid :clear t))))))))
 
 ;;; ── §C. save-excursion ───────────────────────────────────────────────
 
