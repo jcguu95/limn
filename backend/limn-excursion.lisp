@@ -54,6 +54,9 @@
            ;; v0.40 §2.2 — modeline indicator: "Narrow" when narrowed,
            ;; "" otherwise.  Modes thread this into their modeline format.
            #:format-narrow-indicator
+           ;; v0.40 §2.4 — find top-level Lisp form bounds for
+           ;; narrow-to-defun.  Returns (values start end) or nil/nil.
+           #:find-defun-bounds
            ;; v0.40 §2.3 — dim overlays for the non-accessible region.
            #:install-dim-overlays
            #:remove-dim-overlays
@@ -405,6 +408,75 @@
 (defun narrow-end-of (bid)
   "Position of BID's active narrow-end, or NIL when not narrowed."
   (%marker-pos (%narrow-end bid)))
+
+;;; ── v0.40 §2.4 — find-defun-bounds for narrow-to-defun ──────────────
+;;;
+;;; Uses the host SBCL reader to walk top-level forms.  Skips
+;;; whitespace + line ( ; ... ) and block ( #| ... |# ) comments
+;;; manually so we know the form's real START position before handing
+;;; the substring to READ-FROM-STRING (which only reports the END).
+
+(defun %skip-cl-ws (text pos)
+  "Skip whitespace + #\\; line comments + #| ... |# block comments
+   starting at POS.  Returns the new POS, or (length text) at EOF."
+  (let ((len (length text)))
+    (loop while (< pos len) do
+      (let ((c (char text pos)))
+        (cond
+          ((member c '(#\Space #\Tab #\Newline #\Return) :test #'char=)
+           (incf pos))
+          ((char= c #\;)
+           (loop while (and (< pos len)
+                            (not (char= (char text pos) #\Newline)))
+                 do (incf pos)))
+          ((and (char= c #\#) (< (1+ pos) len)
+                (char= (char text (1+ pos)) #\|))
+           (incf pos 2)
+           (let ((depth 1))
+             (loop while (and (< pos len) (plusp depth)) do
+               (cond
+                 ((and (char= (char text pos) #\|)
+                       (< (1+ pos) len)
+                       (char= (char text (1+ pos)) #\#))
+                  (decf depth) (incf pos 2))
+                 ((and (char= (char text pos) #\#)
+                       (< (1+ pos) len)
+                       (char= (char text (1+ pos)) #\|))
+                  (incf depth) (incf pos 2))
+                 (t (incf pos))))))
+          (t (return-from %skip-cl-ws pos)))))
+    pos))
+
+(defun find-defun-bounds (text point)
+  "Return (values START END) of the top-level Common Lisp form in TEXT
+   that contains POINT, or (values nil nil) when POINT falls between
+   forms or parsing fails.  Backed by READ-FROM-STRING; comments and
+   whitespace between forms are skipped."
+  (let ((pos 0)
+        (len (length text)))
+    (block out
+      (loop while (< pos len) do
+        (let ((start (%skip-cl-ws text pos)))
+          (when (>= start len) (return-from out (values nil nil)))
+          ;; Reader the form *preserving* trailing whitespace so END is
+          ;; exactly one past the form's last char — not the position
+          ;; after the reader skipped following whitespace.  Without
+          ;; this, two adjacent forms separated by a newline would
+          ;; share boundaries (form₁.end == form₂.start), and
+          ;; narrow-to-defun on the first form would include the
+          ;; separator newline.
+          (let ((end (handler-case
+                         (with-input-from-string (in text :start start)
+                           (let ((*read-suppress* nil))
+                             (read-preserving-whitespace in t nil))
+                           (+ start (file-position in)))
+                       (error () nil))))
+            (cond
+              ((null end) (return-from out (values nil nil)))
+              ((and (<= start point) (<= point end))
+               (return-from out (values start end)))
+              (t (setf pos end))))))
+      (values nil nil))))
 
 (defun format-narrow-indicator (bid)
   "Return \"Narrow\" when BID is narrowed, \"\" otherwise.  Designed

@@ -182,6 +182,57 @@
                           :|text| (format nil "Narrowed to [~a, ~a)"
                                           start end))))))))))
 
+  ;; v0.40 §2.4: narrow-to-defun (Emacs C-x n d).  Reader-driven: walk
+  ;; top-level forms of the focused buffer's text, find the one that
+  ;; contains point, and narrow to its bounds.  Lisp-specific (uses
+  ;; READ-FROM-STRING).  Other major modes can later override.
+  (limn/cmd:defcommand cl-user::narrow-to-defun ()
+    (lambda ()
+      (let* ((tpkg  (find-package '#:limn/text))
+             (fbf   (and tpkg (find-symbol "%FOCUSED-TEXT-BUFFER" tpkg)))
+             (buf   (and fbf (fboundp fbf) (funcall fbf)))
+             (cur-fn (and tpkg (find-symbol "%CURSOR" tpkg)))
+             (txt-fn (and tpkg (find-symbol "%BUFFER-TEXT" tpkg)))
+             (cur   (and buf cur-fn (fboundp cur-fn) (funcall cur-fn buf)))
+             (txt   (and buf txt-fn (fboundp txt-fn) (funcall txt-fn buf)))
+             (xpkg  (find-package '#:limn/excursion))
+             (lpkg  (find-package '#:limn/local))
+             (fdb   (and xpkg (find-symbol "FIND-DEFUN-BOUNDS" xpkg)))
+             (ntr   (and xpkg (find-symbol "NARROW-TO-REGION" xpkg)))
+             (idoy  (and xpkg (find-symbol "INSTALL-DIM-OVERLAYS" xpkg)))
+             (call-sym (and (find-package '#:limn)
+                            (find-symbol "CALL" '#:limn))))
+        (cond
+          ((not (and buf (integerp cur) (stringp txt) fdb (fboundp fdb)))
+           (when (and call-sym (fboundp call-sym))
+             (ignore-errors
+               (funcall call-sym "message/echo"
+                        :|text| "narrow-to-defun: no buffer"))))
+          (t
+           (multiple-value-bind (start end) (funcall fdb txt cur)
+             (cond
+               ((not (and start end))
+                (when (and call-sym (fboundp call-sym))
+                  (ignore-errors
+                    (funcall call-sym "message/echo"
+                             :|text| "Point is not in a defun"))))
+               (t
+                (let ((xsym (and xpkg (find-symbol "*CURRENT-BUFFER*" xpkg)))
+                      (lsym (and lpkg (find-symbol "*CURRENT-BUFFER-ID*" lpkg))))
+                  (progv
+                      (remove nil (list xsym lsym))
+                      (remove nil (list (and xsym buf) (and lsym buf)))
+                    (when (and ntr (fboundp ntr))
+                      (funcall ntr start end))))
+                (when (and idoy (fboundp idoy))
+                  (ignore-errors (funcall idoy buf)))
+                (when (and call-sym (fboundp call-sym))
+                  (ignore-errors
+                    (funcall call-sym "message/echo"
+                             :|text|
+                             (format nil "Narrowed to defun [~a, ~a)"
+                                     start end))))))))))))
+
   (limn/cmd:defcommand cl-user::widen ()
     (lambda ()
       (let* ((tpkg  (find-package '#:limn/text))
@@ -265,6 +316,14 @@
                     (find-symbol "WIDEN" :cl-user))
        (error (e)
          (format *error-output* ";; C-x n w errored: ~a~%" e)))))
+
+  (limn/keys:define-key
+   global-keymap "C-x n d"
+   (lambda (ev) (declare (ignore ev))
+     (handler-case (limn/cmd:call-interactively
+                    (find-symbol "NARROW-TO-DEFUN" :cl-user))
+       (error (e)
+         (format *error-output* ";; C-x n d errored: ~a~%" e)))))
 
   ;; Enable which-key by default — popup hints after prefix-key idle.
   ;; Users wanting it off can call (limn/which-key:which-key-mode -1)

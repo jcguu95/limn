@@ -70,6 +70,13 @@
          (d (%response-data r)))
     (length (or (getf d :|text|) ""))))
 
+(defun %buffer-text (buf)
+  "Full text of BUF as a string.  v0.40 §2.4 — used by narrow-to-defun
+   so the Lisp reader can walk top-level forms."
+  (let* ((r (%limn-call "buffer/text" :|buffer-id| buf))
+         (d (%response-data r)))
+    (or (getf d :|text|) "")))
+
 ;;; ── commands (defined in CL-USER per init.lisp convention) ─────────────
 
 (in-package #:cl-user)
