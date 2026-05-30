@@ -279,37 +279,78 @@
 
 (defun %on-buffer-opened (ev)
   "Create a mode-buffer for the newly-opened wire buffer and activate the
-   engine-default major mode (e.g. mupdf → pdf-mode). Also marks the
-   buffer as the active one for its window so the next key event routes
-   to it."
+   engine-default major mode (e.g. mupdf → pdf-mode).
+
+   v0.40 race guards:
+
+   (1) DO NOT clobber an already-set major mode.  A higher-level
+       command (e.g. M-x ibuffer) may have set bid's mode-buffer up with
+       its preferred major mode BEFORE this event landed on the pump
+       thread.  Respect that choice.  (The reverse order — event lands
+       first, then explicit activation — still works because the
+       explicit activate overrides whatever default we set here.)
+
+   (2) DO NOT clobber a window's active buffer if it's been pointed
+       elsewhere.  If Lisp has explicitly called buffer/show <other-bid>
+       on the same window between the engine-load and this event landing,
+       *window-active-buffer*[wid] = other-bid (not bid).  Honour that —
+       overriding here was the v0.39 cause of `n` in ibuffer typing into
+       the invisible new buffer after ibuffer auto-opened a second file.
+       Only set active if the slot is currently nil OR already equals
+       the new bid (idempotent re-fire).
+
+   v0.40 also: update limn/buffer's path from the event's :|path| field
+   (the wire's emit_buffer_opened populates it from buffer_paths /
+   Document::get_path).  Cheap belt-and-suspenders alongside the
+   limn:call sync-shim for buffer/load-file."
   (let* ((rt    (find-package :limn/runtime))
          (mode  (find-package :limn/mode))
+         (buf   (find-package :limn/buffer))
          (bid   (getf ev :|buffer-id|))
          (wid   (or (getf ev :|win-id|) "w1"))
-         (engine (getf ev :|engine|)))
+         (engine (getf ev :|engine|))
+         (path   (getf ev :|path|)))
     (when (and rt mode bid)
       (let* ((find-mb     (find-symbol "FIND-MODE-BUFFER"     rt))
              (reg-mb      (find-symbol "REGISTER-MODE-BUFFER" rt))
              (set-active  (find-symbol "SET-WINDOW-ACTIVE-BUFFER" rt))
+             (get-active  (find-symbol "WINDOW-ACTIVE-BUFFER" rt))
              (default-of  (find-symbol "ENGINE-DEFAULT-MODE"  rt))
              (make-mb     (find-symbol "MAKE-MODE-BUFFER"     mode))
              (activate    (find-symbol "ACTIVATE"             mode))
              (find-mode   (find-symbol "FIND-MODE"            mode))
+             (major-of    (find-symbol "MAJOR-MODE"           mode))
              (existing    (and find-mb (funcall find-mb bid)))
              (mb          (or existing
                               (let ((new (funcall make-mb)))
                                 (funcall reg-mb bid new)
                                 new)))
              (mode-name   (and engine default-of
-                               (funcall default-of engine))))
-        (when (and activate find-mode mode-name
+                               (funcall default-of engine)))
+             ;; (1) Guard against clobbering an already-set major mode.
+             (already-set (and existing major-of
+                               (funcall major-of existing))))
+        (when (and (not already-set)
+                   activate find-mode mode-name
                    (funcall find-mode mode-name))
           (handler-case (funcall activate mb mode-name)
             (error (e) (format *error-output*
                                "limn: activate ~a on ~a errored: ~a~%"
                                mode-name bid e))))
+        ;; (2) Guard against clobbering an explicitly-set window active.
         (when set-active
-          (funcall set-active wid bid))))))
+          (let ((current (and get-active (funcall get-active wid))))
+            (when (or (null current) (equal current bid))
+              (funcall set-active wid bid))))
+        ;; Bonus: refresh limn/buffer path from event (cheap, idempotent).
+        (when (and buf path (stringp path) (plusp (length path)))
+          (let* ((lookup  (find-symbol "LOOKUP" buf))
+                 (path-fn (find-symbol "BUFFER-PATH" buf))
+                 (b       (and lookup (funcall (symbol-function lookup) bid))))
+            (when (and b path-fn)
+              (handler-case
+                  (funcall (fdefinition (list 'setf path-fn)) path b)
+                (error () nil)))))))))
 
 (defun %on-buffer-closed (ev)
   (let ((rt  (find-package :limn/runtime))
@@ -620,23 +661,102 @@
   "Synchronous call. Returns the decoded response plist."
   (unless *session* (error "limn: not started"))
   (let ((resp (apply (%sym :limn/dispatch '#:call) *session* cmd args)))
-    ;; v0.33b: synchronous-registration shim. limn/overlays' default
-    ;; *buffer-kind-fn* queries limn/buffer to route text-buffer overlays
-    ;; through the "text-range" wire type. The buffer-opened event handler
-    ;; populates limn/buffer too but fires async — by the time callers
-    ;; chain view/overlays after bridge/engine-load, the registration may
-    ;; not have happened yet. Mirror it here from the response.
-    (when (and (equal cmd "bridge/engine-load")
-               (eq (getf resp :|ok|) t))
-      (let* ((data   (getf resp :|data|))
-             (bid    (and data (getf data :|buffer-id|)))
-             (engine (getf args :|engine|))
-             (path   (getf args :|path|))
-             (pkg    (find-package '#:limn/buffer))
-             (reg    (and pkg (find-symbol "REGISTER" pkg))))
-        (when (and bid engine reg (fboundp reg))
-          (ignore-errors (funcall reg bid (or path "") engine)))))
+    ;; ── v0.40 synchronous-registration shim ────────────────────────────
+    ;;
+    ;; The binary's authoritative state lives on the wire side
+    ;; (text_buffers, buffer_paths, window→buffer map).  The Lisp side
+    ;; keeps parallel registries (limn/buffer, limn/runtime:*window-
+    ;; active-buffer*) for fast lookup and offline state.  These need
+    ;; to stay in sync.
+    ;;
+    ;; SOME sync arrives via async events (buffer-opened, buffer-closed)
+    ;; that the wire emits.  But events run on the pump thread, so any
+    ;; CALLER that chains wire commands and reads Lisp state in between
+    ;; can see stale data — and any Lisp code that issues a follow-up
+    ;; command (e.g. ibuffer's buffer/show after engine-load) can race
+    ;; the event handler.
+    ;;
+    ;; Pre-v0.40 we mirrored only bridge/engine-load → limn/buffer here.
+    ;; Result: buffer/load-file left the registry's path stale (= empty
+    ;; from engine-load's arg) — ibuffer rendered every text buffer as
+    ;; <no file>.  buffer/show didn't update *window-active-buffer* —
+    ;; subsequent keystrokes routed through the OLD mode-buffer's
+    ;; keymap.  buffer/close didn't drop the limn/buffer entry — ibuffer
+    ;; listed phantom buffers.
+    ;;
+    ;; Now we mirror every successful state-changing command synchronously
+    ;; right here.  Callers can trust Lisp state immediately after the
+    ;; call returns; the event-handler updates become idempotent or
+    ;; redundant rather than the primary sync mechanism.
+    (when (eq (getf resp :|ok|) t)
+      (handler-case (%sync-after-call cmd args resp)
+        (error (e) (format *error-output*
+                            "limn: sync-shim after ~a errored: ~a~%" cmd e))))
     resp))
+
+(defun %sync-after-call (cmd args resp)
+  "Mirror wire-side state changes into Lisp-side registries."
+  (let ((buf-pkg (find-package '#:limn/buffer))
+        (rt-pkg  (find-package '#:limn/runtime)))
+    (cond
+      ;; ── bridge/engine-load: new buffer was created, may have engine-
+      ;;    default path arg (often "").  Register in limn/buffer.  Also
+      ;;    mark it active in the requesting window — the wire side
+      ;;    DOES show it; mirroring that means find-file etc. can call
+      ;;    mode-buffer-for-window immediately without waiting for the
+      ;;    buffer-opened event.
+      ((equal cmd "bridge/engine-load")
+       (let* ((data   (getf resp :|data|))
+              (bid    (and data (getf data :|buffer-id|)))
+              (engine (getf args :|engine|))
+              (path   (getf args :|path|))
+              (win-id (getf args :|win-id|))
+              (reg    (and buf-pkg (find-symbol "REGISTER" buf-pkg)))
+              (set-a  (and rt-pkg
+                           (find-symbol "SET-WINDOW-ACTIVE-BUFFER" rt-pkg))))
+         (when (and bid engine reg (fboundp reg))
+           (funcall (symbol-function reg) bid (or path "") engine))
+         (when (and bid win-id set-a (fboundp set-a))
+           (funcall (symbol-function set-a) win-id bid))))
+
+      ;; ── buffer/load-file: wire-side just attached a path to bid.
+      ;;    Update limn/buffer's path in place (preserves metadata,
+      ;;    unlike re-registering).
+      ((equal cmd "buffer/load-file")
+       (let* ((bid    (getf args :|buffer-id|))
+              (path   (getf args :|path|))
+              (lookup (and buf-pkg (find-symbol "LOOKUP" buf-pkg)))
+              (path-fn (and buf-pkg
+                            (find-symbol "BUFFER-PATH" buf-pkg))) ; defstruct accessor
+              (b      (and lookup bid (fboundp lookup)
+                           (funcall (symbol-function lookup) bid))))
+         (when (and b path path-fn)
+           ;; defstruct gives us (setf buffer-path) for free.
+           (funcall (fdefinition (list 'setf path-fn)) path b))))
+
+      ;; ── buffer/show: wire flipped the visible buffer in win-id.
+      ;;    Mirror to *window-active-buffer* so dispatch routes the
+      ;;    next keystroke through the right mode-buffer.  Before
+      ;;    v0.40, only the buffer-opened event updated this — but
+      ;;    buffer/show doesn't fire that event, so Lisp stayed stuck
+      ;;    on the old buffer and keys went to the old mode's keymap.
+      ((equal cmd "buffer/show")
+       (let* ((bid    (getf args :|buffer-id|))
+              (win-id (getf args :|win-id|))
+              (set-a  (and rt-pkg
+                           (find-symbol "SET-WINDOW-ACTIVE-BUFFER" rt-pkg))))
+         (when (and bid win-id set-a (fboundp set-a))
+           (funcall (symbol-function set-a) win-id bid))))
+
+      ;; ── buffer/close: wire-side destroyed bid.  Drop our entry too.
+      ;;    The buffer-closed event handler unregisters the mode-buffer,
+      ;;    but limn/buffer wasn't being cleaned up — leftover entries
+      ;;    showed up in ibuffer as phantom rows pointing at dead bids.
+      ((equal cmd "buffer/close")
+       (let* ((bid   (getf args :|buffer-id|))
+              (unreg (and buf-pkg (find-symbol "UNREGISTER" buf-pkg))))
+         (when (and bid unreg (fboundp unreg))
+           (funcall (symbol-function unreg) bid)))))))
 
 (defun notify (cmd &rest args)
   "Fire-and-forget."

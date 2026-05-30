@@ -1,0 +1,445 @@
+#+TITLE: Ibuffer Mode 測試清單
+#+AUTHOR: Claude
+#+DATE: 2026-05-29
+#+STARTUP: showall
+#+TODO: TODO(t) IN-PROGRESS(i) | DONE(d) FAIL(f)
+
+* 使用說明
+- 每一個 ~** TODO~ 項目代表一個測試步驟。
+- 把指令貼到 terminal 跑完，比對「預期」與「不預期」。
+- 命中「預期」→ 把 ~** TODO~ 改成 ~** DONE~（或 ~C-c C-t~ 切狀態）。
+- 命中「不預期」→ 改成 ~** FAIL~，然後跳到該節最底的「除錯線索」。
+- 全部指令都直接從家目錄或任何路徑都可以執行（用了絕對路徑），不需要事先 cd。
+
+* 環境前提
+- 作業系統：macOS（你的 worktree 在 ~/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/~）。
+- ~nix~ 已安裝、~nix develop~ 可在這個 repo 進入 shell。
+- 不需要 sioyek binary 也可以做到第四節為止；第五、六節才需要 binary。
+
+* 一、Ibuffer 自身的 unit tests（先做，最快）
+:PROPERTIES:
+:LEVEL: 基礎驗證
+:END:
+
+** TODO Step 1.1：跑 ibuffer 的 22 個 unit tests
+指令：
+#+BEGIN_SRC sh
+cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/ && \
+nix develop --command sbcl --script /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/tests/unit/run-unit.lisp 2>&1 | \
+awk '/┌─ IBUFFER/{n=$0; getline; while ($0 !~ /└─/) getline; print n, $0}'
+#+END_SRC
+
+預期：
+- 印出約 22 行，每行以 ~┌─ IBUFFER-...~ 開頭，後面跟 ~└─ N passed, 0 failed~。
+- 每一行的 ~failed~ 數字都是 ~0~。
+- 第一行類似：
+  : ┌─ IBUFFER-COLLECT-ROWS-EMPTY  └─ 1 passed, 0 failed
+
+不預期：
+- 任何一行 ~failed: N~ 其中 ~N > 0~ → 該測試壞了。
+- 整段空白 → ~nix develop~ 沒進到 shell，或 ASDF 載入炸掉。
+- 印出 ~ERROR: Execution of a form compiled with errors~ → 程式碼語法錯。
+
+除錯線索：
+- 找出第一個 failed 的測試名（例如 ~IBUFFER-MARK-D-THEN-EXECUTE-KILLS~），grep 該名字到 ~backend/tests/unit/ibuffer.lisp~ 看 assertion 內容。
+
+* 二、全 unit suite 回歸檢查
+** TODO Step 2.1：跑完整 unit suite，看總計
+指令：
+#+BEGIN_SRC sh
+nix develop --command sbcl --script /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/tests/unit/run-unit.lisp 2>&1 | tail -15
+#+END_SRC
+
+預期：
+- 最後一行（或倒數幾行內）出現：
+  : 2709 passed, 5 failed (2714 total)
+- ~Failures:~ 區塊裡 **只有** 這 5 個（順序可能不一樣）：
+  - ~[INIT-LOAD-RETURNS-NIL-WHEN-NONE-FOUND]~
+  - ~[V027-B-PDF-SEARCH-EXECUTE-STORES-STATE]~
+  - ~[V027-B-SEARCH-RESET-CLEARS-STATE]~
+  - ~[V027-I-SEARCH-STATE-CLEARED-ON-BUFFER-CLOSE]~
+  - ~[V027-I-SEARCH-STATE-ISOLATED-PER-BUFFER]~
+
+不預期：
+- 數字變成 ~2708 passed, 6 failed~（或更多 fail）→ 我的 patch 引發新的失敗。
+- ~Failures:~ 出現任何 ~IBUFFER-~ 名字 → 第一節應該已抓到，這裡再次確認。
+- 出現 ~[TEXT-MODE-...]~、~[DEFCOMMAND-...]~、~[RUNTIME-...]~ 等不在上面 5 個白名單裡的 → 旁邊有東西被打到。
+
+除錯線索：
+- 比對 fail 名單與上面 5 個白名單的差集即為「我這次新增的問題」。
+
+* 三、ASDF 載入鏈乾淨度
+** TODO Step 3.1：force-reload 整個 system，確認沒有 warning
+指令：
+#+BEGIN_SRC sh
+nix develop --command sbcl --non-interactive \
+  --eval "(require :asdf)" \
+  --eval "(push \"/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/\" asdf:*central-registry*)" \
+  --eval "(asdf:clear-system :limn)" \
+  --eval "(asdf:load-system :limn :force t)" 2>&1 | \
+  grep -iE "warning|error" | grep -v "found several entries" | head -40
+#+END_SRC
+
+預期：
+- 輸出空白（一個字都沒有），或只有 ~; compiling~ / ~; loading~ 之類的 info 行（這些不會被 grep 抓到）。
+- 即使有 warning，也不應該包含 ~IBUFFER~ / ~limn-ibuffer~ 字樣。
+
+不預期：
+- 出現 ~STYLE-WARNING: ... limn-ibuffer~ → forward-ref 沒處理好。
+- 出現 ~WARNING: redefining ...~ → 重複定義。
+- 出現 ~undefined function~ / ~undefined variable~ → 缺 export 或缺 use。
+
+除錯線索：
+- 把 grep 條件拿掉再跑一次，看完整 warning 上下文。
+
+* 四、純 Lisp REPL 手動探索（不需 binary）
+** TODO Step 4.1：開 REPL 並載入 system
+指令：
+#+BEGIN_SRC sh
+nix develop --command sbcl \
+  --eval "(require :asdf)" \
+  --eval "(push \"/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/\" asdf:*central-registry*)" \
+  --eval "(asdf:load-system :limn)"
+#+END_SRC
+
+預期：
+- 進到 SBCL prompt ~* ~（一顆星號加空格）。
+- 沒有任何 ~debugger invoked~ 字樣。
+
+不預期：
+- 跳到 debugger 提示 ~0]~ → 載入過程出錯，按 ~0 RET~ 退出再看訊息。
+
+** TODO Step 4.2：註冊三個假 buffer
+在 REPL 內貼：
+#+BEGIN_SRC lisp
+(limn/buffer:register "b1" "/tmp/zeta.txt"  "text")
+(limn/buffer:register "b2" "/tmp/alpha.pdf" "mupdf")
+(limn/buffer:register "b3" "/tmp/mid.txt"   "text")
+#+END_SRC
+
+預期：
+- 每一行印出一個 ~#S(LIMN/BUFFER::BUFFER ...)~ 結構回傳值。
+
+不預期：
+- 出現 ~The function LIMN/BUFFER:REGISTER is undefined~ → ASDF 沒載成功，回 4.1。
+
+** TODO Step 4.3：依 id 排序、取得 ids
+#+BEGIN_SRC lisp
+(let ((rows (limn/ibuffer:sort-rows (limn/ibuffer:collect-rows) :id)))
+  (mapcar #'limn/ibuffer:ibuffer-row-id rows))
+#+END_SRC
+
+預期：印出 ~("b1" "b2" "b3")~
+
+不預期：
+- 印出 ~NIL~ → registry 沒收進去（4.2 沒跑成功）。
+- 順序不對（例如 ~("b3" "b1" "b2")~）→ sort-rows bug。
+
+** TODO Step 4.4：依 path 排序
+#+BEGIN_SRC lisp
+(let ((rows (limn/ibuffer:sort-rows (limn/ibuffer:collect-rows) :path)))
+  (mapcar #'limn/ibuffer:ibuffer-row-path rows))
+#+END_SRC
+
+預期：~("/tmp/alpha.pdf" "/tmp/mid.txt" "/tmp/zeta.txt")~
+
+不預期：
+- 順序不對 → ~%row-field~ 沒抓到 path。
+
+** TODO Step 4.5：看 render 出來的整張表
+#+BEGIN_SRC lisp
+(let* ((rows (limn/ibuffer:sort-rows (limn/ibuffer:collect-rows) :id))
+       (s    (limn/ibuffer:make-ibuffer-state :rows rows)))
+  (format t "~a" (limn/ibuffer:format-ibuffer-results s)))
+#+END_SRC
+
+預期：印出（欄寬可能略有差異）
+#+BEGIN_EXAMPLE
+M  ID                ENGINE   PATH
+   b1                text     /tmp/zeta.txt
+   b2                mupdf    /tmp/alpha.pdf
+   b3                text     /tmp/mid.txt
+#+END_EXAMPLE
+最後再印一個 ~NIL~（format 的回傳值）。
+
+不預期：
+- 表頭沒出現 → ~+ibuffer-header+~ 沒 export 或定義錯。
+- 某幾行 path 變成 ~<no file>~ → ~limn/buffer:path~ 回傳怪東西。
+- 整個輸出是 ~No buffers.~ → ~collect-rows~ 回空 list（4.2 沒成功）。
+
+** TODO Step 4.6：substring filter
+#+BEGIN_SRC lisp
+(let ((rows (limn/ibuffer:filter-rows
+              (limn/ibuffer:sort-rows (limn/ibuffer:collect-rows) :id)
+              "alpha")))
+  (mapcar #'limn/ibuffer:ibuffer-row-id rows))
+#+END_SRC
+
+預期：~("b2")~
+
+不預期：
+- ~NIL~ 或多餘 id → filter 比對字串方向錯了（記得是 case-insensitive 對 path 跟 id 搜尋）。
+
+** TODO Step 4.7：mark 操作
+#+BEGIN_SRC lisp
+(let ((s (limn/ibuffer:make-ibuffer-state)))
+  (limn/ibuffer:mark-set s "b1" #\D)
+  (limn/ibuffer:mark-set s "b1" #\S)
+  (limn/ibuffer:marks-of s "b1"))
+#+END_SRC
+
+預期：~(#\D #\S)~
+
+不預期：
+- ~(#\D #\D)~ 或 ~(#\S)~ → mark-set 沒去重 / 順序壞了。
+
+** TODO Step 4.8：ibuffer-mode 註冊在 mode registry 裡
+#+BEGIN_SRC lisp
+(limn/mode:find-mode (find-symbol "IBUFFER-MODE" :cl-user))
+#+END_SRC
+
+預期：印出一個 ~#S(LIMN/MODE::MODE ...)~ 結構，其中
+- ~:NAME COMMON-LISP-USER::IBUFFER-MODE~
+- ~:TYPE :MAJOR~
+- ~:MODELINE-NAME "IBuffer"~
+
+不預期：
+- ~NIL~ → install 沒跑，或 mode-sym 不一致。
+
+** TODO Step 4.9：keymap 有所有預期的 keys
+#+BEGIN_SRC lisp
+(let* ((m  (limn/mode:find-mode (find-symbol "IBUFFER-MODE" :cl-user)))
+       (km (limn/mode:mode-keymap m)))
+  (sort (mapcar #'car (limn/keys:describe-bindings km)) #'string<))
+#+END_SRC
+
+預期：list 內容（排序後）等同：
+#+BEGIN_EXAMPLE
+("/" "<down>" "<up>" "RET" "S" "U" "d" "f" "g" "n" "p" "q" "s" "u" "x")
+#+END_EXAMPLE
+（共 15 個元素。）
+
+不預期：
+- 缺其中任一個 key → ~install~ 漏綁 / 拼錯。
+- 多出意料外的 key（例如 ~"a"~）→ 多綁了。
+
+** TODO Step 4.10：13 個 ibuffer-* commands 註冊到位
+#+BEGIN_SRC lisp
+(length
+  (remove-if-not
+    (lambda (c) (search "IBUFFER" (symbol-name (limn/cmd:command-name c))))
+    (limn/cmd:list-commands)))
+#+END_SRC
+
+預期：~13~
+
+不預期：
+- 數字小於 13 → 有 ~defcommand~ 沒被 eval 到。
+- 數字大於 13 → 別人也用 IBUFFER 命名。
+
+** TODO Step 4.11：離開 REPL
+#+BEGIN_SRC lisp
+(sb-ext:exit)
+#+END_SRC
+
+預期：回到 shell prompt。
+
+* 五、Integration tests（需要 sioyek binary）
+** TODO Step 5.1：確認 binary 存在
+指令：
+#+BEGIN_SRC sh
+ls -la /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/sioyek/limn.app/Contents/MacOS/limn 2>/dev/null || \
+ls -la /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/sioyek/sioyek.app/Contents/MacOS/sioyek
+#+END_SRC
+
+預期：
+- 印出 ~-rwxr-xr-x~ 開頭的可執行檔資訊。
+
+不預期 / 跳過：
+- 兩個都印 ~No such file or directory~ → 沒編 binary。**跳過五、六節**，ibuffer 純 Lisp 已通過 1–4 驗證就夠了。
+
+** TODO Step 5.2：跑 integration test suite
+指令：
+#+BEGIN_SRC sh
+bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/tests/run-tests.sh 2>&1 | tail -30
+#+END_SRC
+
+預期：
+- 最後印出 pass/fail 統計。
+- 失敗清單裡 **不含** ~ibuffer~ 或 ~Buffer List~ 字樣（因為我沒寫 integration test，這層只是看「沒有打壞既有東西」）。
+
+不預期：
+- 出現 ~connection refused~ / ~socket not found~ → 5.1 已通過但 binary 啟動有問題，看 ~/tmp/limn-test.log~。
+- 出現新的 ~buffer/close~、~buffer/show~ 等相關 fail → 我的 ~%install-default-vtable~ 撞到 wire 介面。
+
+* 六、手動互動測試（GUI、最真實的驗收）
+** TODO Step 6.1：啟動 sioyek 打開 tutorial.pdf
+指令：
+#+BEGIN_SRC sh
+/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/sioyek/limn.app/Contents/MacOS/limn \
+  /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/sioyek/tutorial.pdf
+#+END_SRC
+
+（若只有 ~sioyek.app~：把 ~limn.app/Contents/MacOS/limn~ 換成 ~sioyek.app/Contents/MacOS/sioyek~。）
+
+預期：
+- sioyek 視窗打開，顯示 tutorial.pdf 第 1 頁。
+
+不預期：
+- crash 或 dock 跳一下就消失 → binary 跟現在 backend 不相容，需要重編。
+
+** TODO Step 6.2：M-x ibuffer
+在 sioyek 視窗內按：~M-x~ → 出 minibuffer → 打 ~ibuffer~ → ~RET~
+
+預期：
+- w1 切到 ~*Buffer List*~（或一個自動生成的 ~tN~ id），畫面顯示類似：
+  #+BEGIN_EXAMPLE
+  M  ID                ENGINE   PATH
+     b1                mupdf    /Users/jin/.../tutorial.pdf
+  #+END_EXAMPLE
+
+不預期：
+- minibuffer 報 ~no such command~ → defcommand 沒註冊。
+- 螢幕沒換 buffer，只顯示 ~No buffers.~ → ~collect-rows~ 對 live registry 拿不到。
+
+** TODO Step 6.3：開第二個檔
+~M-x~ → ~find-file~ → 輸入 ~/tmp/foo.txt~ → ~RET~
+
+預期：
+- 進入一個空白 text buffer。
+
+不預期：
+- 跳到 minibuffer error → text-mode 無關問題，自查。
+
+** TODO Step 6.4：回 ibuffer 看兩個檔
+~M-x~ → ~ibuffer~ → ~RET~
+
+預期：
+- 表格出現兩行：tutorial.pdf 與 /tmp/foo.txt。
+
+不預期：
+- 只有一行 → 第二個 buffer 沒進 registry / revert 沒抓新。
+
+** TODO Step 6.5：navigation —— n / p
+游標在第一行時按 ~n~。
+
+預期：
+- 游標跳到第二行起點。再按 ~n~ → 回到第一行（wrap）。
+- 按 ~p~ → 跳上一行（從第一行按 ~p~ → wrap 到最後一行）。
+
+不預期：
+- 完全不動 → ~%nav~ 沒接到 / cursor-fn 沒呼叫到 wire。
+
+** TODO Step 6.6：mark for delete
+在第二行（/tmp/foo.txt）按 ~d~。
+
+預期：
+- 該行最前面 ~M~ 欄變成 ~D ~（D 跟一個空格）。
+- 游標自動下移一行（如已在最後一行則 wrap）。
+
+不預期：
+- 標記沒出現 → mark-set 或 render 沒重畫。
+
+** TODO Step 6.7：execute marks（真的 close buffer）
+按 ~x~。
+
+預期：
+- /tmp/foo.txt 從表格中消失，剩下 tutorial.pdf。
+- mark 欄回到空白。
+
+不預期：
+- /tmp/foo.txt 還在 → ~*ibuffer-kill-fn*~ 沒打到 ~buffer/close~。
+- 出現 wire error 訊息 → ~buffer/close~ wire endpoint 名字可能不對。
+
+** TODO Step 6.8：revert
+~M-x~ → ~find-file~ → ~/tmp/bar.txt~ → ~RET~，然後 ~M-x~ → ~ibuffer~ → ~RET~。回到 ibuffer 後按 ~g~。
+
+預期：
+- 重新抓 registry，/tmp/bar.txt 出現在表格。
+
+不預期：
+- 表格不動 → ~%revert~ 沒重新 ~collect-rows~。
+
+** TODO Step 6.9：visit
+游標移到 tutorial.pdf 那行，按 ~RET~（或 ~f~）。
+
+預期：
+- w1 切回 tutorial.pdf，能看到 PDF 內容。
+
+不預期：
+- 沒切 → ~*ibuffer-switch-fn*~ 沒打到 ~buffer/show~。
+
+** TODO Step 6.10：quit
+~M-x~ → ~ibuffer~ → ~RET~ 進入後，按 ~q~。
+
+預期：
+- 切回進 ibuffer 前的那個 buffer（可能是 tutorial.pdf）。
+
+不預期：
+- 留在 ibuffer → ~previous-buffer~ 沒記到 / switch-fn 沒呼叫。
+
+** TODO Step 6.11：sort
+按 ~S~ → minibuffer 提示 ~Sort by (id/path/engine):~ → 打 ~path~ → ~RET~。
+
+預期：
+- 表格依 path 重排（alpha < mid < zeta 那樣的字母順）。
+
+不預期：
+- 表格不動 → key 不認得；試 ~p~、~i~、~e~ 之類縮寫看是不是字串比對問題。
+
+** TODO Step 6.12：filter
+按 ~/~ → minibuffer 提示 ~Filter substring:~ → 打 ~alpha~ → ~RET~。
+
+預期：
+- 表格只剩 path 或 id 含 ~alpha~ 的行。
+
+** TODO Step 6.13：清 filter
+按 ~/~ → 直接 ~RET~（空字串）。
+
+預期：
+- 表格全部回來。
+
+** TODO Step 6.14：unmark-all
+連續按 ~d d d~（標好幾個），再按 ~U~。
+
+預期：
+- 所有 ~D~ 標記消失。
+
+* 七、檔案 sanity（不用跑程式）
+** TODO Step 7.1：確認檔案實際寫進去
+指令：
+#+BEGIN_SRC sh
+grep -c "limn-ibuffer" /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/limn.asd && \
+grep -c "Buffer List" /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/limn-runtime.lisp && \
+wc -l \
+  /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/limn-ibuffer.lisp \
+  /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/tests/unit/ibuffer.lisp
+#+END_SRC
+
+預期：
+- 第一個 grep 印 ~2~（limn-ibuffer 在 asd 出現 2 次：自身 component + 後面 pdf-mode 的 depends-on）。
+- 第二個 grep 印 ~1~（"Buffer List" 在 runtime 出現 1 次）。
+- wc -l 印兩行，數字大約是 ~390~ 跟 ~280~（可能 ±20 行因換行差異）。
+
+不預期：
+- grep 印 ~0~ → 檔案沒改到 / git 看錯 worktree。
+- wc -l 印 ~0~ → 檔案是空的。
+
+* 八、總結勾選
+完成全部後，下面這格也勾起來：
+
+** TODO 整個 ibuffer mode 都符合預期，可以推進下一步（微調）。
+
+如果這格能勾，告訴我你想先動：
+- (a) 欄寬／column 排版
+- (b) sort/filter 的 UX（key prompt 用詞、預設值）
+- (c) ~q~ 沒 previous-buffer 時的 fallback
+- (d) 加上 sort-cycle key（不開 minibuffer 而是循環切換）
+- (e) other / 我自己想到別的
+
+* 附：常用快速參考
+- worktree 根：~/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/~
+- 主模組：~backend/limn-ibuffer.lisp~
+- 測試檔：~backend/tests/unit/ibuffer.lisp~
+- 修改的：~backend/limn-runtime.lisp~（chrome registry）、~backend/limn.asd~（ASDF 鏈）、~backend/tests/unit/run-unit.lisp~（測試 loader）
+- 一句話跑全部 unit：~nix develop --command sbcl --script backend/tests/unit/run-unit.lisp~
