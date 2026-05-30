@@ -124,13 +124,15 @@ focus 時不會閃。此步主要靠上面那行印出來的數字確認狀態�
         (find-symbol "NARROW-TO-REGION" :cl-user))
        "modeline 變成：「Text: narrow-demo.txt   Narrow」。
 
-Qt 視窗第一行：
-    01234 56789abcde fghij...xyz
-    ^^^^^             ^^^^^^^^^^
-    變暗               變暗
-中間的「56789abcde」（10 個字）正常亮度。
+Qt 視窗整個 buffer 內容就只剩 10 個字（不是變暗，是真的不見了）：
+    56789abcde
 
-第 2、3、4 行（三個 defun）也整個變暗。")
+第 2、3、4 行（三個 defun）以及前面的「01234」、後面的「fghij...xyz」
+全部消失。Widget 的 cursor 在這 10 個字的尾端。
+
+這是 v0.40 Phase 3 的中央 gate：C++ 那邊的 TextBuffer 物件直接讓
+QPlainTextEdit 只看到 [BEGV, ZV) 那一段。buffer 真正的內容還在 C++
+內部記著，等 widen 後再放回 widget。")
 
     (4 "M-> via 直接呼叫 → cursor clamp 到 point-max = 15"
        (progn
@@ -141,8 +143,9 @@ Qt 視窗第一行：
                               :|data|) :|offset|)))
        "上方印出：cursor → 15
 
-如果 narrow 不生效，cursor 會跑到 buffer 真正的末端（>= 86）。
-這裡只看數字即可。")
+cursor-get 回傳的是 absolute coords，所以是 15（point-max）。
+在 widget 上 cursor 位於目前可見內容（56789abcde）的最尾端。
+如果 narrow 不生效，cursor 會跑到 buffer 真正的末端（>= 86）。")
 
     (5 "M-< via 直接呼叫 → cursor clamp 到 point-min = 5"
        (progn
@@ -153,13 +156,14 @@ Qt 視窗第一行：
                               :|data|) :|offset|)))
        "上方印出：cursor → 5
 
+在 widget 上 cursor 位於可見內容的最開頭（字「5」的左邊）。
 如果 narrow 不生效，cursor 會跑到 0。")
 
     (6 "C-x n w  →  widen"
        (limn/cmd:call-interactively
         (find-symbol "WIDEN" :cl-user))
        "modeline 回到：「Text: narrow-demo.txt」（沒有 Narrow）。
-Qt 視窗所有變暗的區域恢復亮度；整個 buffer 都可存取。")
+Qt 視窗整個 buffer 重新出現：四行內容全部都看得到、可以存取。")
 
     (7 "把 cursor 移到 (defun foo ...) 內，C-x n d  →  narrow-to-defun"
        (let* ((buf  *narrow-demo-buf*)
@@ -177,13 +181,14 @@ Qt 視窗所有變暗的區域恢復亮度；整個 buffer 都可存取。")
        "上方印出的 [start, end) 應該正好包住整段「(defun foo () 1)」
 （在 demo 內容裡，這段大約從 offset 37 開始，長度 17）。
 
-modeline 顯示「Narrow」。Qt 視窗只有 (defun foo () 1) 那一行
-維持亮度，其他三行（字母行 + 另外兩個 defun）全變暗。")
+modeline 顯示「Narrow」。Qt 視窗整個內容就只剩這一行：
+    (defun foo () 1)
+其他三行（字母行 + 另外兩個 defun）完全不見。")
 
     (8 "widen 收尾"
        (limn/cmd:call-interactively
         (find-symbol "WIDEN" :cl-user))
-       "modeline 不再有 Narrow，所有變暗區域恢復。"))
+       "modeline 不再有 Narrow，整個 buffer 內容重新出現。"))
   "每個 element：(step-num title body-form expected-text)。
    body-form 是 quoted 的；script 用 EVAL 跑、也用在 summary 印出。")
 
