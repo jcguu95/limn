@@ -166,12 +166,16 @@
            (let* ((start (min mk cur))
                   (end   (max mk cur))
                   (xsym  (and xpkg (find-symbol "*CURRENT-BUFFER*" xpkg)))
-                  (lsym  (and lpkg (find-symbol "*CURRENT-BUFFER-ID*" lpkg))))
+                  (lsym  (and lpkg (find-symbol "*CURRENT-BUFFER-ID*" lpkg)))
+                  (idoy  (and xpkg (find-symbol "INSTALL-DIM-OVERLAYS" xpkg))))
              (progv
                  (remove nil (list xsym lsym))
                  (remove nil (list (and xsym buf) (and lsym buf)))
                (when (and ntr (fboundp ntr))
                  (funcall ntr start end)))
+             ;; v0.40 §2.3 — visual feedback: dim the inaccessible region.
+             (when (and idoy (fboundp idoy))
+               (ignore-errors (funcall idoy buf)))
              (when (and call-sym (fboundp call-sym))
                (ignore-errors
                  (funcall call-sym "message/echo"
@@ -194,6 +198,10 @@
           (progv (remove nil (list xsym lsym))
                  (remove nil (list (and xsym buf) (and lsym buf)))
             (when (and widen (fboundp widen)) (funcall widen)))
+          ;; v0.40 §2.3 — clear the dim overlays installed by narrow.
+          (let ((rdoy (and xpkg (find-symbol "REMOVE-DIM-OVERLAYS" xpkg))))
+            (when (and rdoy (fboundp rdoy))
+              (ignore-errors (funcall rdoy buf))))
           (when (and call-sym (fboundp call-sym))
             (ignore-errors
               (funcall call-sym "message/echo" :|text| "Widened"))))))))

@@ -54,6 +54,10 @@
            ;; v0.40 §2.2 — modeline indicator: "Narrow" when narrowed,
            ;; "" otherwise.  Modes thread this into their modeline format.
            #:format-narrow-indicator
+           ;; v0.40 §2.3 — dim overlays for the non-accessible region.
+           #:install-dim-overlays
+           #:remove-dim-overlays
+           #:dim-overlay-count-for
            #:narrowed-p
            ;; point helpers
            #:point
@@ -409,6 +413,76 @@
   (if (or (narrow-start-of bid) (narrow-end-of bid))
       "Narrow"
       ""))
+
+;;; ── v0.40 §2.3 — dim overlays for the non-accessible region ─────────
+;;;
+;;; While a buffer is narrowed, the user usually wants visual feedback
+;;; about *where* the accessible region is.  We achieve this by laying
+;;; two overlays on top of the inaccessible portions:
+;;;
+;;;   head : [0, narrow-start)
+;;;   tail : [narrow-end, text-len)
+;;;
+;;; Both carry face 'shadow (an Emacs convention the wire face layer
+;;; already maps to a low-contrast colour).  The overlays are stored
+;;; per-buffer so install / remove are idempotent.
+;;;
+;;; limn/overlays loads AFTER limn/excursion, so the API is late-bound
+;;; via find-package — calling install-dim-overlays before overlays is
+;;; loaded is a graceful no-op.
+
+(defvar *dim-narrow-overlays* (make-hash-table :test 'equal)
+  "buf-id → list of dim overlays currently installed for that buffer.")
+
+(defun %ov-pkg () (find-package '#:limn/overlays))
+
+(defun %make-dim-overlay (start end buf-id)
+  (let* ((p (%ov-pkg))
+         (mk (and p (find-symbol "MAKE-OVERLAY" p)))
+         (op (and p (find-symbol "OVERLAY-PUT" p))))
+    (when (and mk op (fboundp mk) (fboundp op))
+      (let ((ov (funcall mk start end buf-id)))
+        (funcall op ov 'face 'shadow)
+        (funcall op ov 'priority -20)
+        ov))))
+
+(defun %delete-overlay (ov)
+  (let* ((p (%ov-pkg))
+         (del (and p (find-symbol "DELETE-OVERLAY" p))))
+    (when (and del (fboundp del))
+      (funcall del ov))))
+
+(defun install-dim-overlays (bid)
+  "Lay 'shadow-faced overlays over the non-accessible portions of BID
+   so the narrowing is visually obvious.  Idempotent — replaces any
+   existing dim overlays for BID.  No-op when BID isn't narrowed or
+   when limn/overlays isn't loaded."
+  (remove-dim-overlays bid)
+  (let ((ns (narrow-start-of bid))
+        (ne (narrow-end-of   bid))
+        (tlen (%text-len bid))
+        (ovs '()))
+    (when (and ns (> ns 0))
+      (let ((ov (%make-dim-overlay 0 ns bid)))
+        (when ov (push ov ovs))))
+    (when (and ne (< ne tlen))
+      (let ((ov (%make-dim-overlay ne tlen bid)))
+        (when ov (push ov ovs))))
+    (when ovs
+      (setf (gethash bid *dim-narrow-overlays*) ovs))
+    ovs))
+
+(defun remove-dim-overlays (bid)
+  "Delete any dim overlays previously installed for BID.  Idempotent."
+  (let ((ovs (gethash bid *dim-narrow-overlays*)))
+    (dolist (ov ovs) (%delete-overlay ov))
+    (remhash bid *dim-narrow-overlays*))
+  nil)
+
+(defun dim-overlay-count-for (bid)
+  "Test introspection: how many dim overlays are currently installed
+   for BID."
+  (length (gethash bid *dim-narrow-overlays*)))
 
 (defun point-min ()
   "Lowest accessible point in current buffer (respects narrowing)."

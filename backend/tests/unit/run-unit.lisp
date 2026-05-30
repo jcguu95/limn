@@ -158,7 +158,9 @@
                 ;; v0.40 §2.1 — narrow-to-region / widen commands + keymap
                 "narrow-cmd.lisp"
                 ;; v0.40 §2.2 — modeline narrow indicator
-                "narrow-modeline.lisp"))
+                "narrow-modeline.lisp"
+                ;; v0.40 §2.3 — dim overlay for inaccessible region
+                "narrow-dim.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
