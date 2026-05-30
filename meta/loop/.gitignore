@@ -1,0 +1,5 @@
+# thin loop 的執行產物，一律不進 git（transcript / status / messages / 每次 run）。
+.runs/
+# Python 編譯快取
+__pycache__/
+*.pyc

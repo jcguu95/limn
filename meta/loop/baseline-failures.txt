@@ -1,0 +1,17 @@
+# 容器內 unit 套件「已知會 fail」的 baseline（2026-05-30 實測，limn-openhands-runtime）。
+# loop 用這份判斷「DeepSeek 有沒有引入『新的』紅燈」：失敗清單扣掉這些才是它的鍋。
+# 來源見 meta/openhands/README.md「容器內 unit baseline」。一行一個測試名，# 開頭為註解。
+#
+# 4× V027 search —— host 與容器都 fail，既有 known-broken：
+V027-B-PDF-SEARCH-EXECUTE-STORES-STATE
+V027-B-SEARCH-RESET-CLEARS-STATE
+V027-I-SEARCH-STATE-CLEARED-ON-BUFFER-CLOSE
+V027-I-SEARCH-STATE-ISOLATED-PER-BUFFER
+# 3× PROCESS-A —— 容器限定（Linux vs macOS signal 語意）：
+PROCESS-A3-SENTINEL-STATUS-SIGNAL-VS-EXIT
+PROCESS-A4-TERM-LIVE-PROC
+PROCESS-A4-KILL9-STRONG-STOP
+# 3× PROCESS-CODING —— 容器限定（utf-8 子行程 pipe 解碼）：
+PROCESS-CODING-C2-DECODE-CODING-ONLY-STDOUT
+PROCESS-CODING-C3-DEFAULT-APPLIES-WHEN-NO-KWARG
+PROCESS-CODING-C8-CONFLICT-CODING-AND-DECODE-HONOURS-EXPLICIT
