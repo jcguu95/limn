@@ -5,23 +5,20 @@
 # 1. 用 main repo 的 sioyek binary（worktree 沒有 binary，只有 source）
 # 2. HEADLESS=0 → 跳真 Qt 窗
 # 3. 自動開 tutorial.pdf
-# 4. 載入 tmp/ibuffer-gui-driver.lisp，逐步走 15 個 GUI step
+# 4. 載入 scratch/ibuffer-walkthrough.lisp，逐步走 15 個 GUI step
 # 5. 走完 drop 到 SBCL REPL 給你繼續玩
 #
 # 用法：
-#   bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/tmp/run-ibuffer-gui.sh
+#   bash /Users/jin/data/local/projects/sioyek-core/scratch/run-ibuffer-walkthrough.sh
 
 set -u
 
-REPO=/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3
+REPO=/Users/jin/data/local/projects/sioyek-core
 PDF="$REPO/sioyek/tutorial.pdf"
 
-# v0.40: 用 worktree 自己編的 binary（含 show_pdf_view/show_text_view 的
-# Qt paint fix）。Fallback 到 main repo 只有在我們還沒 build 時。
 export LIMN_BIN="$REPO/sioyek/limn.app/Contents/MacOS/limn"
 if [ ! -x "$LIMN_BIN" ]; then
-  echo "⚠ worktree 還沒 build sioyek binary，先用 main repo 的。"
-  LIMN_BIN="/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn"
+  echo "✗ 還沒 build sioyek binary：$LIMN_BIN（先跑 scripts/build-macos.sh）"
 fi
 
 if [ ! -x "$LIMN_BIN" ]; then
@@ -74,4 +71,4 @@ cd "$REPO"
 #                           to REPL (SBCL prompt — (q) to quit)
 exec bash "$REPO/backend/run-repl.sh" \
   --eval "(o \"$PDF\")" \
-  --load "$REPO/tmp/ibuffer-gui-driver.lisp"
+  --load "$REPO/scratch/ibuffer-walkthrough.lisp"

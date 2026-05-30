@@ -51,7 +51,7 @@ roadmap / sub-roadmap / 進度 checklist 住在它**自己的 design doc** 裡�
 
 | 版本 | feature | tag commit | 設計 |
 |------+---------+-----------+------|
-| =v0.43.0= | ibuffer mode（M-x ibuffer 列/標/切/排/濾/執行）+ limn:call 跨層同步 shim | （見 tag =v0.43.0=） | tmp/IBUFFER-MERGE-NOTES.org（PR 內） |
+| =v0.43.0= | ibuffer mode（M-x ibuffer 列/標/切/排/濾/執行）+ limn:call 跨層同步 shim | （見 tag =v0.43.0=） | scratch/ibuffer-merge-notes.org |
 | =v0.42.0= | buffer narrow / widen（語意 + UX + C++ TextBuffer 中央 gate） | （見 tag =v0.42.0=） | MERGE-MESSAGE（PR 內） |
 | =v0.41.0= | window split Phase 3a/3b — 真正獨立第二 pane | =7ee139e= | split-frame-design.md |
 | =v0.40.0= | 版本制度地基（merge 時發號）+ 收編 bookmark/logging | =49def82= | versioning-policy.md |

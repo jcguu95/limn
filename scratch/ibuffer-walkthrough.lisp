@@ -1,7 +1,7 @@
-;;;; ibuffer-gui-driver.lisp — guided walkthrough of ibuffer-mode in a
+;;;; ibuffer-walkthrough.lisp — guided walkthrough of ibuffer-mode in a
 ;;;; visible Qt window.
 ;;;;
-;;;; Loaded by tmp/run-ibuffer-gui.sh AFTER (o tutorial.pdf) has run,
+;;;; Loaded by scratch/run-ibuffer-walkthrough.sh AFTER (o tutorial.pdf) has run,
 ;;;; so by entry: limn is up, Qt window is visible, tutorial.pdf is
 ;;;; open in w1.  Each step tells the user what to press in the Qt
 ;;;; window and prints what should happen + what Lisp side sees.
