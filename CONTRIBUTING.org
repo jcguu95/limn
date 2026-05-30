@@ -38,6 +38,13 @@ git tag -a v0.8.0 -m "..."
 git branch -d feature/v0.8-init-and-introspection
 #+end_src
 
+#+begin_quote
+*已部分取代（2026-05-29）*：上例的「branch 名帶版本號（=feature/v0.8-…=）
++ 在分支上自封 =v0.8.0= tag」已不再適用。新制：**分支名用功能名、不帶
+版本號；版本號 / tag / CHANGELOG 收攏一律在 merge 進 main 那一刻由整合者
+發放**。=--no-ff= 不 squash（§1.3）仍然有效。詳見 =docs/versioning-policy.md=。
+#+end_quote
+
 *** 1.3 為什麼用 =--no-ff= merge 不用 squash
 
 squash merge **主動丟失資訊**——把 N 個各自 bisect-able 的 commit 壓成
