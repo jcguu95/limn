@@ -1,5 +1,8 @@
 result
 
+# Top-level vendored Lisp deps (local checkout, e.g. cl-ppcre) — not tracked.
+/vendor/
+
 # ── sioyek vendor tree ────────────────────────────────────────────────────────
 # Track sioyek/pdf_viewer/ source files + top-level .pro/.qrc.
 # Exclude vendored libs, generated Qt artifacts, and build output.
