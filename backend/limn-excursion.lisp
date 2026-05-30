@@ -51,6 +51,9 @@
            ;; no narrowing — fall back to default bounds".
            #:narrow-start-of
            #:narrow-end-of
+           ;; v0.40 §2.2 — modeline indicator: "Narrow" when narrowed,
+           ;; "" otherwise.  Modes thread this into their modeline format.
+           #:format-narrow-indicator
            #:narrowed-p
            ;; point helpers
            #:point
@@ -398,6 +401,14 @@
 (defun narrow-end-of (bid)
   "Position of BID's active narrow-end, or NIL when not narrowed."
   (%marker-pos (%narrow-end bid)))
+
+(defun format-narrow-indicator (bid)
+  "Return \"Narrow\" when BID is narrowed, \"\" otherwise.  Designed
+   to be threaded into mode-specific modeline format functions (e.g.
+   pdf-format-modeline appends it after the zoom percent)."
+  (if (or (narrow-start-of bid) (narrow-end-of bid))
+      "Narrow"
+      ""))
 
 (defun point-min ()
   "Lowest accessible point in current buffer (respects narrowing)."

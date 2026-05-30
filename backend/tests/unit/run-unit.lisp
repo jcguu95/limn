@@ -156,7 +156,9 @@
                 ;; v0.40 §1.6 — occur narrow-aware
                 "occur-narrow.lisp"
                 ;; v0.40 §2.1 — narrow-to-region / widen commands + keymap
-                "narrow-cmd.lisp"))
+                "narrow-cmd.lisp"
+                ;; v0.40 §2.2 — modeline narrow indicator
+                "narrow-modeline.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
