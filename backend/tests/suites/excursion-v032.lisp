@@ -183,3 +183,59 @@
                       "widen → point-min = 0")
         (assert-equal 11 (funcall point-max)
                       "widen → point-max = 11")))))
+
+;;; ── v0.40 T3: narrow markers fix up against real wire edits ─────────
+;;;
+;;; Proves the end-to-end chain: wire buffer/insert → buffer-modified
+;;; event → limn/marker process-insert → narrow-start/end markers stay
+;;; on the same characters they originally pointed to.
+
+(deftest v040-qt-narrow-fixup-on-wire-insert
+  "narrow [2, 7) on a 10-char buffer; insert \"XYZ\" at offset 0 via
+   wire → narrow markers fix up to [5, 10)."
+  (with-text-buffer-events (buf)
+    (send! "buffer/insert" :|buffer-id| buf :|text| "abcdefghij")
+    (%wait-and-fan "buffer-modified" 2.0)
+    (let ((xpkg (find-package '#:limn/excursion)))
+      (unless xpkg
+        (return-from v040-qt-narrow-fixup-on-wire-insert
+          (assert-true nil "limn/excursion not loaded")))
+      (let ((narrow    (find-symbol "NARROW-TO-REGION" xpkg))
+            (point-min (find-symbol "POINT-MIN" xpkg))
+            (point-max (find-symbol "POINT-MAX" xpkg))
+            (set-buf   (find-symbol "SET-BUFFER" xpkg)))
+        (funcall set-buf buf)
+        (funcall narrow 2 7)
+        (assert-equal 2 (funcall point-min) "before: point-min = 2")
+        (assert-equal 7 (funcall point-max) "before: point-max = 7")
+        ;; Insert 3 chars at the very start via the wire.  buffer-modified
+        ;; event fans out to limn/marker's process-insert, which advances
+        ;; both narrow markers by 3.
+        (send! "buffer/insert" :|buffer-id| buf :|at| 0 :|text| "XYZ")
+        (%wait-and-fan "buffer-modified" 2.0)
+        (assert-equal 5  (funcall point-min)
+                      "after wire insert: point-min 2 → 5")
+        (assert-equal 10 (funcall point-max)
+                      "after wire insert: point-max 7 → 10")))))
+
+(deftest v040-qt-narrow-fixup-on-wire-delete-inside
+  "narrow [2, 8); delete [3, 5) via wire → narrow-end shifts to 6."
+  (with-text-buffer-events (buf)
+    (send! "buffer/insert" :|buffer-id| buf :|text| "abcdefghij")
+    (%wait-and-fan "buffer-modified" 2.0)
+    (let ((xpkg (find-package '#:limn/excursion)))
+      (unless xpkg
+        (return-from v040-qt-narrow-fixup-on-wire-delete-inside
+          (assert-true nil "limn/excursion not loaded")))
+      (let ((narrow    (find-symbol "NARROW-TO-REGION" xpkg))
+            (point-min (find-symbol "POINT-MIN" xpkg))
+            (point-max (find-symbol "POINT-MAX" xpkg))
+            (set-buf   (find-symbol "SET-BUFFER" xpkg)))
+        (funcall set-buf buf)
+        (funcall narrow 2 8)
+        (send! "buffer/delete" :|buffer-id| buf :|from| 3 :|to| 5)
+        (%wait-and-fan "buffer-modified" 2.0)
+        (assert-equal 2 (funcall point-min)
+                      "after delete inside: point-min unchanged")
+        (assert-equal 6 (funcall point-max)
+                      "after delete inside: point-max 8 → 6")))))
