@@ -485,6 +485,11 @@
     ;; downstream callers (update-region-overlay, deactivate-mark, etc.)
     ;; see actual cursor positions.
     (%install-cursor-vtables)
+    ;; v0.37 §E v2 — mirror limn/log:message into the C++ *messages*
+    ;; GapBuffer per-message so `buffer/text :buffer-id "*messages*"`
+    ;; stays in sync with the Lisp ring. Installed AFTER cursor vtables
+    ;; (no dependency, but groups with other wire installers).
+    (%install-log-wire-sender)
     ;; v0.39 B10 — install limn/file text-engine bridge.  Pre-v0.39 the
     ;; text path of find-file never told C++ anything, so xdotool keys
     ;; routed to the wrong widget and self-insert vanished.  See
@@ -495,6 +500,44 @@
     ;; with mock clients can call STOP-PUMP-THREAD if they don't want it.
     (%call :limn/dispatch '#:start-pump-thread s)
     *session*))
+
+(defun %install-log-wire-sender ()
+  "Mirror every limn/log:message into the C++ *messages* GapBuffer via
+   the message/log wire command, so `buffer/text :buffer-id \"*messages*\"`
+   stays in sync with the Lisp ring.
+
+   Per-message, fire-and-forget (notify, not call): no round-trip wait;
+   no log entry should ever block. NIL'd on STOP so post-stop log calls
+   don't try to use a dead session.
+
+   Re-entrancy guard: the sender NILs *log-wire-sender* for its own
+   duration, so if dispatch internals were ever to log, we wouldn't
+   recurse. The message handler also swallows sender errors, so a wire
+   failure cannot corrupt the ring."
+  (setf limn/log:*log-wire-sender*
+        (lambda (rec)
+          (let* ((time  (limn/log:log-record-time  rec))
+                 (level (limn/log:log-record-level rec))
+                 (ns    (limn/log:log-record-ns    rec))
+                 (text  (limn/log:log-record-text  rec)))
+            (when (and text (plusp (length text)))
+              (multiple-value-bind (s m h) (decode-universal-time time)
+                (let* ((lv-str (case level
+                                 (:debug "DEBUG")
+                                 (:info  "INFO ")
+                                 (:warn  "WARN ")
+                                 (:error "ERROR")
+                                 (t      (string level))))
+                       (ns-str (cond ((null ns)        "default")
+                                     ((stringp ns)     ns)
+                                     ((symbolp ns)     (string-downcase
+                                                        (symbol-name ns)))
+                                     (t                (princ-to-string ns))))
+                       (formatted (format nil "[~2,'0D:~2,'0D:~2,'0D ~A ~A] ~A"
+                                          h m s lv-str ns-str text))
+                       (limn/log:*log-wire-sender* nil))
+                  (handler-case (notify "message/log" :|text| formatted)
+                    (error () nil)))))))))
 
 (defun %install-cursor-vtables ()
   "Bind every package's *buffer-cursor-fn* / *buffer-set-cursor-fn* to a
@@ -611,6 +654,9 @@
     (let ((c (%call :limn/dispatch '#:session-client *session*)))
       (ignore-errors (%call :limn/client '#:disconnect c)))
     (setf *session* nil *running* nil)
+    ;; Drop the log wire sender — without a session, notify would error.
+    ;; Post-stop log calls fall back to ring-only (NIL sender = no-op).
+    (setf limn/log:*log-wire-sender* nil)
     (limn/keys:set-key-prefix '()))
   t)
 

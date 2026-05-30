@@ -1925,6 +1925,7 @@ Lisp 層：
 
 **** E. =logging= / =*Messages*= — 純 Lisp
 
+v0.23 baseline：
 - =limn/log:message= fmt &rest args → 寫進 =*Messages*= ring + push
   =event/message=
 - =limn/log:*messages-ring-size*= default 1000
@@ -1933,6 +1934,49 @@ Lisp 層：
 - 整合到 condition：=*debugger-hook*= 預設 =log:message= 完整 backtrace
 - bridge: 統一所有 framework 內部 =format t= 改走 =log:message=（一次
   refactor）
+
+v0.37 §E v2 — hierarchical namespace + wire mirror：
+
+- =limn/log:log-record= struct (time / level / ns / text) — ring 現在
+  存 struct、不是 raw string。=get-records= 拿 struct list；
+  =get-messages= 仍回 string list (backward compat)。
+- *Hierarchical namespace*：ns 是 dotted symbol，例如
+  ='pdf-mode.annotation.edit=。canonical key = uppercased SYMBOL-NAME，
+  package-independent。
+- =limn/log:*default-log-level*= — 整體 fallback (default =:info=)。
+- =limn/log:*log-levels*= — hash ns-key → level。
+- =limn/log:set-level= / =unset-level= / =get-level= / =effective-level=
+  — explicit binding 用前三者、=effective-level= 走 leaf → root →
+  =*default-log-level*= 解析繼承。
+- =limn/log:with-log-levels ((NS LEVEL)...)= — dynamic per-ns 蓋。
+- =limn/log:*log-wire-sender*= — =(function (log-record) → ignored)=。
+  在 =limn:start= 安裝、把每筆通過 effective-level filter 的訊息
+  per-message 鏡射成 =message/log= wire call、寫進 C++
+  =*messages*= GapBuffer。Wire 格式 =[HH:MM:SS LEVEL ns] text=。
+  NIL = 純 ring (unit tests / pre-session bring-up)。Sender 內部 NIL
+  自己避 re-entrancy；sender 拋 error 不影響 ring。=limn:stop= 卸下。
+- =message= 新 keyword 呼叫形 =(message :level :warn :ns 'pdf-mode "x")=；
+  舊兩種 shape ((message "x") / (message :warn "x")) 不變。
+- *單一 source of truth*：所有看 =*messages*= buffer 的 user (REPL
+  =buffer/text=、Lisp =get-messages= / =get-records=) 都看到同一份內容、
+  不再 Lisp ring 跟 C++ GapBuffer 分歧。
+
+C++ widget 顯示 (sioyek/pdf_viewer/limn_command.cpp)：
+
+- =sync_text_widget= 的 chrome-skip 從 =startsWith('*')= 改成精準 deny
+  list (=*echo-area*= / =*minibuffer*=)。=*messages*= 放行、能透過
+  =buffer/show= 切到主 QPlainTextEdit 顯示。
+- =sync_text_widget= 對 =*messages*= 特例：cursor 跳到 end +
+  =ensureCursorVisible= 達到 Emacs *Messages* 的 auto-tail-to-bottom。
+- =cmd_message_log= / =cmd_message_echo= 末尾各加一行
+  =sync_text_widget("*messages*")=，讓每次 append 都 refresh 顯示中的
+  widget（cheap no-op 當 w1 沒看 =*messages*= 時）。
+
+User 操作流程：
+  1. =M-x switch-to-buffer= → 選 =*messages*= (或直接 wire
+     =(limn:call "buffer/show" :|buffer-id| "*messages*" :|win-id| "w1")=)
+  2. 主視窗變成 =*messages*= 的 text view、顯示既有歷史
+  3. 之後每一筆 =(message ...)= 即時 append 到視窗、auto-scroll 到底
 
 **** Testing — TDD 三層覆蓋
 

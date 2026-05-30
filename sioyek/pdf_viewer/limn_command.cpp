@@ -1114,6 +1114,11 @@ void LimnCommand::cmd_message_echo(const QString& id, const QJsonObject& msg) {
     text_buffers["*echo-area*"].clear();
     text_buffers["*echo-area*"].insert(0, text);
     if (auto* c = chrome_of(main_widget)) c->set_echo(text);
+    // v0.37 logging — if w1 (or whichever focused window) is currently
+    // viewing *messages*, push the new line into the QPlainTextEdit and
+    // auto-tail. sync_text_widget is a no-op when *messages* isn't the
+    // visible buffer, so this costs nothing in the common echo path.
+    sync_text_widget("*messages*");
     bridge->send_ok(id);
 }
 
@@ -1126,6 +1131,8 @@ void LimnCommand::cmd_message_log(const QString& id, const QJsonObject& msg) {
     GapBuffer& log = text_buffers["*messages*"];
     if (!log.is_empty()) log.insert(log.length(), "\n");
     log.insert(log.length(), text);
+    // v0.37 logging — same auto-tail refresh as message/echo.
+    sync_text_widget("*messages*");
     bridge->send_ok(id);
 }
 
@@ -2553,15 +2560,25 @@ void LimnCommand::cmd_buffer_codepoint_rects(const QString& id,
 //
 // sync_text_widget mirrors the GapBuffer contents into the QPlainTextEdit
 // when the targeted buffer is the one currently displayed in any focused
-// window. Chrome buffers (*minibuffer*, *echo-area*, *messages*) skip
-// this — they have their own rendering surface (LimnChromeBar).
+// window.
+//
+// Chrome buffers *echo-area* and *minibuffer* skip this — they render
+// through LimnChromeBar, not the main text widget, so mirroring there
+// would be a write into the wrong surface.
+//
+// *messages* used to be in this skip list, but v0.37 logging surfaces
+// it as a proper scrollback log buffer that users SHOULD be able to
+// switch the main widget to (just like any text buffer). So we allow
+// it through. Auto-scroll-to-bottom on each append is handled by the
+// callers (cmd_message_log / cmd_message_echo) after invoking sync.
 //
 // Called after every mutation to text_buffers[BUF] (insert / delete /
 // load-file). Cheap when the buffer is not currently displayed, so we
 // don't bother gating callers.
 
 void LimnCommand::sync_text_widget(const QString& buffer_id) {
-    if (buffer_id.startsWith('*')) return;            // chrome → skip
+    // *echo-area* and *minibuffer* belong to LimnChromeBar.
+    if (buffer_id == "*echo-area*" || buffer_id == "*minibuffer*") return;
     if (!main_widget) return;
     QPlainTextEdit* tw = main_widget->text_widget();
     if (!tw) return;
@@ -2586,6 +2603,16 @@ void LimnCommand::sync_text_widget(const QString& buffer_id) {
     const int max_pos = tw->document()->characterCount() - 1;
     c.setPosition(qBound(0, qs_idx, qMax(0, max_pos)));
     tw->setTextCursor(c);
+
+    // v0.37 logging — *messages* is a scrollback log buffer; Emacs
+    // *Messages* convention is auto-tail (cursor + viewport stick to the
+    // newest line). Override the text_cursors-based position above.
+    if (buffer_id == "*messages*") {
+        QTextCursor end = tw->textCursor();
+        end.movePosition(QTextCursor::End);
+        tw->setTextCursor(end);
+        tw->ensureCursorVisible();
+    }
 
     // markup-interaction step 2 — current-line highlight.
     //
