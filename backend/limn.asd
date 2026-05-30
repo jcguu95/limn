@@ -86,7 +86,12 @@
     (:file "limn-auto-revert" :depends-on ("limn-file-notify"))
     (:file "limn-indent" :depends-on ("limn-auto-revert"))
     (:file "limn-query-replace" :depends-on ("limn-indent"))
+    ;; v0.37 "bookmark everywhere" — cross-buffer named bookmarks
+    ;; (Emacs bookmark.el analog).  Per-mode jump handlers register
+    ;; themselves later in their own modules.  Pure Lisp; coexists
+    ;; with limn-pdf-mode §E's per-doc single-char bookmark system.
+    (:file "limn-bookmark" :depends-on ("limn-query-replace"))
     ;; v0.37 Phase B: ships sane defaults (M-x, M-r, which-key on).
     ;; Late in chain so it can use completion + which-key directly.
-    (:file "limn-default-config" :depends-on ("limn-query-replace"))
+    (:file "limn-default-config" :depends-on ("limn-bookmark"))
     (:file "limn" :depends-on ("limn-default-config"))))
