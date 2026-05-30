@@ -337,6 +337,35 @@ calibrated to help.  When you start one:
 - **Complexity**: sprint 級（與 I-6 綁）
 - **Blocked by**: 與 **I-6** 同源，宜一起做
 
+## I-11 — Phase 3c notes panel：真機 reopen 第二格不重繪（headless 正常）
+
+- **Status**: deferred（3c 已 revert 出 main，WIP 在分支 `wip/phase-3c`）
+- **First noticed**: v0.44.x（3c 併入後 dogfood verify-3c.sh）
+- **Symptom**: 在**真實顯示器**上開 notes panel（=M-N= → 左 PDF / 右 notes
+  list）→ 按 =q= 關 → 再開,**第二格不出現**（或在完整 walkthrough 的某次
+  reopen 後不重繪）。首次開啟大多正常,壞在「關閉後重開」與多輪操作後的 reopen。
+- **Root cause**: 純 **real-display 重繪 quirk**。已用新增的 =bridge/viewport-debug=
+  指令headless 證實:每次 reopen 後 widget tree 與尺寸 **100% 正確**（=count:2=、
+  =sizes:[597,596]=、兩格 =visible:true=、各自 fresh window w3/w4…）。headless 與
+  孤立 driver 都正常,只有完整 walkthrough 的真機 reopen 掛 —— 是 Qt 在「pane 被
+  =remove_pane= 後再 =add_pane_for=」這條路上,真實顯示器沒重新 paint 新 pane
+  （offscreen / llvmpipe 不重現）。屬 ISSUES **I-9** 同一類 paint quirk 的延伸。
+- **What shipped (workaround)**: 無（功能整條 revert）。試過但**沒治好**的修法
+  （都在 `wip/phase-3c`）:=add_pane_for= 加 =setSizes= 強制平均分寬、
+  =add_pane_for= / =show_text_view= 加 =hide→show→raise= paint kick。幾何因此
+  變正確,但真機重繪仍失敗。
+- **What's needed for a true fix**:
+  - **(a) 真機 + 截圖驗證閉環**：靠 headless 測不到（headless 正常）。需要在真機上
+    用截圖管線（=--test-mode= 已開、=test/grab-window= 可抓 GL framebuffer;或加一個
+    抓整窗 backing-store 的指令）把「reopen 後畫面」變成我方可讀的 PNG,才能在不靠
+    人眼判斷的情況下迭代修 paint。
+  - **(b) 候選修法**：強制 =viewport_splitter_= / top-level window 一次同步
+    repaint（=repaint()= 而非 =update()=）、或在 reopen 路徑 reparent/重建 pane、
+    或排查 QOpenGLWidget 銷毀後重建的 context/backing-store 行為。
+  - 從 `wip/phase-3c` 接續（已含 setSizes / paint-kick / viewport-debug 起點）。
+- **Complexity**: 數小時～1 天真機迭代 + 需截圖閉環基建
+- **Blocked by**: 與 **I-9** 同類；驗證面與 **I-8**（golden-image / 視覺回歸）相關
+
 ---
 
 # Closed entries (kept for receipt)

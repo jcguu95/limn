@@ -273,10 +273,14 @@ Phase 3 是本文件裡最大、最高風險的一項 —— 它偏重前端,而
   `"w1"`。這是第一個*需要*人工目視驗證的步驟。
 - **3c —— 收編 notes panel**(見上方 `WINDOW-SYSTEM-DEBT` 章節)。退掉手刻的
   `enter_text_panel` / `chrome/focus-pane` 路徑;把 M-N 面板重建在 `bridge/win-split` 之上。
-  **實作已在 `cool-cohen` worktree 完成(未合):net −115 LOC 還債 + changelog
-  fragment + verify-3c.sh。** 在新 roadmap 下 3c **不再是「下一個」**,但也**沒有
-  obsolete** —— 它是 Phase 6 win-undo 的前置(win-undo 只認得真正的 `LimnWindow`,
-  手刻的 notes 面板不是),所以保留待合,不刪。
+  **狀態:曾於 v0.44.0/.1 併入 main,dogfood 抓到真機 reopen 重繪 bug 後已 revert
+  出 main(2026-05-30),WIP 保留在分支 `wip/phase-3c`。** 實作的 Lisp/wire/幾何
+  100% 正確(headless `bridge/viewport-debug` 顯示 reopen 後 count:2、實寬、
+  visible),但**真實顯示器上**關閉 notes panel 再開時第二格不重繪——headless 與
+  孤立測試都正常,只在完整 walkthrough 的真機 reopen 掛。試過 `setSizes` +
+  `hide→show→raise` paint kick 都沒治好(見 ISSUES I-11)。**deferred**:它仍是
+  Phase 6 win-undo 的前置,要做 Phase 6 前須先用真機 + 截圖管線把這個重繪 bug
+  收掉(從 `wip/phase-3c` 接續)。
 
 #### 誠實的工作量與風險評估
 
@@ -288,10 +292,10 @@ Phase 3 是本文件裡最大、最高風險的一項 —— 它偏重前端,而
 | per-DV overlay raster(Phase 4) | 中偏高 | 今天 `LimnCommand` 上只有一張 `QImage` → 改成 per-`win_id` map;每個寫入點都得轉發到正確的 window |
 | **視覺驗證** | **高(流程風險,非 code 風險)** | headless 看不到 split;需要你一輪輪 `HEADLESS=0` dogfood。這才是真正的排程風險,不是 code 本身 |
 
-**結論(更新):** 3a/3b 已 ship(`v0.41.0`)。3c 的實作也已在 `cool-cohen` 完成、
-待合(見上)。**剩下唯一還沒做的「新前端能力」是 Phase 4 per-DV overlay raster**
-—— 而它只有在「真的開兩個 pane 各看不同文件」時才需要,所以可以等到那個使用情境
-真正出現再做。
+**結論(更新):** 3a/3b 已 ship(`v0.41.0`)。3c 一度併入又因真機重繪 bug revert
+(WIP 在 `wip/phase-3c`,deferred,見上 + ISSUES I-11)。**剩下唯一還沒做的「新
+前端能力」是 Phase 4 per-DV overlay raster** —— 而它只有在「真的開兩個 pane 各看
+不同文件」時才需要,所以可以等到那個使用情境真正出現再做。
 
 ### Phase 4 —— per-DV overlay raster  ⏭ 唯一剩下的新能力(待真正多文件 pane 時做)
 
@@ -418,14 +422,13 @@ bookmark」。兩個功能天然組合。
 - [x] Phase 3b —— 真正的第二個 pane(`win-split`/`focus`/`close` + 輸入路由 + 游標捲動 + 視窗標題品牌化)。dogfood 12 項全通過,收尾於 commit `d80cc9b`,tag `phase-3b-complete`。
 - [x] 開工 3a 前先用 `WINDOW-SYSTEM-DEBT` 標記原始碼(可 grep)
 
-實作完成、**待合不刪**:
+revert 出 main、WIP 保留、**deferred**:
 
-- [~] **Phase 3c —— 收編 notes panel(`WINDOW-SYSTEM-DEBT`)** —— 實作已在 `cool-cohen`
-      worktree 完成(未合):退掉手刻的 `enter_text_panel`/`chrome/focus-pane`/
-      `%notes-focus-*`/`NOTES-PANEL-MODE`,改走通用 `win-split`/`win-focus`/`win-close`;
-      net −115 LOC + changelog fragment + verify-3c.sh。**不是「下一個」,也沒 obsolete**:
-      它是 **Phase 6 win-undo 的前置**(win-undo 只認真正的 `LimnWindow`)。合併前需
-      build + dogfood 驗證。
+- [~] **Phase 3c —— 收編 notes panel(`WINDOW-SYSTEM-DEBT`)** —— 曾於 v0.44.0/.1 併入,
+      真機 reopen 重繪 bug 後 **revert 出 main(2026-05-30)**,WIP 在分支
+      `wip/phase-3c`。Lisp/wire/幾何皆正確,只在真實顯示器上「關閉 notes 再開」第二格
+      不重繪(headless / 孤立測試都正常)。見 **ISSUES I-11**。仍是 **Phase 6 的前置**;
+      要做前須先用真機 + 截圖管線把重繪 bug 收掉(從 `wip/phase-3c` 接續)。
 
 仍待做的新能力:
 
@@ -437,10 +440,10 @@ bookmark」。兩個功能天然組合。
 - [—] **Phase 5 —— ~~`C-x` window 綁定~~** —— 被 leader-keys 的 `SPC w` namespace 取代;
       底層指令 3b 已完成,只剩綁鍵,已移交 `docs/leader-keys-design.md`。本檔不再追蹤。
 
-planned(依賴 3c 先合):
+planned(前置 3c 尚未收尾):
 
 - [ ] **Phase 6 —— win-undo tree(視窗配置 undo/redo,樹狀非線性)** —— 詳見上方 Phase 6
-      章節。前置:3c(否則 notes 面板不是真 `LimnWindow`,win-undo 存不進/還不回)。
+      章節。前置:3c(已 revert,在 `wip/phase-3c`,須先修真機重繪 bug 並併回)。
 
 獨立任務:
 
@@ -449,13 +452,14 @@ planned(依賴 3c 先合):
 
 ## 下一步(新 roadmap 下)
 
-window split 這條的「真正收尾」已經不在關鍵路徑上 —— 3a/3b 已 ship、3c 實作已完成
-待合、Phase 5 移交 leader-keys。所以接下來:
+window split 這條的「真正收尾」已經不在關鍵路徑上 —— 3a/3b 已 ship、3c revert 後
+deferred(WIP 在 `wip/phase-3c`)、Phase 5 移交 leader-keys。所以接下來:
 
-1. **先不急著動 window**。把力氣放在新 roadmap 的高優先:**Fuzzy Selector**
+1. **不動 window**。把力氣放在新 roadmap 的高優先:**Fuzzy Selector**
    (`docs/completion-ui-design.md`)與 **evil + leader-keys**
    (`docs/evil-mode-design.md` / `docs/leader-keys-design.md`)。
-2. **`cool-cohen` 的 3c**:保留待合。要嘛先 commit 進它的分支(讓 worktree 可清),
-   要嘛排一輪 build + dogfood 驗證後直接併進 main。**不要刪**(它是 Phase 6 前置)。
+2. **3c(`wip/phase-3c`)**:deferred。要收尾時,先用真機 + 截圖管線把「reopen 第二格
+   不重繪」這個真機 paint bug 修掉(見 ISSUES I-11),再重新 build + 完整 verify-3c.sh
+   通過才併回 main。
 3. **Phase 4(per-DV overlay)**:等到真的有「多 pane 各看不同文件」的使用情境再做。
-4. **Phase 6(win-undo)**:要動之前先確保 3c 已合(前置)。
+4. **Phase 6(win-undo)**:前置 3c 尚未收尾,要動之前先把 3c 修好併回。

@@ -28,13 +28,14 @@ roadmap / sub-roadmap / 進度 checklist 住在它**自己的 design doc** 裡�
 
 ** window split（多 pane 視窗分割）  🛠 大致收尾（非關鍵路徑）
 - 設計：=docs/split-frame-design.md=
-- 進度：Phase 1/2/3a/3b ✅（=v0.41.0=）。3c 收編 notes panel **實作已在
-  =cool-cohen= 完成、待合不刪**（net −115 LOC 還債,是 Phase 6 的前置）。
+- 進度：Phase 1/2/3a/3b ✅（=v0.41.0=）。3c 收編 notes panel **曾併入(v0.44.0/.1)
+  又因真機 reopen 重繪 bug 而 revert(2026-05-30)**,WIP 在分支 =wip/phase-3c=,
+  deferred（Lisp/wire/幾何皆正確,只在真機 reopen 不重繪——見 ISSUES I-11）。
 - 新 roadmap 下的重整：
   - Phase 5（=C-x= 視窗鍵位）**被取代** → 移交 leader-keys 的 =SPC w= namespace。
   - Phase 4（per-DV overlay raster）= 唯一剩的新能力,等「多 pane 各看不同文件」
     情境出現再做。
-  - Phase 6（win-undo tree）⏭ planned,前置＝3c 先合。
+  - Phase 6（win-undo tree）⏭ planned,前置＝3c 須先修好併回。
 - 結論：window 這條不在關鍵路徑上;力氣先給 Fuzzy Selector / evil+leader。
 
 ** annotation / markup 互動  🛠 in-progress
