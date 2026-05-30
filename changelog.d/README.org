@@ -1,0 +1,34 @@
+#+TITLE: changelog.d — CHANGELOG fragment 目錄
+
+每條 feature 分支在這裡丟**一個自己獨有檔名**的 fragment，而**不要**
+去編輯共用的 =../CHANGELOG.org= 段落。這樣兩條分支永遠不碰同一個檔、
+merge 不會衝突（根治 2026-05-29 那種 CHANGELOG 手解衝突）。
+
+詳見 =../docs/versioning-policy.md=。
+
+* 怎麼寫 fragment
+
+1. 檔名用功能 slug：=changelog.d/<slug>.org=
+   （例：=bookmark-everywhere.org=、=mo-macos-keys.org=）。**不要**把版本
+   號寫進檔名。
+2. 內容用 =**= 起頭的 sub-batch 標題（收攏時會放在 =* vX.Y.Z= 之下）：
+
+   #+begin_example
+   ** bookmark everywhere — 跨 buffer 可命名書籤
+   把 Sioyek 既有的單字元書籤升級成跨 buffer、可命名、可持久化的層。
+   - =C-x r m/b/l/d/M= ...
+   #+end_example
+
+3. 分支只增這一個檔，別動 =CHANGELOG.org=、別在分支上自封版本號。
+
+* release 時怎麼收攏
+
+由整合者（merge 進 main 的那一步、單一權威）執行：
+
+#+begin_src bash
+scripts/collate-changelog.sh <version>   # 例：scripts/collate-changelog.sh 0.40.1
+#+end_src
+
+腳本會把本目錄所有 fragment（=README.org= 除外）收攏成 =CHANGELOG.org=
+頂端一個新的 =* vX.Y.Z= 段落、然後刪掉那些 fragment。接著由整合者對
+merge commit 打 annotated tag =vX.Y.Z=、並更新根目錄 =VERSION=。
