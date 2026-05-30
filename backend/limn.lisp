@@ -417,7 +417,11 @@
               (format *error-output*
                       "limn: mark auto-deactivate install failed: ~a~%" e)))))
       ;; v0.36: wire indent + query-replace vtables to live wire commands.
-      (dolist (pkg-name '(#:limn/indent #:limn/query-replace))
+      ;; v0.40 Phase 3 — also limn/excursion: its install-wire-vtable wires
+      ;; *buffer-text-len-fn* (used by set-marker's clamp) AND patches
+      ;; limn/marker's parallel hook so narrow-to-region's markers don't
+      ;; clamp to 0 against the unwired default `(lambda (bid) 0)`.
+      (dolist (pkg-name '(#:limn/excursion #:limn/indent #:limn/query-replace))
         (let* ((pkg (find-package pkg-name))
                (fn (and pkg (find-symbol "INSTALL-WIRE-VTABLE" pkg))))
           (when (and fn (fboundp fn))
@@ -499,8 +503,15 @@
 (defun %install-cursor-vtables ()
   "Bind every package's *buffer-cursor-fn* / *buffer-set-cursor-fn* to a
    wire round-trip via buffer/cursor-get / buffer/cursor-set. Modules that
-   declare these vtables: limn/mark, limn/region, limn/kill, limn/isearch.
-   Safe to call repeatedly — idempotent."
+   declare these vtables: limn/mark, limn/region, limn/kill, limn/isearch,
+   limn/text-nav.  Safe to call repeatedly — idempotent.
+
+   v0.40 Phase 3: also wire limn/text-nav's full vtable (text-fn /
+   insert-fn / delete-fn) so its commands really mutate C++ state
+   rather than no-op against the defvar defaults.  Pre-v0.40 text-nav
+   was effectively unit-test-only; for the narrow walkthrough we need
+   end-of-buffer / beginning-of-buffer / etc. to actually move the
+   cursor through the wire."
   (let ((get-fn (lambda (bid)
                   (or (ignore-errors
                         (let ((r (call "buffer/cursor-get" :|buffer-id| bid)))
@@ -510,14 +521,35 @@
         (set-fn (lambda (bid off)
                   (ignore-errors
                     (call "buffer/cursor-set" :|buffer-id| bid :|offset| off))
-                  off)))
-    (dolist (pkg '(#:limn/mark #:limn/region #:limn/kill #:limn/isearch))
+                  off))
+        (text-fn (lambda (bid)
+                   (or (ignore-errors
+                         (let ((r (call "buffer/text" :|buffer-id| bid)))
+                           (and (eq (getf r :|ok|) t)
+                                (getf (getf r :|data|) :|text|))))
+                       "")))
+        (insert-fn (lambda (bid off str)
+                     (ignore-errors
+                       (call "buffer/insert"
+                             :|buffer-id| bid :|at| off :|text| str))))
+        (delete-fn (lambda (bid from to)
+                     (ignore-errors
+                       (call "buffer/delete"
+                             :|buffer-id| bid :|from| from :|to| to)))))
+    (dolist (pkg '(#:limn/mark #:limn/region #:limn/kill #:limn/isearch
+                   #:limn/text-nav))
       (let ((p (find-package pkg)))
         (when p
-          (let ((g (find-symbol "*BUFFER-CURSOR-FN*"     p))
-                (s (find-symbol "*BUFFER-SET-CURSOR-FN*" p)))
-            (when (and g (boundp g)) (set g get-fn))
-            (when (and s (boundp s)) (set s set-fn))))))))
+          (let ((g  (find-symbol "*BUFFER-CURSOR-FN*"     p))
+                (s  (find-symbol "*BUFFER-SET-CURSOR-FN*" p))
+                (tf (find-symbol "*BUFFER-TEXT-FN*"       p))
+                (i  (find-symbol "*BUFFER-INSERT-FN*"     p))
+                (d  (find-symbol "*BUFFER-DELETE-FN*"     p)))
+            (when (and g  (boundp g))  (set g  get-fn))
+            (when (and s  (boundp s))  (set s  set-fn))
+            (when (and tf (boundp tf)) (set tf text-fn))
+            (when (and i  (boundp i))  (set i  insert-fn))
+            (when (and d  (boundp d))  (set d  delete-fn))))))))
 
 (defun %install-file-text-bridge ()
   "Bind limn/file:*open-text-engine-fn* / *fetch-wire-content-fn* to
