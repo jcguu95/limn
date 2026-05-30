@@ -302,6 +302,65 @@ scope 契約維持不動。**
 `bridge/win-split :dir "h"` / `"v"`、`bridge/win-close`、`bridge/win-focus :win-id <next>`。
 沿用既有的 `limn/runtime:install-default-bindings` 模式。
 
+### Phase 6 —— win-undo tree(視窗配置 undo/redo)  ⏭ planned（2026-05-29 加入）
+
+> 前提:Phase 3 落地後,「window 配置」才是一個有意義、可快照的東西
+> (多個 pane、各自的 buffer/page/zoom/offset、splitter 比例、focused id)。
+> 所以本階段**排在 3c 之後**;在只有單一 pane 的世界裡它沒有內容可 undo。
+
+**目標:** 仿 Emacs 的 window 配置 undo —— 但要的是**樹**(undo *tree*),
+不是 `winner-mode` 那種線性 ring。每次改動 window 佈局(split / close /
+focus 切 buffer / 調整比例)就在樹上長一個節點;可以往回走、也可以從某個
+歷史節點分叉出新枝,不會像線性 undo 那樣一往前走就丟掉另一條歷史。
+
+**為什麼是樹、不是 ring:** 線性 winner-undo 的痛點是「undo 兩步 → 做新動作
+→ 中間那條 redo 路徑永久消失」。樹保留所有分支,對「我剛剛那個三欄佈局跑哪
+去了」這種需求友善。代價是 UX 要能在樹上導航(至少 undo/redo + 跳到節點)。
+
+**狀態長什麼樣(window-config snapshot):**
+
+```
+window-config = {
+  panes: [ {win_id, buffer_id, page, zoom, offset_x, offset_y} ... ],
+  splitter_ratios: [...],
+  focused_id: "wN",
+}
+```
+
+這正是 `LimnWindowRegistry` 已經逐欄追蹤的東西(見背景章節);win-undo 只是
+把「整個 registry + splitter 幾何」打包成一個不可變快照,推進一棵樹。
+
+**架構落點:** 大腦在後端 —— 樹**住在 Lisp**(`limn/window` 或新的
+`limn/winundo` package),沿用 `limn-undo` 已有的 undo-tree 資料結構(若
+text buffer 的 undo 已是樹狀,直接複用;若是線性則先抽共用)。C++ 端只負責
+「把一個 window-config 快照**套用**回 viewport」(重建 panes / 還原各 DV /
+設 splitter 比例 / 設 focus)—— 等於 `win-split`+`win-focus`+`win-close`
+的批次組合,Phase 3 的零件都已存在。
+
+**粗略 sub-roadmap(待 3c 收尾後細化):**
+
+1. Lisp:`capture-window-config` —— 從 registry + 前端查 splitter 幾何,組出
+   不可變快照。
+2. Lisp:undo-tree 結構(複用 `limn-undo`);每個改佈局的 wire 指令
+   (`win-split`/`win-close`/`win-focus`/buffer 切換)做完後 push 一個節點。
+3. Lisp:`apply-window-config` —— 把快照 diff 成最少的 split/close/focus 指令
+   序列,送給前端重建。
+4. C++:`bridge/win-config-apply` —— 一次套用整個佈局(冪等、可從任意現況收斂
+   到目標),避免一指令一指令來回。
+5. 鍵位:`C-c <left>` / `C-c <right>`(winner-style)或 `C-x w u` / `C-x w r`;
+   樹導航另議。
+6. 視覺驗證:headless 測 snapshot/apply 的等價性;佈局還原的目視驗證走
+   walkthrough(見 CLAUDE.md §6)。
+
+**狀態 checklist:**
+
+- [ ] §6.1 capture-window-config 快照
+- [ ] §6.2 undo-tree 結構 + 每個佈局指令 push 節點
+- [ ] §6.3 apply-window-config(diff → 指令序列)
+- [ ] §6.4 bridge/win-config-apply(冪等批次套用)
+- [ ] §6.5 鍵位 + 樹導航
+- [ ] §6.6 walkthrough 視覺驗證
+
 ## 周邊功能 —— Bookmark Everywhere(獨立任務,**不屬於** window split)
 
 > 刻意排在 window split 之外,避免又長出一個特例。等 window 這條告一段落再做。
@@ -351,6 +410,8 @@ bookmark」。兩個功能天然組合。
       詳見上方「待收編的既有特例 —— notes panel」章節。
 - [ ] Phase 4 —— per-DV overlay raster(待辦)
 - [ ] Phase 5 —— `C-x` window 綁定(待辦)
+- [ ] **Phase 6 —— win-undo tree(視窗配置 undo/redo,樹狀非線性)** ⏭ planned
+      —— 排在 3c 之後(單 pane 時無內容可 undo);詳見上方 Phase 6 章節。
 - [x] 開工 3a 前先用 `WINDOW-SYSTEM-DEBT` 標記原始碼(可 grep)
 - [ ] (獨立任務,window 收尾後)Bookmark Everywhere —— 具名視角快照 set/jump(註:跨-buffer 命名書籤已於 optimistic-brahmagupta 分支 v0.37 另行實作)
 
