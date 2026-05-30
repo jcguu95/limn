@@ -95,7 +95,12 @@
     ;; keymap installer.  Needs limn/cmd, limn/keys, limn/completion,
     ;; and the limn/bookmark core — so loaded right after them.
     (:file "limn-bookmark-cmds" :depends-on ("limn-bookmark"))
+    ;; bookmark-handlers: register text-mode / org-mode / pdf-mode
+    ;; record + jump thunks with limn/bookmark.  Needs limn/file
+    ;; (FIND-FILE / BUFFER-WIRE-ID), limn/pdf-mode (*BUFFER-ID-TO-PATH*),
+    ;; and limn/bookmark.  Loaded after both.
+    (:file "limn-bookmark-handlers" :depends-on ("limn-bookmark-cmds"))
     ;; v0.37 Phase B: ships sane defaults (M-x, M-r, which-key on).
     ;; Late in chain so it can use completion + which-key directly.
-    (:file "limn-default-config" :depends-on ("limn-bookmark-cmds"))
+    (:file "limn-default-config" :depends-on ("limn-bookmark-handlers"))
     (:file "limn" :depends-on ("limn-default-config"))))
