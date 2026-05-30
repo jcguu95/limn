@@ -1089,6 +1089,21 @@ backend 可以用 hook 接這個事件做 logging、profiling、debugging。
 開發方式：**先寫規格（本文件），再寫測試，再寫程式碼。**
 每個 v 版本的 tests 應在實作前完成。
 
+#+begin_quote
+*版本號聲明（2026-05-29 新版本制度生效後補）*
+
+本節「⏭ planned」項目標題上的 =v0.NN= 號碼是**制度生效前的計劃佔位
+標籤、不具權威**。真正的版本號在「merge 進 main」那一刻才由整合者發放
+（見 =docs/versioning-policy.md=）；故未 ship 項目的號碼可能與最終實際
+ship 的號碼不符、甚至已被別的工作占用。保留它們只因內文大量交叉引用、
+硬拔會製造數百個斷裂引用。
+
+- *已 =✅ shipped= 的項目*：號碼為歷史事實，原樣保留。
+- *=⏭ planned= 的項目*：號碼僅供閱讀對照，**不是承諾**。
+- *新增的 roadmap 項目*：請改用功能名 / Phase 名當標題、不要自封號碼
+  （見 versioning-policy.md §3.6）。
+#+end_quote
+
 *** v0.2 查詢層
 - 實作 =buffer/text=、=buffer/toc=、=buffer/links=、=view/get=
 - SBCL 寫 =limn-bridge.lisp=（socket 連線 + message loop + request ID）
@@ -4284,7 +4299,12 @@ OS-tier ~1：
 - 不做 git diff hook（VC）—— v0.33+
 - 不做 file-lock（=.#file=）—— Emacs 有，使用率低，留 v0.33+
 
-*** v0.37 "bookmark everywhere" + dogfood polish ⏭ planned
+*** "bookmark everywhere" + dogfood polish ✅ shipped（併入 v0.40.0）
+
+# 註：原標 v0.37 ⏭ planned。bookmark-everywhere 已於 2026-05-29 merge
+# 進 main（cdcb434），併入新制第一個權威 tag v0.40.0；自封的 v0.37 號碼
+# 屬制度生效前產物、不視為權威（見 versioning-policy.md §4）。
+
 
 把 v0.17 ship 的「PDF-only、per-doc、in-memory」bookmark wire 升級
 成 Emacs =bookmark.el= 等價的「跨 buffer、可命名、session 持久化」
