@@ -131,7 +131,7 @@ headless 跑完整 open→split→focus→close→關到剩一格 的生命週�
 
 ```bash
 cd /tmp/ph3-split
-LIMN_BIN=/tmp/ph3-split/sioyek/limn.app/Contents/MacOS/limn \
+HEADLESS=0 LIMN_BIN=/tmp/ph3-split/sioyek/limn.app/Contents/MacOS/limn \
   ./backend/run-repl.sh \
     --eval '(o "/tmp/ph3-split/sioyek/tutorial.pdf")' \
     --eval '(sleep 0.4)' --eval '(p)' \

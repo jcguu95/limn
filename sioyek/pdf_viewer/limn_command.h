@@ -229,6 +229,17 @@ public:
     // window mode this is always "w1", so behaviour is unchanged from before.
     QString            focused_win_id() const;
 
+    // Item 5 (mouse-wheel-follow-mouse) — scroll the pane UNDER THE CURSOR
+    // without moving focus, mirroring Emacs mouse-wheel-follow-mouse: the
+    // pointer's pane scrolls (or zooms with ctrl) but the focus border /
+    // keyboard target stay put. global is the cursor in screen coords;
+    // pixel_delta is the high-res trackpad delta (preferred, macOS), angle
+    // is the fallback notched-wheel delta; ctrl selects zoom vs scroll.
+    // Frontend-local on purpose: it never touches the focus-gated backend
+    // view/scroll path, so the green nav suite is unaffected.
+    void               scroll_at(const QPoint& global, const QPoint& pixel_delta,
+                                 const QPoint& angle_delta, bool ctrl);
+
     // ─── v0.14 paintGL integration accessors (public) ───────────────
     // Called from PdfViewOpenGLWidget::paintGL each frame.
     QJsonArray         focused_window_overlays() const;

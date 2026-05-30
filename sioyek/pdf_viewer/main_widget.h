@@ -48,6 +48,16 @@ public:
     DocumentView*        document_view();
     DocumentView*        document_view(const QString& win_id);
     PdfViewOpenGLWidget* opengl_widget()    { return opengl_widget_; }
+    // Phase 3b — the gl widget belonging to a SPECIFIC pane (falls back to
+    // the focused opengl_widget_ for unknown ids). Lets per-pane operations
+    // (e.g. cursor-targeted wheel scroll) repaint the right surface.
+    PdfViewOpenGLWidget* opengl_widget(const QString& win_id);
+    // Phase 3b — hit-test: which tiled pane's viewport contains GLOBAL_POS
+    // (a screen-space point)? Returns that pane's win-id, or the focused
+    // win-id when the point is over no pane. Used by mouse-wheel scroll to
+    // drive the pane under the cursor WITHOUT moving focus (Emacs
+    // mouse-wheel-follow-mouse semantics).
+    QString              win_id_at(const QPoint& global_pos) const;
     DocumentManager*     document_manager() { return document_manager_; }
     LimnChromeBar*       chrome_bar()       { return chrome_bar_; }
 

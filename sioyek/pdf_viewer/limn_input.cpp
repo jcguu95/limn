@@ -354,6 +354,20 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
         }
         case QEvent::Wheel: {
             auto* wev = static_cast<QWheelEvent*>(ev);
+            // Item 5 — drive the pane UNDER THE CURSOR directly, without
+            // moving focus (Emacs mouse-wheel-follow-mouse). scroll_at
+            // hit-tests the global cursor position to find the hovered pane
+            // and scrolls/zooms its DocumentView. macOS trackpads send
+            // high-res pixelDelta; notched wheels send only angleDelta.
+            if (command) {
+                const bool ctrl =
+                    wev->modifiers().testFlag(Qt::ControlModifier) ||
+                    wev->modifiers().testFlag(Qt::MetaModifier);
+                command->scroll_at(wev->globalPosition().toPoint(),
+                                   wev->pixelDelta(), wev->angleDelta(), ctrl);
+            }
+            // Still publish the wire event for observability / future
+            // backend consumers (the actual motion happened above).
             QJsonObject e;
             e.insert("frame-id", "f1");
             e.insert("win-id",   command ? command->focused_win_id() : QStringLiteral("w1"));

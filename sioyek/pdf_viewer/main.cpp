@@ -103,12 +103,34 @@ int main(int argc, char* argv[]) {
     fz_register_document_handlers(mupdf_context);
 
     MainWidget window;
-    window.setWindowTitle("limn");
+    // Brand the window title with an optional LIMN_TITLE suffix so that when
+    // several limn instances (e.g. multiple git worktrees / parallel dogfood
+    // sessions) are open at once, each window is visually distinguishable.
+    // Every build otherwise titles its window "limn", which makes it
+    // impossible to tell which on-screen window belongs to which checkout.
+    {
+        // NB: bind the QByteArray to a NAMED local — do NOT write
+        // `qgetenv("LIMN_TITLE").constData()`, because qgetenv returns a
+        // TEMPORARY QByteArray that is destroyed at the end of the full
+        // expression, leaving constData() dangling (reads freed memory →
+        // usually '\0' → title silently stays "limn").
+        const QByteArray title_suffix = qgetenv("LIMN_TITLE");
+        if (!title_suffix.isEmpty())
+            window.setWindowTitle(
+                QString("limn — %1").arg(QString::fromUtf8(title_suffix)));
+        else
+            window.setWindowTitle("limn");
+    }
     // Always show(): under --headless we've switched to QT_QPA_PLATFORM=offscreen
     // so this paints into an offscreen surface (no visible window) but the full
     // layout + paintEvent pipeline runs — required for QWidget::grab() tests.
     window.resize(1200, 900);
     window.show();
+    // Bring the window to the front on a real display. With several parallel
+    // limn instances running, a freshly-launched window can otherwise open
+    // behind another session's window and look like "nothing happened".
+    window.raise();
+    window.activateWindow();
 
     // ── Limn protocol layer ────────────────────────────────────────────
     LimnBufferRegistry  registry;

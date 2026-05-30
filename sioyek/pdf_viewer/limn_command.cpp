@@ -1867,6 +1867,69 @@ void LimnCommand::cmd_view_scroll(const QString& id, const QJsonObject& msg) {
     bridge->send_ok(id, collect_view_state(win_id));
 }
 
+// ─── Item 5: cursor-targeted scroll (mouse-wheel-follow-mouse) ─────────
+//
+// Scroll (or, with ctrl, zoom) the pane UNDER THE CURSOR without moving
+// focus — Emacs mouse-wheel-follow-mouse semantics: the pointer's pane
+// moves, but the focus border and keyboard target stay where they are.
+//
+// This is deliberately frontend-local. The wire view/scroll command
+// (cmd_view_scroll above) is focus-gated — it only mutates the DV when the
+// target win-id is the focused one — because backend nav must follow focus.
+// Routing trackpad scroll through there would either move focus or no-op on
+// the hovered-but-unfocused pane. Driving the DV directly here keeps the
+// green nav suite untouched while giving the cursor's pane real motion.
+//
+// Math mirrors the native PdfViewOpenGLWidget::wheelEvent: screen delta
+// divided by zoom yields a document-space delta, and offset_y is negated
+// (sioyek's window_pos.y = (vpos.y - offset.y)*zoom + center, so revealing
+// content below = increasing offset_y). macOS trackpads deliver high-res
+// pixel_delta; classic notched wheels deliver only angle_delta — prefer
+// pixel_delta when present, fall back to angle_delta otherwise.
+void LimnCommand::scroll_at(const QPoint& global, const QPoint& pixel_delta,
+                            const QPoint& angle_delta, bool ctrl) {
+    extern float VERTICAL_MOVE_AMOUNT;
+    extern float ZOOM_INC_FACTOR;
+    if (!main_widget || !windows) return;
+
+    const QString wid = main_widget->win_id_at(global);
+    LimnWindow*   win = windows->get(wid);
+    DocumentView* dv  = main_widget->document_view(wid);
+    PdfViewOpenGLWidget* gl = main_widget->opengl_widget(wid);
+    if (!dv) return;
+
+    if (ctrl) {
+        // Zoom the hovered pane. Use the dominant axis (vertical) and the
+        // same multiplicative factor as the native ctrl-wheel zoom.
+        const int dir = (pixel_delta.y() != 0 ? pixel_delta.y() : angle_delta.y());
+        if (dir == 0) return;
+        const float prev = dv->get_zoom_level();
+        const float next = (dir > 0) ? prev * ZOOM_INC_FACTOR
+                                     : prev / ZOOM_INC_FACTOR;
+        dv->set_zoom_level(next, true);
+        if (win) win->zoom = dv->get_zoom_level();
+    } else {
+        const float zoom = dv->get_zoom_level();
+        const float z    = (zoom > 0.0f) ? zoom : 1.0f;
+        const int   dpx  = (pixel_delta.x() != 0 ? pixel_delta.x() : angle_delta.x());
+        const int   dpy  = (pixel_delta.y() != 0 ? pixel_delta.y() : angle_delta.y());
+        const float delta_x = dpx * VERTICAL_MOVE_AMOUNT / z;
+        const float delta_y = dpy * VERTICAL_MOVE_AMOUNT / z;
+        const float prev_x  = dv->get_offset_x();
+        const float prev_y  = dv->get_offset_y();
+        dv->set_offsets(prev_x + delta_x, prev_y - delta_y, false);
+        // Sync the per-pane registry so view/get reflects the new scroll
+        // position even though this bypassed the wire command.
+        if (win) {
+            win->offset_x = dv->get_offset_x();
+            win->offset_y = dv->get_offset_y();
+            const int cp = dv->get_center_page_number();
+            if (cp >= 0) win->page = cp;
+        }
+    }
+    if (gl) gl->update();
+}
+
 // ─── view/center-on ───────────────────────────────────────────────────
 //
 // v0.39.18 A (search-scroll fix): scroll the view so a given page-norm

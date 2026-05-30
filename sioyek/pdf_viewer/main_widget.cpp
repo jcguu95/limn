@@ -135,6 +135,24 @@ DocumentView* MainWidget::document_view(const QString& win_id) {
     return document_view_;   // fallback: focused / singleton DV
 }
 
+PdfViewOpenGLWidget* MainWidget::opengl_widget(const QString& win_id) {
+    if (!win_id.isEmpty()) {
+        auto it = panes_.find(win_id);
+        if (it != panes_.end() && it->gl) return it->gl;
+    }
+    return opengl_widget_;   // fallback: focused / singleton gl widget
+}
+
+QString MainWidget::win_id_at(const QPoint& global_pos) const {
+    for (auto it = panes_.begin(); it != panes_.end(); ++it) {
+        QWidget* w = it->stack;
+        if (!w || !w->isVisible()) continue;
+        const QRect r(w->mapToGlobal(QPoint(0, 0)), w->size());
+        if (r.contains(global_pos)) return it.key();
+    }
+    return focused_win_id_;
+}
+
 // Phase 3a — create a fresh per-window pane. The new DocumentView shares the
 // heavy managers (db_manager_/document_manager_/checksummer_) and renderer
 // but owns its own page/zoom/offset state (the "fat" approach, decision 二).
@@ -165,6 +183,17 @@ MainWidget::add_pane_for(const QString& win_id, const QString& orientation) {
     pane.stack->setCurrentIndex(0);
 
     viewport_splitter_->addWidget(pane.stack);
+
+    // Force the freshly-added pane visible and repainted NOW. A
+    // QOpenGLWidget inserted into an already-shown QSplitter can otherwise
+    // defer its first paint until some unrelated event arrives — on a real
+    // display that looks like "the split didn't happen" (the new pane stays
+    // blank, so the user perceives a single pane). show()+update() schedules
+    // the initial GL paint deterministically. Harmless in headless runs.
+    pane.stack->show();
+    pane.gl->show();
+    pane.gl->update();
+
     panes_.insert(win_id, pane);
     return pane;
 }
