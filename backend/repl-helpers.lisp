@@ -54,6 +54,50 @@
     (format t "  ~s~%" (limn/bridge:response-data r))
     r))
 
+;;; ── windows (split / focus / close) ─────────────────────────────────────
+;;; Phase 3b dogfood shortcuts. bridge/win-* are frontend-handled commands
+;;; (the backend sends them); from the REPL we drive them directly via
+;;; limn:call. A split shows a REAL second pane with its own DocumentView.
+
+(defun sp (&optional (dir "h") (win-id "w1"))
+  "Split WIN-ID (default w1). DIR is \"h\" (side-by-side) or \"v\" (top/bottom).
+   Returns the NEW window-id (win-b), or NIL on failure. The new pane shows
+   the same buffer + view-state as the source, but renders independently."
+  (let ((r (limn:call "bridge/win-split" :|win-id| win-id :|dir| dir)))
+    (cond
+      ((not (limn/bridge:response-ok? r))
+       (format t "  ✗ split failed: ~a~%" (limn/bridge:response-error r))
+       nil)
+      (t (let* ((data (limn/bridge:response-data r))
+                (a    (getf data :|win-a|))
+                (b    (getf data :|win-b|)))
+           ;; Register the new pane's active buffer so key events stamped
+           ;; with its win-id resolve the source buffer's mode-buffer
+           ;; (pdf-mode keymap).  A split reuses an already-open buffer, so
+           ;; NO buffer-opened event fires — without this j/k/etc. are
+           ;; unbound in the new pane.  See %register-window-buffer.
+           (let ((src-buf (limn/pdf-mode::%window-active-buffer a)))
+             (when (and b src-buf)
+               (limn/pdf-mode::%register-window-buffer b src-buf)))
+           (format t "  split ~a → ~a + ~a~%" win-id a b)
+           b)))))
+
+(defun wf (win-id)
+  "Focus WIN-ID — moves the focus border AND repoints which pane keyboard
+   navigation (j/k/etc) drives. Returns the response."
+  (let ((r (limn:call "bridge/win-focus" :|win-id| win-id)))
+    (format t "  ok: ~a~%" (limn/bridge:response-ok? r))
+    r))
+
+(defun wc (win-id)
+  "Close WIN-ID — destroys its pane. Focus auto-transfers to a surviving
+   tiled window. Refuses to close the last tiled window."
+  (let ((r (limn:call "bridge/win-close" :|win-id| win-id)))
+    (if (limn/bridge:response-ok? r)
+        (format t "  closed ~a~%" win-id)
+        (format t "  ✗ close failed: ~a~%" (limn/bridge:response-error r)))
+    r))
+
 ;;; ── events / pump ──────────────────────────────────────────────────────
 
 (defun p ()
@@ -239,6 +283,9 @@
   (format t "   (o \"path.pdf\")        open a buffer~%")
   (format t "   (v \"w1\" :page 3)      view/set~%")
   (format t "   (vg \"w1\")             view/get~%")
+  (format t "   (sp \"h\") / (sp \"v\")   split window → real 2nd pane~%")
+  (format t "   (wf \"w2\")             focus a window (moves border + kbd)~%")
+  (format t "   (wc \"w2\")             close a window (destroys pane)~%")
   (format t "   (k \"j\" #'fn)          bind a key~%")
   (format t "   (tap \"key\") / (tap-all) / (untap \"key\")~%")
   (format t "   (p)                   pump events (drain socket)~%")

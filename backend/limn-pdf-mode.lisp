@@ -1222,7 +1222,9 @@
 
 (defun %refresh-overlays (path anns)
   (declare (ignore path))
-  (%limn-call "view/overlays" :|win-id| "w1"
+  ;; Phase 3b: target the focused window (bound by %wrap-cmd from the key
+  ;; event's :win-id). Single-window mode keeps *current-win-id* = "w1".
+  (%limn-call "view/overlays" :|win-id| *current-win-id*
                :|layers| (pdf-annotations-overlay-payload-with-icons anns)))
 
 (defun %annotations-replace-by-id (path ann)
@@ -1299,23 +1301,31 @@
 (defvar limn/pdf-mode::*last-key* nil
   "Most recently dispatched key, bound by keymap wrapper.")
 
+;; Phase 3b: all read/write the FOCUSED window. *current-win-id* is bound by
+;; %wrap-cmd from each key event's :win-id (the frontend now stamps the
+;; focused win-id onto key/mouse/scroll events). Single-window mode keeps it
+;; at "w1", so single-pane behaviour is unchanged.
 (defun limn/pdf-mode::%focused-buffer-id ()
   "Read buffer-id of currently focused window via view/get."
-  (let* ((r (limn/pdf-mode::%limn-call "view/get" :|win-id| "w1"))
+  (let* ((r (limn/pdf-mode::%limn-call "view/get"
+                                       :|win-id| limn/pdf-mode::*current-win-id*))
          (d (limn/pdf-mode::%response-data r)))
     (getf d :|buffer-id|)))
 
 (defun limn/pdf-mode::%focused-view ()
   "Return current view state plist (page/zoom/page-count/offset-y/...)."
-  (let* ((r (limn/pdf-mode::%limn-call "view/get" :|win-id| "w1"))
+  (let* ((r (limn/pdf-mode::%limn-call "view/get"
+                                       :|win-id| limn/pdf-mode::*current-win-id*))
          (d (limn/pdf-mode::%response-data r)))
     (or d '())))
 
 (defun limn/pdf-mode::%page-set (page)
-  (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1" :|page| page))
+  (limn/pdf-mode::%limn-call "view/set"
+                             :|win-id| limn/pdf-mode::*current-win-id* :|page| page))
 
 (defun limn/pdf-mode::%zoom-set (z)
-  (limn/pdf-mode::%limn-call "view/set" :|win-id| "w1" :|zoom| z))
+  (limn/pdf-mode::%limn-call "view/set"
+                             :|win-id| limn/pdf-mode::*current-win-id* :|zoom| z))
 
 (defun limn/pdf-mode::%clamp-page (page page-count)
   (max 0 (min page (1- (max 1 page-count)))))
@@ -1373,13 +1383,15 @@
   (lambda (&optional prefix)
     (let* ((n    (or prefix 1))
            (step (* n limn/pdf-mode:*pdf-scroll-step*)))
-      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dy| step))))
+      (limn/pdf-mode::%limn-call "view/scroll"
+                                 :|win-id| limn/pdf-mode::*current-win-id* :|dy| step))))
 
 (limn/pdf-mode::%defcmd pdf-scroll-up "p"
   (lambda (&optional prefix)
     (let* ((n    (or prefix 1))
            (step (* n limn/pdf-mode:*pdf-scroll-step*)))
-      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dy| (- step)))))
+      (limn/pdf-mode::%limn-call "view/scroll"
+                                 :|win-id| limn/pdf-mode::*current-win-id* :|dy| (- step)))))
 
 (limn/pdf-mode::%defcmd pdf-zoom-in nil
   (lambda ()
@@ -1401,7 +1413,7 @@
   (lambda ()
     ;; Simplification: send a hint; C++ engine-params interprets "fit-width".
     (limn/pdf-mode::%limn-call "bridge/engine-params"
-                                :|win-id| "w1" :|fit| "width")))
+                                :|win-id| limn/pdf-mode::*current-win-id* :|fit| "width")))
 
 (limn/pdf-mode::%defcmd pdf-toggle-dark nil
   (lambda ()
@@ -1420,7 +1432,7 @@
            (cur (getf (getf v :|engine-params|) :|dark-mode|))
            (next (if (or (null cur) (eq cur :false)) t :false)))
       (limn/pdf-mode::%limn-call "view/set"
-                                  :|win-id| "w1"
+                                  :|win-id| limn/pdf-mode::*current-win-id*
                                   :|engine-params| (list :|dark-mode| next)))))
 
 (limn/pdf-mode::%defcmd pdf-rotate-cw nil
@@ -1434,7 +1446,7 @@
            (rot (or (getf (getf v :|engine-params|) :|rotation|) 0))
            (next (mod (+ rot 90) 360)))
       (limn/pdf-mode::%limn-call "view/set"
-                                  :|win-id| "w1"
+                                  :|win-id| limn/pdf-mode::*current-win-id*
                                   :|engine-params| (list :|rotation| next)))))
 
 ;;; ═════════════════════════════════════════════════════════════════════
@@ -1796,12 +1808,12 @@
 
 (limn/pdf-mode::%defcmd pdf-half-page-down nil
   (lambda ()
-    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| limn/pdf-mode::*current-win-id*
                                 :|dy| limn/pdf-mode:*pdf-half-page-step*)))
 
 (limn/pdf-mode::%defcmd pdf-half-page-up nil
   (lambda ()
-    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| limn/pdf-mode::*current-win-id*
                                 :|dy| (- limn/pdf-mode:*pdf-half-page-step*))))
 
 ;;; v0.39: full-page scroll (vim C-f / C-b).  One whole visible screen.
@@ -1811,12 +1823,12 @@
 
 (limn/pdf-mode::%defcmd pdf-page-down nil
   (lambda ()
-    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| limn/pdf-mode::*current-win-id*
                                 :|dy| limn/pdf-mode:*pdf-page-step*)))
 
 (limn/pdf-mode::%defcmd pdf-page-up nil
   (lambda ()
-    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1"
+    (limn/pdf-mode::%limn-call "view/scroll" :|win-id| limn/pdf-mode::*current-win-id*
                                 :|dy| (- limn/pdf-mode:*pdf-page-step*))))
 
 ;;; v0.39: horizontal scroll (vim h / l).  Same step as j/k but on :dx.
@@ -1826,13 +1838,13 @@
   (lambda (&optional prefix)
     (let* ((n    (or prefix 1))
            (step (* n limn/pdf-mode:*pdf-scroll-step*)))
-      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dx| (- step)))))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| limn/pdf-mode::*current-win-id* :|dx| (- step)))))
 
 (limn/pdf-mode::%defcmd pdf-scroll-right "p"
   (lambda (&optional prefix)
     (let* ((n    (or prefix 1))
            (step (* n limn/pdf-mode:*pdf-scroll-step*)))
-      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| "w1" :|dx| step))))
+      (limn/pdf-mode::%limn-call "view/scroll" :|win-id| limn/pdf-mode::*current-win-id* :|dx| step))))
 
 ;;; v0.37 Phase D: close the focused PDF buffer (vim q).  Routes to
 ;;; buffer/close on the focused buffer-id.
@@ -2340,6 +2352,12 @@
 
 ;;; ── Bug-Set-B #3 — two-pane focus switch (C-x o) ─────────────────────
 ;;;
+;;; WINDOW-SYSTEM-DEBT: %notes-focus-pdf / %notes-focus-list / %notes-focus-other
+;;; and notes-panel-mode hand-roll a 1x2 tiled split (always win "w1", single
+;;; shared DocumentView) that predates the multi-DV window system. To be
+;;; subsumed in Phase 3c on top of bridge/win-split + bridge/win-focus. See
+;;; docs/split-frame-design.md ("待收編的既有特例 —— notes panel").
+;;;
 ;;; While the notes side panel is open BOTH panes are always drawn (the
 ;;; list on the left, the PDF on the right).  "Focus" decides three things
 ;;; in concert: (a) which buffer w1's keys route to — backend
@@ -2361,6 +2379,26 @@
    there (lookup-key resolves the mode via mode-buffer-for-window)."
   (let ((fn (%notes-rt-symbol "SET-WINDOW-ACTIVE-BUFFER")))
     (when fn (funcall fn "w1" buffer-id))))
+
+(defun %register-window-buffer (win-id buffer-id)
+  "Tell the backend key-dispatch registry that WIN-ID currently shows
+   BUFFER-ID, so key events stamped with WIN-ID resolve BUFFER-ID's
+   mode-buffer — and thus the pdf-mode keymap (j/k/etc).
+
+   Needed after a window split: the new pane shares an ALREADY-OPEN
+   buffer, so no buffer-opened event fires and %on-buffer-opened never
+   registers the mapping.  Without this, the new pane has no mode keymap
+   and every pdf-mode key silently no-ops (the original Phase 3b
+   keyboard-routing bug).  The mode-buffer is keyed by buffer-id, so two
+   windows on the same buffer correctly share one keymap stack."
+  (let ((fn (%notes-rt-symbol "SET-WINDOW-ACTIVE-BUFFER")))
+    (when (and fn win-id buffer-id) (funcall fn win-id buffer-id))))
+
+(defun %window-active-buffer (win-id)
+  "Backend active buffer-id for WIN-ID, or NIL (mirrors
+   limn/runtime:window-active-buffer without a hard package dependency)."
+  (let ((fn (%notes-rt-symbol "WINDOW-ACTIVE-BUFFER")))
+    (and fn win-id (funcall fn win-id))))
 
 (defun %notes-pdf-mode-buffer ()
   "The mode-buffer for the PDF buffer, or NIL."
@@ -3492,6 +3530,10 @@
     ;; buffer while the side panel is open.  Gives the PDF side the same
     ;; C-x o (→ list) and q (→ close) bindings, shadowing pdf-mode only for
     ;; the panel's lifetime (deactivated in %notes-return-to-pdf).
+    ;; WINDOW-SYSTEM-DEBT: this minor mode exists only to fake other-window/
+    ;; window-close on the notes panel's hand-rolled split; folds into the
+    ;; Phase 5 global C-x o / C-x 0 bindings once Phase 3c lands. See
+    ;; docs/split-frame-design.md ("待收編的既有特例 —— notes panel").
     (let ((pkm (limn/keys:make-keymap)))
       (%def pkm "C-x o" (intern "PDF-NOTES-FOCUS-OTHER" :cl-user))
       (%def pkm "q"     (intern "PDF-NOTES-QUIT"        :cl-user))

@@ -1,5 +1,7 @@
 #pragma once
 #include <qmainwindow.h>
+#include <QHash>
+#include <QString>
 
 class DocumentView;
 class PdfRenderer;
@@ -37,9 +39,25 @@ public:
     //                      win-aware API without behaviour change.
     //                      Empty/unknown win_id falls back to the focused
     //                      DV. See docs/split-frame-design.md.
-    DocumentView*        document_view()    { return document_view_; }
+    //
+    // Phase 3a — both now route through panes_ (the per-window pane map).
+    // The no-arg form returns the focused pane's DV; the overload returns
+    // a specific win's DV (falling back to document_view_ for unknown ids,
+    // preserving the Phase 2 contract). In 3a there is still only one pane
+    // ("w1") and focus never moves, so both are identical to v0.39.10.
+    DocumentView*        document_view();
     DocumentView*        document_view(const QString& win_id);
     PdfViewOpenGLWidget* opengl_widget()    { return opengl_widget_; }
+    // Phase 3b — the gl widget belonging to a SPECIFIC pane (falls back to
+    // the focused opengl_widget_ for unknown ids). Lets per-pane operations
+    // (e.g. cursor-targeted wheel scroll) repaint the right surface.
+    PdfViewOpenGLWidget* opengl_widget(const QString& win_id);
+    // Phase 3b — hit-test: which tiled pane's viewport contains GLOBAL_POS
+    // (a screen-space point)? Returns that pane's win-id, or the focused
+    // win-id when the point is over no pane. Used by mouse-wheel scroll to
+    // drive the pane under the cursor WITHOUT moving focus (Emacs
+    // mouse-wheel-follow-mouse semantics).
+    QString              win_id_at(const QPoint& global_pos) const;
     DocumentManager*     document_manager() { return document_manager_; }
     LimnChromeBar*       chrome_bar()       { return chrome_bar_; }
 
@@ -71,7 +89,52 @@ public:
     PdfViewOpenGLWidget* add_split_pane(const QString& orientation);
     int                  viewport_count() const;
 
+    // Phase 3a — per-window viewport pane. Each tiled LimnWindow maps 1:1
+    // to a ViewportPane that owns its OWN DocumentView + PdfViewOpenGLWidget
+    // (the "fat" approach — decision 二 in docs/split-frame-design.md). The
+    // heavy resources (db_manager_/document_manager_/checksummer_/
+    // pdf_renderer_/fz_context) stay SHARED across panes.
+    struct ViewportPane {
+        DocumentView*        dv    = nullptr;
+        PdfViewOpenGLWidget* gl    = nullptr;
+        QStackedWidget*      stack = nullptr;   // index 0 = PDF, 1 = text
+        QPlainTextEdit*      text  = nullptr;
+    };
+
+    // Phase 3a — create a fresh per-window pane (new DocumentView sharing the
+    // heavy managers, wrapped in a PdfViewOpenGLWidget + QStackedWidget),
+    // insert it into viewport_splitter_ with orientation "h"|"v", register it
+    // under win_id and return it. NOT called by production in 3a (win-split
+    // still uses add_split_pane); 3b switches the wiring over.
+    ViewportPane         add_pane_for(const QString& win_id, const QString& orientation);
+
+    // Phase 3a — mark win_id as the focused pane and repoint document_view_
+    // AND opengl_widget_ at that pane's DV/widget, so the ~585 direct
+    // document_view_ / opengl_widget() accesses in _main_widget.cpp always
+    // target the focused window. Also refreshes the focus border. No-op for
+    // unknown win_id. In 3a focus never moves (single "w1"); 3b calls this on
+    // bridge/win-focus and bridge/win-close.
+    void                 set_focused_win(const QString& win_id);
+
+    // Phase 3b — load a document into a SPECIFIC pane's DocumentView (not the
+    // focused one). Used by bridge/win-split to render the new pane's content
+    // without disturbing the focused pane. Returns false for unknown win_id
+    // or open failure.
+    bool                 load_into_pane(const QString& win_id,
+                                        const std::wstring& path);
+
+    // Phase 3b — destroy the pane for win_id: detach its widgets from the
+    // splitter and delete them + its DocumentView, then drop it from panes_.
+    // Caller must have already repointed focus away from this pane (see
+    // set_focused_win) so document_view_/opengl_widget_ never dangle.
+    void                 remove_pane(const QString& win_id);
+
 private:
+    // Phase 3b — draw a focus border around the focused pane (muted border on
+    // the others to reserve geometry). No border at all when there is only
+    // one pane, so single-window mode is visually identical to v0.39.10.
+    void                 apply_pane_focus_border();
+
     class QSplitter*     viewport_splitter_= nullptr;
     PdfViewOpenGLWidget* opengl_widget_    = nullptr;
     DocumentView*        document_view_    = nullptr;
@@ -87,4 +150,11 @@ private:
     // reparented into viewport_splitter_ as a side panel (vs. living in
     // main_stack_ as the full-screen text view).
     bool                 text_panel_mode_  = false;
+
+    // Phase 3a — per-window panes. The initial pane (document_view_/
+    // opengl_widget_/main_stack_/text_widget_) is registered under "w1" in
+    // the constructor. focused_win_id_ names the pane that document_view()
+    // (no-arg) resolves to; document_view_ is kept as its cached DV pointer.
+    QHash<QString, ViewportPane> panes_;
+    QString              focused_win_id_   = "w1";
 };
