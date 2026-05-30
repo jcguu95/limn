@@ -1,0 +1,67 @@
+#+TITLE: limn ROADMAP — 全 feature 總索引
+#+STARTUP: overview
+
+本檔是**所有 feature 的單一總索引**：有哪些功能線、各自做到哪、設計文件
+在哪、ship 了沒。它**只列一行摘要 + 連結**，不展開細節——每個 feature 的
+roadmap / sub-roadmap / 進度 checklist 住在它**自己的 design doc** 裡。
+
+* 規則（先讀，跟版本制度同一套精神）
+
+見 =versioning-policy.md=。三句話：
+
+1. *integrator-only*：本索引**只在 merge 進 main 那一刻、由整合者更新**。
+   feature 分支**永不碰本檔** → 永遠不會有多 agent 撞 merge（跟 CHANGELOG
+   / 版本號發放同一個序列化點）。
+2. *狀態分層，各信各的權威*：
+   - 「已 ship」的真相 = =git tag= / =VERSION= / =CHANGELOG.org=，不在這裡
+     重述，只引用其 =vX.Y.Z=。
+   - 「進行中 / 計劃」的細節 = 該 feature 自己的 =docs/<feature>-design.md=
+     裡的分階段 + =[x]/[ ]= checklist。本索引只標一個粗狀態。
+3. *新 feature 怎麼進場*：開一份 =docs/<slug>-design.md=（範本見
+   =split-frame-design.md=：目標 + 分階段 sub-roadmap + 活的 checklist），
+   然後在本索引加**一行**指過去。**不要**在本檔展開細節、**不要**自封版本號。
+
+狀態值：=planned= ⏭ ／ =in-progress= 🛠 ／ =shipped= ✅（附 tag）／
+=blocked= ⛔（附 blocked-by）。
+
+* 進行中的 feature 線（active）
+
+** window split（多 pane 視窗分割）  🛠 in-progress
+- 設計：=docs/split-frame-design.md=
+- 進度：Phase 1/2 ✅、3a/3b ✅（=v0.41.0=）；**3c 收編 notes panel ← 下一個**、
+  Phase 4 per-DV overlay raster ⏭（中偏高風險、硬骨頭）、Phase 5 =C-x= 視窗
+  鍵位 ⏭（純 Lisp、輕）。
+- 完整收尾 = 3c → Phase 4 → Phase 5。
+
+** annotation / markup 互動  🛠 in-progress
+- 設計：=markup-interaction-design.md=
+- 進度：step1 搜尋結果改底線 ✅、step2 =M-N= 清單 buffer ✅；step3 in-page
+  current annotation（click+Tab 選取、focus ring、修座標 bug）⏭、step4 PDF
+  原生 show/hide toggle ⏭、step5 margin gutter / note icon ⏭。
+
+* 計劃中 / 未排（planned）
+
+** Lisp runtime 深水區roadmap  ⏭ planned
+- 索引不重複展開——權威清單在 =LIMN-SPEC.org= §12（Edit Model、Markers、
+  Syntax tables、Current buffer、視覺系統 overlays :face、cl-ppcre regex、
+  file-notify、query-replace…）。注意 §12 那些 =v0.NN ⏭ planned= 號碼是
+  **制度生效前的非權威佔位標籤**（見該節開頭聲明），真正版本號 merge 時才發。
+
+* 近期已 ship（authoritative）
+
+| 版本 | feature | tag commit | 設計 |
+|------+---------+-----------+------|
+| =v0.41.0= | window split Phase 3a/3b — 真正獨立第二 pane | =7ee139e= | split-frame-design.md |
+| =v0.40.0= | 版本制度地基（merge 時發號）+ 收編 bookmark/logging | =49def82= | versioning-policy.md |
+| =v0.40.0= | bookmark everywhere — 跨 buffer 可命名書籤層 | =cdcb434= | （見 LIMN-SPEC §12） |
+| =v0.40.0= | logging — hierarchical namespace + wire mirror | =3b95871= | — |
+
+更早的歷史不在此重述 → 完整 release 紀錄看 =CHANGELOG.org= 與 =git tag=。
+
+* 別的追蹤面（各司其職，別跟本索引混）
+
+- =CHANGELOG.org= — release notes（已 ship 的事實），非 tracker。
+- =ISSUES.md= — 跨 sprint 的結構性債 / 難修項 backlog（有自己的 Status 欄）。
+- =TEST-COVERAGE-TODO.org= — 測試覆蓋缺口。
+- =LIMN-SPEC.org= §12 — Lisp runtime 的深水區 roadmap（技術規格向）。
+- agent 的 session task list — **用過即丟的草稿，不跨 session、不是 keep-track 工具。**

@@ -126,9 +126,33 @@ merge 順序。
     v0.39 之後最新的工作），並在當前 main 狀態打第一個權威 tag，作為
     新制的起點。是否連檔名一起正規化，另案決定（churn 大、非必要）。
 
+## 4.5 feature 追蹤：ROADMAP 索引 + per-feature design doc
+
+「有哪些 feature、各自做到哪」這份狀態，跟版本號一樣是**被幾十個平行
+agent 讀寫的共享資源**，所以套同一套紀律：活在 git、抗衝突、單一權威。
+
+三層，各信各的權威：
+
+1. **已 ship 的真相** = `git tag` / `VERSION` / `CHANGELOG.org`。不重述、
+   用 `git describe` 推。
+2. **每個 feature 的 roadmap / sub-roadmap / 進度** = 它自己的
+   `docs/<slug>-design.md`（範本：`split-frame-design.md`——目標 + 分階段
+   + 活的 `[x]/[ ]` checklist）。一 feature 一檔 → 分支幾乎不撞。
+3. **全 feature 總索引** = `docs/ROADMAP.org`，每 feature **一行**摘要 +
+   指到它的 design doc。
+
+關鍵規則——**`ROADMAP.org` 是 integrator-only**：只在 merge 進 main 那一刻
+由整合者更新，feature 分支**永不碰它**。這跟 CHANGELOG 收攏、版本號發放
+是**同一個序列化點**，所以索引天生零 merge 衝突、天生有單一權威。
+
+> 反面教材：別用 agent 的 session task list 當 keep-track——它 per-session、
+> 用過即丟、不跨 session、不同步。真正的追蹤一定要落在上述 git 檔案。
+
 ## 5. 待辦（本草案通過後）
 
-- [ ] 在 repo 根建立 `VERSION` 與 `changelog.d/`（含 README + 收攏腳本）。
-- [ ] 對「制度生效起點」的 main commit 打第一個 annotated tag。
-- [ ] 更新 agent 工作指引：分支不自帶版本號、改丟 changelog fragment。
+- [x] 在 repo 根建立 `VERSION` 與 `changelog.d/`（含 README + 收攏腳本）。
+- [x] 對「制度生效起點」的 main commit 打第一個 annotated tag（`v0.40.0`）。
+- [x] 建 `docs/ROADMAP.org` 總索引（integrator-only）+ §4.5 規範。
+- [ ] 更新 agent 工作指引：分支不自帶版本號、改丟 changelog fragment、
+      只動自己的 design doc、不碰 ROADMAP.org。
 - [ ] （另案）既有 `*-v037.*` 檔名是否正規化。
