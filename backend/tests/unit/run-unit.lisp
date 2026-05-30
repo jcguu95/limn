@@ -154,7 +154,9 @@
                 ;; v0.40 §1.5 — kill narrow-aware
                 "kill-narrow.lisp"
                 ;; v0.40 §1.6 — occur narrow-aware
-                "occur-narrow.lisp"))
+                "occur-narrow.lisp"
+                ;; v0.40 §2.1 — narrow-to-region / widen commands + keymap
+                "narrow-cmd.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
