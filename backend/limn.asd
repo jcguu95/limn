@@ -86,7 +86,21 @@
     (:file "limn-auto-revert" :depends-on ("limn-file-notify"))
     (:file "limn-indent" :depends-on ("limn-auto-revert"))
     (:file "limn-query-replace" :depends-on ("limn-indent"))
+    ;; v0.37 "bookmark everywhere" — cross-buffer named bookmarks
+    ;; (Emacs bookmark.el analog).  Per-mode jump handlers register
+    ;; themselves later in their own modules.  Pure Lisp; coexists
+    ;; with limn-pdf-mode §E's per-doc single-char bookmark system.
+    (:file "limn-bookmark" :depends-on ("limn-query-replace"))
+    ;; bookmark-cmds: M-x bookmark-set/jump/list/delete/rename + the
+    ;; keymap installer.  Needs limn/cmd, limn/keys, limn/completion,
+    ;; and the limn/bookmark core — so loaded right after them.
+    (:file "limn-bookmark-cmds" :depends-on ("limn-bookmark"))
+    ;; bookmark-handlers: register text-mode / org-mode / pdf-mode
+    ;; record + jump thunks with limn/bookmark.  Needs limn/file
+    ;; (FIND-FILE / BUFFER-WIRE-ID), limn/pdf-mode (*BUFFER-ID-TO-PATH*),
+    ;; and limn/bookmark.  Loaded after both.
+    (:file "limn-bookmark-handlers" :depends-on ("limn-bookmark-cmds"))
     ;; v0.37 Phase B: ships sane defaults (M-x, M-r, which-key on).
     ;; Late in chain so it can use completion + which-key directly.
-    (:file "limn-default-config" :depends-on ("limn-query-replace"))
+    (:file "limn-default-config" :depends-on ("limn-bookmark-handlers"))
     (:file "limn" :depends-on ("limn-default-config"))))

@@ -141,7 +141,11 @@
                 "indent-v036.lisp"
                 "query-replace-v036.lisp"
                 ;; v0.38 tests
-                "key-spec-v038.lisp"))
+                "key-spec-v038.lisp"
+                ;; v0.37 bookmark-everywhere
+                "bookmark-v037.lisp"
+                "bookmark-cmds-v037.lisp"
+                "bookmark-handlers-v037.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
