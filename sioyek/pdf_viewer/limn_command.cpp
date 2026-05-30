@@ -3112,6 +3112,13 @@ void LimnCommand::cmd_test_inject_key(const QString& id, const QJsonObject& msg)
     QJsonValue mv = msg.value("mods");
     if (mv.isArray()) ev.insert("mods", mv.toArray());
     else              ev.insert("mods", QJsonArray{});
+    // Phase 3b — mirror the real input filter: stamp the focused win-id so
+    // backend nav (which keys *current-win-id* off the event) drives the
+    // focused pane. Caller may override by passing an explicit win-id. In
+    // single-window mode this is always "w1", so existing tests are
+    // behaviour-preserving.
+    ev.insert("win-id", msg.contains("win-id") ? msg.value("win-id").toString()
+                                               : focused_win_id());
     bridge->push_event("key", ev);
     bridge->send_ok(id);
 }
@@ -3426,6 +3433,12 @@ void LimnCommand::cmd_test_grab_window(const QString& id, const QJsonObject& msg
 }
 
 // ─── v0.14: focused window overlays accessor (for paintGL) ──────────────
+
+QString LimnCommand::focused_win_id() const {
+    if (!windows) return QStringLiteral("w1");
+    const QString fid = windows->focused_id();
+    return fid.isEmpty() ? QStringLiteral("w1") : fid;
+}
 
 QJsonArray LimnCommand::focused_window_overlays() const {
     if (!windows) return QJsonArray();

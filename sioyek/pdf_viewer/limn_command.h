@@ -222,6 +222,13 @@ public:
     bool widget_to_page_norm(int widget_x, int widget_y,
                               int* out_page, double* out_nx, double* out_ny);
 
+    // Phase 3b input-routing — the win-id of the currently focused window.
+    // LimnInputFilter stamps this onto key / mouse / scroll / resize events
+    // so backend nav (which keys *current-win-id* off the event) drives the
+    // focused pane. Falls back to "w1" when there is no registry. In single-
+    // window mode this is always "w1", so behaviour is unchanged from before.
+    QString            focused_win_id() const;
+
     // ─── v0.14 paintGL integration accessors (public) ───────────────
     // Called from PdfViewOpenGLWidget::paintGL each frame.
     QJsonArray         focused_window_overlays() const;

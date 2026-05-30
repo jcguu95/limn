@@ -224,7 +224,12 @@ void MainWidget::remove_pane(const QString& win_id) {
 // gets an accent border and the others a muted border (so geometry doesn't
 // shift). Mirrors the proven CSS from chrome/focus-pane.
 void MainWidget::apply_pane_focus_border() {
-    const QString accent = "#4a90d9";
+    // Brighter, more saturated accent + thicker stroke so the focused pane is
+    // unmistakable (dogfood feedback: 2px #4a90d9 was too subtle). Both the
+    // focused and unfocused borders are the SAME width so switching focus
+    // never shifts pane geometry by the border delta.
+    const QString accent = "#1e88ff";
+    const int     bw     = 4;
     const bool multi = panes_.size() > 1;
     for (auto it = panes_.begin(); it != panes_.end(); ++it) {
         if (!it->stack) continue;
@@ -234,8 +239,8 @@ void MainWidget::apply_pane_focus_border() {
         }
         const bool focused = (it.key() == focused_win_id_);
         it->stack->setStyleSheet(focused
-            ? QString("QStackedWidget { border: 2px solid %1; }").arg(accent)
-            : QString("QStackedWidget { border: 2px solid palette(mid); }"));
+            ? QString("QStackedWidget { border: %1px solid %2; }").arg(bw).arg(accent)
+            : QString("QStackedWidget { border: %1px solid palette(mid); }").arg(bw));
     }
 }
 

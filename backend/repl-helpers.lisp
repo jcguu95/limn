@@ -69,8 +69,17 @@
        (format t "  ✗ split failed: ~a~%" (limn/bridge:response-error r))
        nil)
       (t (let* ((data (limn/bridge:response-data r))
+                (a    (getf data :|win-a|))
                 (b    (getf data :|win-b|)))
-           (format t "  split ~a → ~a + ~a~%" win-id (getf data :|win-a|) b)
+           ;; Register the new pane's active buffer so key events stamped
+           ;; with its win-id resolve the source buffer's mode-buffer
+           ;; (pdf-mode keymap).  A split reuses an already-open buffer, so
+           ;; NO buffer-opened event fires — without this j/k/etc. are
+           ;; unbound in the new pane.  See %register-window-buffer.
+           (let ((src-buf (limn/pdf-mode::%window-active-buffer a)))
+             (when (and b src-buf)
+               (limn/pdf-mode::%register-window-buffer b src-buf)))
+           (format t "  split ~a → ~a + ~a~%" win-id a b)
            b)))))
 
 (defun wf (win-id)

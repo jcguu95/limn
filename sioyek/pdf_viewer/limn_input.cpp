@@ -244,6 +244,12 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
 
             QJsonObject e;
             e.insert("frame-id", "f1");
+            // Phase 3b input-routing — stamp the focused win-id so backend
+            // nav (which binds *current-win-id* off the event) drives the
+            // focused pane. Single-window mode always yields "w1", so this
+            // is behaviour-preserving for the non-split case.
+            e.insert("win-id", command ? command->focused_win_id()
+                                        : QStringLiteral("w1"));
             e.insert("key",  k);
             e.insert("mods", mods);
             bridge->push_event("key", e);
@@ -260,7 +266,7 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             auto* mev = static_cast<QMouseEvent*>(ev);
             QJsonObject e;
             e.insert("frame-id", "f1");
-            e.insert("win-id",   "w1");
+            e.insert("win-id",   command ? command->focused_win_id() : QStringLiteral("w1"));
 
             // SPEC v0.5 §6 — compute real page + normalized x/y. If we
             // can't (no doc loaded, click outside any page), report
@@ -321,7 +327,7 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
                            &cur_page, &cur_nx, &cur_ny));
             QJsonObject e;
             e.insert("frame-id", "f1");
-            e.insert("win-id",   "w1");
+            e.insert("win-id",   command ? command->focused_win_id() : QStringLiteral("w1"));
             if (ok && cur_page == drag_anchor_page && drag_anchor_page >= 0) {
                 // both anchor and current on same page → page-norm delta
                 e.insert("page", drag_anchor_page);
@@ -350,7 +356,7 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             auto* wev = static_cast<QWheelEvent*>(ev);
             QJsonObject e;
             e.insert("frame-id", "f1");
-            e.insert("win-id",   "w1");
+            e.insert("win-id",   command ? command->focused_win_id() : QStringLiteral("w1"));
             e.insert("dx",       wev->angleDelta().x());
             e.insert("dy",       wev->angleDelta().y());
             // SPEC §6: scroll carries modifier state (Ctrl-scroll = zoom
@@ -363,7 +369,7 @@ bool LimnInputFilter::eventFilter(QObject* obj, QEvent* ev) {
             auto* rev = static_cast<QResizeEvent*>(ev);
             QJsonObject e;
             e.insert("frame-id", "f1");
-            e.insert("win-id",   "w1");
+            e.insert("win-id",   command ? command->focused_win_id() : QStringLiteral("w1"));
             e.insert("width",    rev->size().width());
             e.insert("height",   rev->size().height());
             bridge->push_event("resize", e);
