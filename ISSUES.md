@@ -232,6 +232,65 @@ calibrated to help.  When you start one:
   point the cost of NOT unifying jumps.
 - **Blocked by**: —
 
+## I-7 — limn_command.cpp 是單體字串 dispatch 鏈，會持續肥大 + 變 merge 衝突熱點
+
+- **Status**: deferred
+- **First noticed**: v0.42（narrow/widen merge 撞衝突時觀察到）
+- **Symptom**: `sioyek/pdf_viewer/limn_command.cpp` 已 4824 行（全 repo
+  第 3 大 .cpp），裡面是一條 ~86 個 handler、~133 行字串比對的
+  `if / else if` 長鏈。每新增一個 Lisp-facing 指令就往**同一個函式、同一個
+  translation unit、同一段 dispatch 區塊**塞一條 branch。
+- **Root cause**: dispatch 用線性字串相等比對寫死在一個 router 函式裡，沒有
+  per-feature 的註冊邊界。形狀問題不是行數問題。後果具體三個：
+    1. 動一個指令整檔重編（incremental compile 慢）。
+    2. 每個 feature 都改同一段 → merge 衝突磁鐵（v0.42 merge 實際撞到）。
+    3. 所有 handler 擠在一個 router，難單獨測。
+- **What shipped (workaround)**: 無；目前就是手動維護 `if/else` 鏈，靠
+  review 擋衝突。
+- **What's needed for a true fix**:
+  - **(a) 表驅動 dispatch**：`std::unordered_map<std::string, handler_fn>`，
+    每個 feature 在自己的檔裡 `register("narrow-to-region", …)`。各 feature
+    不再共改同一段 → 衝突熱點消失。
+  - **(b) 依領域拆檔**：handler 拆成 `limn_command_text/window/pdf.cpp`，
+    `limn_command.cpp` 退回只當 router + registry。
+  - **(c)** 註冊表讓 handler 可被獨立單測（給 mock context 呼叫單一 handler）。
+- **Complexity**: 註冊表化骨架 0.5–1 天；逐步搬 handler 可漸進、不必一次。
+  建議「下次再碰 dispatch 時順手轉」，不必為它單開 sprint。
+- **Blocked by**: —
+
+## I-8 — 前端渲染驗證仍靠人眼 per-merge，缺自動回歸網
+
+- **Status**: deferred
+- **First noticed**: v0.42（每個 feature 都用人工互動 walkthrough 驗收）
+- **Symptom**: unit / integration test 測不到「畫面渲染對不對」。目前每個
+  碰前端的 feature 都靠使用者跑互動 walkthrough script、用眼睛逐步比對。
+  沒有自動網 → merge 進來破壞了哪個視覺功能，CI 不會抓到。
+- **Root cause**: 部分驗證（感知品質：anti-alias、字型 hinting、好不好看）
+  本質需要人眼；但**大量「有沒有渲染對」其實可降級成可程式斷言**，只是目前
+  沒把 rendered state 暴露成可查詢，也沒把 walkthrough 的可驗步驟升級進 CI。
+- **What shipped (workaround)**: `scratch/<feature>-walkthrough.lisp` 互動
+  腳本（注入 form + 印「預期看到什麼」+ 問 y/n/c/a）。人機介面已成形，但
+  pass/fail 仍是人按出來的，非 CI。
+- **What's needed for a true fix**（由便宜到貴的階梯）:
+  - **(a) 加 query 指令暴露 rendered state**（modeline 文字、可見 buffer
+    切片、pane 幾何、focus）。最便宜、回報最大：把多數 walkthrough 步驟從
+    「看一眼」變「問一句 + assert」，搬進 headless CI。
+  - **(b) 把每支 walkthrough 可機器驗的步驟升級進 integration suite**，
+    每次 merge 在 CI 跑（walkthrough 是 regression test 的胚胎，非用過即丟）。
+  - **(c) golden-image / 快照測試**：離屏 render → PNG → 對 commit 的黃金圖
+    做容差 pixel diff，專打 overlay / face / icon 這種純像素。人只在「本來
+    就要改外觀」時批准一次新黃金圖。代價：對字型/平台敏感，需釘死單一
+    容器化 runner（與 I-1 的 headless GL 限制相關）。
+  - **(d) 留短的 per-release 人工 checklist** 顧感知品質；該處才允許用
+    Opus 視覺當*助手*（非 CI gate——非確定性、不可究責）。
+  - 目標：從「每次 merge 要人眼」搬到「只有每次 release 要人眼、且只看一張
+    短 checklist，平時有 golden-diff 擋非預期變化」。
+- **Complexity**: (a) 每個 query 指令 1–2 hr，漸進 / (b) 隨 (a) 一起 /
+  (c) 初版 offscreen-render + diff harness 數天，且卡 I-1 的 headless GL /
+  (d) 純流程，低成本
+- **Blocked by**: 部分卡 **I-1**（headless 環境 `grabFramebuffer()` 拿不到
+  framebuffer，golden-image 路線需先解 GL 離屏 render）
+
 ---
 
 # Closed entries (kept for receipt)

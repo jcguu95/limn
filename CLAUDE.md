@@ -59,3 +59,24 @@ house rules」+ 指路；細節在各權威文檔裡，**別在這裡重複**。
 - Lisp unit：`ulimit -n 8192 && nix develop --command sbcl --script backend/tests/unit/run-unit.lisp`
   （目前 baseline：5 個既有 failure，別把它當成你弄壞的）。
 - 每個階段做完：build + 至少啟動一次 binary。headless 測不到 GUI split。
+
+## 6. 前端互動驗證 → walkthrough script（**做完一個 feature 一定要給**）
+
+unit/integration test 測不到「畫面有沒有渲染對」。那一段靠使用者的眼睛，
+但**使用者的眼睛要被你領著走**。所以每個碰到前端的 feature，收尾時要附一支
+**互動 walkthrough script**，讓使用者一步一步跑、一眼一眼比對。
+
+範本：`scratch/narrow-walkthrough.lisp`、`scratch/bookmark-walkthrough.lisp`。
+鐵則：
+
+- 放在 `scratch/<feature>-walkthrough.lisp`，**繁體中文**寫。
+- **所有路徑寫絕對路徑**（`/Users/jin/data/local/projects/sioyek-core/…` 或
+  `/tmp/…`），讓使用者複製貼上就能跑，不用猜 cwd。
+- 開頭註解就寫清楚**怎麼啟動**：`export LIMN_BIN=…`、`HEADLESS=0
+  backend/run-repl.sh`、然後 `(load "<絕對路徑>/scratch/<feature>-walkthrough.lisp")`。
+- 每一步三件事：①注入 form ②印出「**預期看到什麼**」③問 `y/n/c/a`
+  （y=一致 n=不一致 c=不一致+留一行 comment a=中止）。
+- 結束印出每步摘要（通過/失敗、comment、原始 form），失敗的那步 form 要能
+  直接複製回去重跑。
+
+這是目前**人機之間驗證前端最省力的介面**——agent 出腳本與「預期」，人只出眼睛。
