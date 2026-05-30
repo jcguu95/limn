@@ -29,4 +29,18 @@
 ;;; No-op when the file is absent.
 (limn/recentf:recentf-load)
 
+;;; ── logging verbosity ──────────────────────────────────────────────────────
+;;; Limn writes every framework log line to the *messages* buffer (see
+;;; `buffer/text :buffer-id "*messages*"` or the Lisp ring via
+;;; `(limn/log:get-records)`).  Verbosity is hierarchical: namespaces are
+;;; dotted symbols and inherit from their parent, with `*default-log-level*`
+;;; as the root fallback.
+;;;
+;;; Examples (commented — uncomment to taste):
+;;;
+;;;   (setf limn/log:*default-log-level* :warn)        ; quiet everything
+;;;   (limn/log:set-level 'pdf-mode :debug)            ; loud pdf-mode subtree
+;;;   (limn/log:set-level 'pdf-mode.annotation :info)  ; quieter just for annot
+;;;   (limn/log:unset-level 'pdf-mode)                 ; inherit from default
+
 (format t ";; init.lisp loaded: which-key, leader SPC f f/s, recentf~%")

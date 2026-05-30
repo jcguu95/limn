@@ -4,6 +4,63 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.37.0 — dogfood sprint (in progress)
+:PROPERTIES:
+:DATE: 2026-05-25
+:END:
+
+把 v0.27→v0.36 累積的 10 個 feature batch 攤開來真的用、把擋路的東西
+修掉。See [[file:LIMN-SPEC.org][LIMN-SPEC.org]] §12 路線圖 + repo root
+=v037-bugs.md= / =v037-phase-e-keymap-audit.md=。
+
+(本段僅列已落地的 v0.37 sub-batches；最終 release notes 在 ship 前
+整合。)
+
+** logging — hierarchical namespace + wire mirror
+
+把 v0.23 的 =*Messages*= ring 升級成：
+- *log-record struct* — ring 改存 =(time level ns text)= struct (=get-records=
+  回 struct list；=get-messages= 仍回 string、backward compat)
+- *Hierarchical namespace* — ns 是 dotted symbol，例如
+  ='pdf-mode.annotation.edit=；leaf → root → =*default-log-level*=
+  繼承解析。canonical key 是 SYMBOL-NAME，package-independent
+- *Per-ns verbosity* — =limn/log:set-level= / =unset-level= / =get-level=
+  / =effective-level= / =with-log-levels= macro
+- *Wire mirror* — =*log-wire-sender*= hook，由 =limn:start= 安裝；
+  per-message 把通過 effective-level 的訊息發 =message/log= notify、
+  寫進 C++ =*messages*= GapBuffer。格式 =[HH:MM:SS LEVEL ns] text=。
+  =limn:stop= 卸下。Sender NIL 時純 ring 行為 (unit tests / pre-session)
+- *單一 source of truth* — Lisp ring 跟 C++ GapBuffer 不再分歧；REPL
+  =buffer/text "*messages*"= 跟 =get-records= 看到同一份內容
+- *新 keyword 呼叫形* — =(message :level :warn :ns 'pdf-mode "x")=；
+  舊 shape ((message "x") / (message :warn "x")) 完全相容
+
+三個檔案：
+- =backend/limn-log.lisp= 重寫 (struct + ns hash + wire-sender)
+- =backend/limn.lisp= =start= / =stop= 安裝/卸下 =*log-wire-sender*=
+- =sioyek/pdf_viewer/limn_command.cpp= C++ widget 顯示修補（下段）
+
+C++ widget 顯示修補：
+
+之前 =sync_text_widget= 對所有 =*= 開頭的 buffer 一律 skip
+(=startsWith('*')=)、理由是 chrome buffer 屬於 =LimnChromeBar=。但這
+對 =*messages*= 不成立 —— 它是純滾動 log buffer、本該用主
+QPlainTextEdit 顯示。改成精準 deny list (只擋 =*echo-area*= /
+=*minibuffer*=)、放行 =*messages*=；對 =*messages*= 額外 cursor 跳
+end + =ensureCursorVisible=（Emacs *Messages* 慣例的 auto-tail）；
+=cmd_message_log= / =cmd_message_echo= 末尾各加 =sync_text_widget(
+"*messages*")=、每筆 append 即時 refresh widget。
+
+User 操作：=M-x switch-to-buffer= → =*messages*= → 主視窗變成滾動
+log view、之後 =(message ...)= 即時 append + auto-scroll 到底。
+
+Tests：
+- =backend/tests/unit/logging-v037.lisp= (21 RED tests，全部 GREEN)
+- v0.23 的 =logging-v023.lisp= (15 tests) 不動仍全綠
+- Qt-integration =chrome.lisp= 全綠、無 regression
+- 手動視覺驗證 (=scripts/verify-logging-v037-visible.sh=) Q.1 (7 行
+  demo) + Q.2 (80 行 stress + auto-scroll) 雙 PASS
+
 * v0.36.0 — query-replace + indent + current-column
 :PROPERTIES:
 :DATE: 2026-05-24

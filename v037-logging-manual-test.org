@@ -1,0 +1,451 @@
+#+TITLE: v0.37 Logging (message buffer + verbosity) 手動驗證 checklist
+#+OPTIONS: toc:2 num:t
+#+STARTUP: showall
+
+本檔由 Claude 寫於 message buffer + verbosity 完工後，給 user (jcguu95)
+逐步打勾驗證的 checklist。Tick 一個 =[ ]= → =[X]= 表示該步通過。
+
+* 0. 前置檢查
+
+- [ ] *Step 0.1*：確認 Limn binary 存在：
+  #+BEGIN_SRC bash
+ls -l /Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn
+  #+END_SRC
+  - *預期*：印出 file mode + size + 路徑（可執行檔）
+  - *不預期*：=No such file or directory= — 表示 binary 沒 build，先跑：
+    #+BEGIN_SRC bash
+bash /Users/jin/data/local/projects/sioyek-core/scripts/build-macos.sh
+    #+END_SRC
+
+- [ ] *Step 0.2*：確認 worktree 路徑存在：
+  #+BEGIN_SRC bash
+ls /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72/backend/limn-log.lisp
+  #+END_SRC
+  - *預期*：印出 file 路徑
+  - *不預期*：=No such file or directory= — worktree 路徑不對，回報給 Claude
+
+* 1. Unit test tier — 36 個 LOG- test 全綠
+
+- [ ] *Step 1.1*：跑 unit suite，filter 出 log 相關行：
+  #+BEGIN_SRC bash
+cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72 && \
+nix develop --command sbcl --script backend/tests/unit/run-unit.lisp 2>&1 \
+  | grep -E "^┌─ LOG-|^└─.*passed" \
+  | head -80
+  #+END_SRC
+
+  - *預期*：看到 36 對 =┌─ LOG-...= / =└─ ... passed, 0 failed= block，
+    涵蓋：
+    - LOG-E1-* … LOG-E4-*（v0.23 既有 15 個）
+    - LOG-H1-* … LOG-H8-*（新增 hierarchical ns）
+    - LOG-R1-* … LOG-R4-*（新增 record struct）
+    - LOG-W1-* … LOG-W5-*（新增 wire sender）
+    - LOG-M1-* … LOG-M4-*（新增 message API ns）
+    全部 =0 failed=
+  - *不預期*：任何 =LOG-*= 出現 =N failed (N > 0)=、或 LOG- 行少於 36 對
+
+- [ ] *Step 1.2*：跑同樣指令但看 summary：
+  #+BEGIN_SRC bash
+cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72 && \
+nix develop --command sbcl --script backend/tests/unit/run-unit.lisp 2>&1 | tail -12
+  #+END_SRC
+
+  - *預期*：
+    #+BEGIN_EXAMPLE
+2698 passed, 5 failed (2703 total)
+
+Failures:
+  [INIT-LOAD-RETURNS-NIL-WHEN-NONE-FOUND] ...
+  [V027-B-PDF-SEARCH-EXECUTE-STORES-STATE] ...
+  [V027-B-SEARCH-RESET-CLEARS-STATE] ...
+  [V027-I-SEARCH-STATE-CLEARED-ON-BUFFER-CLOSE] ...
+  [V027-I-SEARCH-STATE-ISOLATED-PER-BUFFER] ...
+    #+END_EXAMPLE
+    五個失敗都跟 log 無關（init-load + PDF search），是 pre-existing
+  - *不預期*：總失敗 > 5、或失敗列表中出現任何 LOG- / message- 開頭的 test
+
+* 2. Qt-integration tier — message/log wire round-trip
+
+- [ ] *Step 2.1*：跑 integration、filter message 相關：
+  #+BEGIN_SRC bash
+cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72 && \
+LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+HEADLESS=1 \
+bash backend/tests/run-tests.sh 2>&1 \
+  | grep -E "MESSAGE-|messages|chrome" \
+  | head -30
+  #+END_SRC
+
+  - *預期*：
+    #+BEGIN_EXAMPLE
+[loading] suites/chrome.lisp
+┌─ TEST-BUFFER-LIST-INCLUDES-CHROME-BY-DEFAULT
+  ✓ *messages* in list
+└─ ... 5 passed, 0 failed
+┌─ TEST-MESSAGE-ECHO-OK             └─ 1 passed, 0 failed
+┌─ TEST-MESSAGE-LOG-OK              └─ 1 passed, 0 failed
+┌─ TEST-MESSAGE-CLEAR-OK            └─ 1 passed, 0 failed
+┌─ TEST-MESSAGE-ECHO-EMPTY-TEXT-FAILS └─ 1 passed, 0 failed
+┌─ TEST-BUFFER-TEXT-ON-MESSAGES
+  ✓ buffer/text on *messages* works
+  ✓ both messages appear in *messages*
+└─ ... 2 passed, 0 failed
+    #+END_EXAMPLE
+  - *不預期*：任何 =TEST-MESSAGE-*= / =TEST-BUFFER-TEXT-ON-MESSAGES=
+    / =TEST-BUFFER-LIST-INCLUDES-CHROME-BY-DEFAULT= 出現 =N failed (N > 0)=
+
+- [ ] *Step 2.2*：看 summary：
+  #+BEGIN_SRC bash
+cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72 && \
+LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+HEADLESS=1 \
+bash backend/tests/run-tests.sh 2>&1 | grep -E "TOTAL:" | tail -3
+  #+END_SRC
+
+  - *預期*：=TOTAL: 1598 passed, 24 failed= 附近（24 個失敗都是
+    pre-existing overlay / paint / mouse / modeline routing / auto-revert
+    / tab-key，跟 log 無關）
+  - *不預期*：失敗數 > 25、或新出現任何 message-*/messages-* 相關失敗
+
+* 3. Manual REPL — 基本 message → *messages* GapBuffer
+
+** 啟動 REPL
+
+- [ ] *Step 3.0*：開一個新 terminal、啟動 REPL：
+  #+BEGIN_SRC bash
+cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72 && \
+HEADLESS=1 LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+bash backend/run-repl.sh
+  #+END_SRC
+
+  - *預期*：看到一段 banner 結尾類似
+    =limn REPL ready=、提示符 =*=（SBCL prompt）
+  - *不預期*：crash / =could not connect to /tmp/...= → binary 啟動有問題
+
+** Ring 寫入
+
+- [ ] *Step 3.1*：在 REPL 提示符後輸入：
+  #+BEGIN_SRC lisp
+(limn/log:message "hello from REPL")
+  #+END_SRC
+  - *預期*：return 字串 ="hello from REPL"=
+  - *不預期*：error / undefined function
+
+- [ ] *Step 3.2*：
+  #+BEGIN_SRC lisp
+(limn/log:get-messages 3)
+  #+END_SRC
+  - *預期*：list 中第一個元素是 ="hello from REPL"=（newest first，
+    string 形式）
+  - *不預期*：return =NIL= / list 為空
+
+- [ ] *Step 3.3*：
+  #+BEGIN_SRC lisp
+(limn/log:get-records 1)
+  #+END_SRC
+  - *預期*：return 1-element list 包含一個 =#S(LIMN/LOG:LOG-RECORD ...)=
+    struct，slots =TIME=（整數）、=LEVEL :INFO=、=NS :DEFAULT=、
+    =TEXT "hello from REPL"=
+  - *不預期*：empty list / 不是 struct 而是 string
+
+** Wire mirror（C++ *messages* GapBuffer）
+
+- [ ] *Step 3.4*：
+  #+BEGIN_SRC lisp
+(let ((r (limn:call "buffer/text" :|buffer-id| "*messages*")))
+  (getf (getf r :|data|) :|text|))
+  #+END_SRC
+  - *預期*：return 一個多行字串，**最後一行**長相類似
+    =[14:32:07 INFO  default] hello from REPL=
+    （時分秒是當下時間；INFO 後面有一個 padding 空格；ns 是 lowercase
+    =default=）
+  - *不預期*：
+    - 字串完全沒 =hello from REPL= → wire sender 沒裝起來
+    - 有 =hello from REPL= 但沒 =[HH:MM:SS LEVEL ns]= prefix → format 邏輯壞
+    - return =NIL= 或 wire error
+
+* 4. Manual REPL — Hierarchical namespace 繼承
+
+接續 step 3 同一個 REPL session。
+
+- [ ] *Step 4.1*：設定 explicit binding：
+  #+BEGIN_SRC lisp
+(limn/log:set-level 'pdf-mode :warn)
+(limn/log:set-level 'pdf-mode.annotation :debug)
+  #+END_SRC
+  - *預期*：兩行分別 return =:WARN= 跟 =:DEBUG=
+  - *不預期*：error / undefined function
+
+- [ ] *Step 4.2*：驗證自身：
+  #+BEGIN_SRC lisp
+(limn/log:effective-level 'pdf-mode)
+  #+END_SRC
+  - *預期*：=:WARN=
+  - *不預期*：=:INFO= / =NIL= / 其他
+
+- [ ] *Step 4.3*：驗證子孫繼承自更具體者：
+  #+BEGIN_SRC lisp
+(limn/log:effective-level 'pdf-mode.annotation.edit)
+  #+END_SRC
+  - *預期*：=:DEBUG=（繼承自 =pdf-mode.annotation=，因為更具體者勝過 =pdf-mode=）
+  - *不預期*：=:WARN=（表示 hierarchical 解析方向錯了）
+
+- [ ] *Step 4.4*：驗證 sibling 走另一條 chain：
+  #+BEGIN_SRC lisp
+(limn/log:effective-level 'pdf-mode.other)
+  #+END_SRC
+  - *預期*：=:WARN=（繼承自 =pdf-mode=，因為自己沒 explicit、
+    annotation 那條跟我不同枝）
+  - *不預期*：=:DEBUG= / =:INFO=
+
+- [ ] *Step 4.5*：完全無關的 ns 退回 default：
+  #+BEGIN_SRC lisp
+(limn/log:effective-level 'totally-unrelated)
+  #+END_SRC
+  - *預期*：=:INFO=（=*default-log-level*= fallback）
+  - *不預期*：=:WARN= / =:DEBUG=
+
+- [ ] *Step 4.6*：=get-level= 只回 explicit 不回 inherited：
+  #+BEGIN_SRC lisp
+(limn/log:get-level 'pdf-mode)
+(limn/log:get-level 'pdf-mode.annotation.edit)
+  #+END_SRC
+  - *預期*：第一個 =:WARN=，第二個 =NIL=
+  - *不預期*：第二個出現 =:DEBUG=（那是 effective、不是 explicit）
+
+* 5. Manual REPL — with-log-levels macro
+
+接續同一個 REPL session。
+
+- [ ] *Step 5.1*：dynamic 鎖 → BODY 內看到新值：
+  #+BEGIN_SRC lisp
+(limn/log:with-log-levels ((pdf-mode :debug) (auto-revert :error))
+  (list :pdf-mode (limn/log:effective-level 'pdf-mode)
+        :auto-revert (limn/log:effective-level 'auto-revert)))
+  #+END_SRC
+  - *預期*：=(:PDF-MODE :DEBUG :AUTO-REVERT :ERROR)=
+  - *不預期*：BODY 內看不到新值
+
+- [ ] *Step 5.2*：BODY 外恢復成原本狀態 — 有 prior binding 的回原值：
+  #+BEGIN_SRC lisp
+(limn/log:effective-level 'pdf-mode)
+  #+END_SRC
+  - *預期*：=:WARN=（回到 step 4.1 設的 explicit）
+  - *不預期*：=:DEBUG=（表示 macro 沒正確 unwind）
+
+- [ ] *Step 5.3*：BODY 外恢復 — 原本沒 binding 的真的回到 unbound：
+  #+BEGIN_SRC lisp
+(limn/log:get-level 'auto-revert)
+  #+END_SRC
+  - *預期*：=NIL=（macro 結束後恢復為「無 explicit binding」，
+    auto-revert 原本就沒設過）
+  - *不預期*：=:ERROR=（表示 unwind 沒刪 hash entry、變成 leak）
+
+* 6. Manual REPL — Verbosity 同時 filter wire 跟 event（核心 invariant）
+
+這是最重要的一個 case：**ring 永遠記錄、wire/event 受 level filter、
+兩者 single source 是 Lisp ring**。接續同一個 REPL。
+
+- [ ] *Step 6.1*：清空 ring + 設一個高門檻 ns：
+  #+BEGIN_SRC lisp
+(limn/log:clear-messages)
+(limn/log:set-level 'noisy :error)
+  #+END_SRC
+  - *預期*：第一行 =NIL=，第二行 =:ERROR=
+
+- [ ] *Step 6.2*：發一個 :info 訊息（被 filter 掉）：
+  #+BEGIN_SRC lisp
+(limn/log:message :level :info :ns 'noisy "should-be-filtered")
+  #+END_SRC
+  - *預期*：return 字串 ="should-be-filtered"=
+
+- [ ] *Step 6.3*：確認 ring **有**記錄（不看 level）：
+  #+BEGIN_SRC lisp
+(limn/log:get-messages 5)
+  #+END_SRC
+  - *預期*：list 第一個元素就是 ="should-be-filtered"=
+  - *不預期*：list 為空 / 沒這條（表示 ring 也被 filter 了，違反 invariant）
+
+- [ ] *Step 6.4*：確認 wire 端 (C++ GapBuffer) **沒**收到：
+  #+BEGIN_SRC lisp
+(let ((txt (getf (getf (limn:call "buffer/text" :|buffer-id| "*messages*")
+                       :|data|) :|text|)))
+  (search "should-be-filtered" txt))
+  #+END_SRC
+  - *預期*：return =NIL=（GapBuffer 字串中找不到此 substring，表示 wire
+    sender 被 effective-level 正確擋下）
+  - *不預期*：return 一個整數（表示 wire sender 沒 filter、跟 spec 違背）
+
+- [ ] *Step 6.5*：對照組 — :error 級訊息**有**進 wire：
+  #+BEGIN_SRC lisp
+(limn/log:message :level :error :ns 'noisy "should-be-shown")
+(let ((txt (getf (getf (limn:call "buffer/text" :|buffer-id| "*messages*")
+                       :|data|) :|text|)))
+  (search "should-be-shown" txt))
+  #+END_SRC
+  - *預期*：return 一個整數（找到 substring 位置）
+  - *不預期*：=NIL=（表示 :error 也被擋了，level 邏輯方向錯）
+
+* 7. Manual REPL — Wire format prefix 完整驗證
+
+接續同一個 REPL。
+
+- [ ] *Step 7.1*：
+  #+BEGIN_SRC lisp
+(limn/log:clear-messages)
+(limn/log:message :level :warn :ns 'my-test.sub "x=~A" 42)
+(let ((r (limn:call "buffer/text" :|buffer-id| "*messages*")))
+  (getf (getf r :|data|) :|text|))
+  #+END_SRC
+  - *預期*：return 字串符合以下 pattern（regex 心驗）：
+    =\[\d{2}:\d{2}:\d{2} WARN  my-test\.sub\] x=42=
+    具體例如 =[14:35:11 WARN  my-test.sub] x=42=
+    重點：
+    1. =[HH:MM:SS]= — 兩位數時/分/秒
+    2. =WARN ⎵= — level 後面 padding 一個空格（對齊 5 字元）
+    3. =my-test.sub= — symbol-name 轉成 lowercase + 保留 dot
+    4. =x=42= — format 正確展開（不是 ="x=~A"= 跟 =42= 沒接上）
+  - *不預期*：任何一條 prefix 部分缺失、ns 變大寫、format 沒展開
+
+* 8. init.lisp 真實 user 流程
+
+** 寫 init.lisp
+
+- [ ] *Step 8.0*：先離開 REPL（如果還在）：
+  #+BEGIN_SRC lisp
+(q)
+  #+END_SRC
+
+- [ ] *Step 8.1*：備份既有 init.lisp（如果有）：
+  #+BEGIN_SRC bash
+[ -f ~/.limn/init.lisp ] && cp ~/.limn/init.lisp ~/.limn/init.lisp.bak.$(date +%s)
+  #+END_SRC
+  - *預期*：沒輸出（檔不存在）或備份成功
+  - 之後 step 8.5 還原
+
+- [ ] *Step 8.2*：寫 init.lisp：
+  #+BEGIN_SRC bash
+mkdir -p ~/.limn && cat > ~/.limn/init.lisp <<'EOF'
+(in-package :cl-user)
+(setf limn/log:*default-log-level* :warn)
+(limn/log:set-level 'pdf-mode :debug)
+(format t ";; user init: log levels configured~%")
+EOF
+  #+END_SRC
+
+** 重啟 REPL 看 init.lisp 載入
+
+- [ ] *Step 8.3*：啟動 REPL（會自動 load =~/.limn/init.lisp=）：
+  #+BEGIN_SRC bash
+cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72 && \
+HEADLESS=1 LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+bash backend/run-repl.sh
+  #+END_SRC
+  - *預期*：REPL banner 之前看到兩行：
+    1. =;; loaded init: /Users/jin/.limn/init.lisp=
+    2. =;; user init: log levels configured=
+  - *不預期*：看到 init.lisp 路徑但沒看到我們的 echo（表示 init 沒跑到底）
+
+- [ ] *Step 8.4*：在 REPL 內驗證 levels：
+  #+BEGIN_SRC lisp
+limn/log:*default-log-level*
+  #+END_SRC
+  - *預期*：=:WARN=
+  - *不預期*：=:INFO=（表示 init 沒生效）
+
+  #+BEGIN_SRC lisp
+(limn/log:effective-level 'pdf-mode)
+  #+END_SRC
+  - *預期*：=:DEBUG=
+
+  #+BEGIN_SRC lisp
+(limn/log:effective-level 'pdf-mode.annotation.edit)
+  #+END_SRC
+  - *預期*：=:DEBUG=（繼承 pdf-mode）
+
+  #+BEGIN_SRC lisp
+(limn/log:effective-level 'random-other)
+  #+END_SRC
+  - *預期*：=:WARN=（fallback 到 default）
+
+** 清理
+
+- [ ] *Step 8.5*：在 REPL 內離開：
+  #+BEGIN_SRC lisp
+(q)
+  #+END_SRC
+
+- [ ] *Step 8.6*：刪掉測試用的 init.lisp、若有備份就還原：
+  #+BEGIN_SRC bash
+rm -f ~/.limn/init.lisp && \
+LATEST_BAK=$(ls -t ~/.limn/init.lisp.bak.* 2>/dev/null | head -1) && \
+[ -n "$LATEST_BAK" ] && mv "$LATEST_BAK" ~/.limn/init.lisp && \
+  echo "restored from $LATEST_BAK" || echo "no backup to restore (clean)"
+  #+END_SRC
+  - *預期*：印 =restored from ...= 或 =no backup to restore (clean)=
+  - *不預期*：=Permission denied= 或其他 error
+
+* 9. Stop/Start cycle — *log-wire-sender* 卸載
+
+新開 REPL（或接續任何 session）：
+
+- [ ] *Step 9.0*：啟動 REPL（如果沒在 REPL 內）：
+  #+BEGIN_SRC bash
+cd /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72 && \
+HEADLESS=1 LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+bash backend/run-repl.sh
+  #+END_SRC
+
+- [ ] *Step 9.1*：確認 session 起來時 sender 是裝好的：
+  #+BEGIN_SRC lisp
+(not (null limn/log:*log-wire-sender*))
+  #+END_SRC
+  - *預期*：=T=（sender 是個 function、非 NIL）
+  - *不預期*：=NIL=（表示 start 沒裝起來）
+
+- [ ] *Step 9.2*：=stop= 後 sender 卸下：
+  #+BEGIN_SRC lisp
+(limn:stop)
+limn/log:*log-wire-sender*
+  #+END_SRC
+  - *預期*：第二個 form return =NIL=
+  - *不預期*：sender 還在 → 下次 message 會試圖打到死掉的 session
+
+- [ ] *Step 9.3*：sender NIL 時 =message= 仍然 work（純 ring）：
+  #+BEGIN_SRC lisp
+(limn/log:message "no wire here")
+(limn/log:get-messages 1)
+  #+END_SRC
+  - *預期*：第一行 return ="no wire here"= 不 crash；第二行 list 中
+    第一筆是 ="no wire here"=
+  - *不預期*：crash / error =limn: not started=（表示 wire sender 在 sender
+    NIL 後還想呼叫 notify）
+
+- [ ] *Step 9.4*：在 REPL 內徹底退出 SBCL：
+  #+BEGIN_SRC lisp
+(sb-ext:exit)
+  #+END_SRC
+  - *預期*：回到 shell prompt
+  - *不預期*：SBCL 卡住 / debugger 跳出
+
+* 10. 終局判定
+
+- [ ] *Step 10.1*：以上 step 1 → step 9 全部 =[X]=、且沒有任何 =不預期=
+  情況觸發
+
+通過 → message buffer + verbosity 功能 OK，可以 commit。
+
+任何一格不通過 → 回我（Claude），告訴我是哪一格、實際輸出是什麼、跟
+「不預期」的哪條對上，我來 debug。
+
+* Footnotes
+
+- 本檔絕對路徑：
+  =/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/reverent-williams-90cb72/v037-logging-manual-test.org=
+
+- 相關檔案路徑：
+  - 實作：=backend/limn-log.lisp= / =backend/limn.lisp=
+  - 單元測試：=backend/tests/unit/logging-v037.lisp=
+  - SPEC 說明：=LIMN-SPEC.org= §E（搜 "v0.37 §E v2"）
+  - CHANGELOG：=CHANGELOG.org= v0.37 entry
+  - User config 範例：=backend/init.lisp.example=
