@@ -30,8 +30,9 @@ roadmap / sub-roadmap / 進度 checklist 住在它**自己的 design doc** 裡�
 - 設計：=docs/split-frame-design.md=
 - 進度：Phase 1/2 ✅、3a/3b ✅（=v0.41.0=）；**3c 收編 notes panel ← 下一個**、
   Phase 4 per-DV overlay raster ⏭（中偏高風險、硬骨頭）、Phase 5 =C-x= 視窗
-  鍵位 ⏭（純 Lisp、輕）。
-- 完整收尾 = 3c → Phase 4 → Phase 5。
+  鍵位 ⏭（純 Lisp、輕）、Phase 6 win-undo tree（視窗配置 undo/redo,樹狀）⏭
+  （排在 3c 之後）。
+- 完整收尾 = 3c → Phase 4 → Phase 5 →（6）。
 
 ** annotation / markup 互動  🛠 in-progress
 - 設計：=markup-interaction-design.md=
@@ -40,6 +41,38 @@ roadmap / sub-roadmap / 進度 checklist 住在它**自己的 design doc** 裡�
   原生 show/hide toggle ⏭、step5 margin gutter / note icon ⏭。
 
 * 計劃中 / 未排（planned）
+
+** Fuzzy Selector（minad Vertico+Orderless 等價）  ⏭ planned ★第一優先
+- 設計：=docs/completion-ui-design.md=（P1 章節）
+- 把現有 =completing-read= 升級成垂直、即時、模糊比對的選單。是 minad 整套
+  生態（Vertico/Orderless/Consult/Marginalia/Corfu/Cape/Embark/Tempel）的
+  **第一塊**;其餘 P2–P4 先記在該 doc、deferred。
+- 槓桿大：leader 樹每個葉子幾乎都叫 completing-read,一次升級全面受益。
+  零件多已存在（v0.25 completing-read、v0.28 which-key 渲染、vendored fzf）。
+
+** evil（vim 模態編輯）  ⏭ planned（leader 的前置依賴）
+- 設計：=docs/evil-mode-design.md=
+- normal↔insert state + vim motion/operator。**Doom 體感的根基**,也是 =SPC=
+  leader 的前提（normal 下 =SPC=leader、insert 下 =SPC=空白）。先行於 leader。
+- pdf-mode 既有 vim 式 j/k 收編成 evil normal 的特化,消除雙模態。
+
+** Doom =SPC= leader 鍵位（預設方案 + 全 agent policy）  ⏭ planned
+- 設計：=docs/leader-keys-design.md=
+- 把 Doom 風 namespaced =SPC= leader（配 which-key）做成 limn **預設**鍵位;
+  純 Emacs 使用者用 config 開關退回 =C-x=/=C-c= 自綁。**同時是 policy**：
+  以後所有 feature 預設綁定走 =SPC= 樹（已寫進 =CLAUDE.md=,全 agent follow）。
+- §0 已定案 ✅：evil 模態必要;normal=`SPC`、insert=`M-SPC`（依賴 evil 先行）。
+
+** PDF hyperlink（internal / external）  ⏭ planned
+- 設計：=docs/pdf-hyperlink-design.md=
+- 偵測 / 顯示 / 點擊跳轉 PDF 連結。internal=文件內 GoTo（複用 win-focus/
+  bookmark 還原視角）、external=URL/mailto 走受控 =os/open=。大半靠 MuPDF
+  原生 =fz_load_links=,零件多已存在。
+
+** cursor 外觀（cursor alternating size）  ⏭ planned
+- 設計：=docs/cursor-style-design.md=
+- 文字游標交替大小（比 blink 更好定位）+ 把游標樣式做成後端可配置（對齊
+  Emacs =cursor-type=/=blink-cursor-mode=）。純視覺,靠 walkthrough 驗證。
 
 ** Lisp runtime 深水區roadmap  ⏭ planned
 - 索引不重複展開——權威清單在 =LIMN-SPEC.org= §12（Edit Model、Markers、
