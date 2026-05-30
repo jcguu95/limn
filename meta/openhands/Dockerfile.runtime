@@ -1,0 +1,68 @@
+# limn × OpenHands —— 自訂 runtime image（agent 執行指令的沙箱）
+#
+# 為什麼存在：
+#   OpenHands 的 agent 不是在 app container 裡跑指令，而是在一個獨立的
+#   「runtime / sandbox」image 裡跑。要讓 agent 能 build limn（Qt6 + MuPDF +
+#   SBCL）並跑 headless e2e，那個 runtime image 就必須有 limn 的整套工具鏈。
+#
+# 方向（決策：順向，FROM nikolaik 而非 FROM limn-e2e）：
+#   FROM all-hands 的 nikolaik runtime（OpenHands client 已內建、保證可用）
+#   → 在上面裝 single-user nix → 預先 materialize limn 的 flake#docker closure。
+#   這樣 agent 同時拿到：OpenHands runtime client + 完整 `nix develop /limn#docker`
+#   （Qt/MuPDF/SBCL/xvfb/xdotool/x11vnc…，跟本 repo 的 limn-e2e（根目錄
+#   Dockerfile）同一個 flake、同一個 nixpkgs rev）。
+#
+#   反向（FROM limn-e2e + 裝 OpenHands client）被否決：nixos/nix base 沒有
+#   apt / system python3，跟 OpenHands runtime client 的安裝流程衝突。
+#
+# build（build context = repo 根，才 COPY 得到 flake 檔）：
+#   bash openhands/build-runtime.sh
+#   # 等同：docker build -f openhands/Dockerfile.runtime \
+#   #         -t limn-openhands-runtime:0.57.2 .   （在 repo 根執行）
+#
+# ⚠ 已知風險點（第一次 build / 跑會需要在真機上 debug，逐一標在下方）。
+
+ARG OH_VERSION=0.57.2
+FROM ghcr.io/all-hands-ai/runtime:${OH_VERSION}-nikolaik
+
+# ── 1. 裝 nix（用 Determinate installer）─────────────────────────────────
+# 官方 single-user 安裝器「拒絕 root + 需要 nixbld group」，在 Docker（root、
+# 無 systemd）裡直接掛掉（風險 A 命中）。改用 Determinate installer：它專為
+# 容器/root 設計，`--init none` 不裝 systemd unit，並自建 nixbld group。
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl xz-utils ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSfL https://install.determinate.systems/nix \
+  | sh -s -- install linux --no-confirm --init none
+
+# nix 工具上 PATH。Determinate 裝在 /nix/var/nix/profiles/default/bin。
+# NIX_SSL_CERT_FILE 明指 Debian 的 ca bundle，免得不 source profile 時 TLS 失敗。
+# ⚠ 風險 B：OpenHands runtime 實際以哪個 user 跑指令要確認；若非 root，
+#    /nix 的讀取權限與 PATH 需放寬（這裡用 ENV 全域 PATH + 下方 chmod 緩解）。
+ENV PATH=/nix/var/nix/profiles/default/bin:${PATH}
+ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+RUN printf 'experimental-features = nix-command flakes\nsandbox = false\n' >> /etc/nix/nix.conf \
+ && chmod -R a+rX /nix || true
+
+# ── 2. 預先 materialize limn 的 flake#docker 依賴 closure ─────────────────
+# 只 COPY flake 檔（不 COPY source）→ closure 自成一層，source 改動不 bust 它。
+# `nix develop /limn#docker --command true` 會 realize 整套 build-time C++ deps
+# + test-time OS 工具（xvfb/xdotool/x11vnc/sbcl…），但**不編譯 limn 本身**。
+# ⚠ 風險 C：首次約 700MB+ 下載，視網路 5–15 分鐘。closure 烤進 image 後，
+#    agent 第一個 `nix develop` 就秒開。flake 改動時要重 build 這層。
+WORKDIR /limn
+COPY flake.nix flake.lock /limn/
+RUN nix develop /limn#docker --command true
+
+# ── 3. UTF-8 locale ──────────────────────────────────────────────────────
+# 對齊 limn e2e（container-entry.sh / run-os-e2e.sh）的慣例：UTF-8 locale 是
+# CJK 輸入 / sbcl 預設 external-format=UTF-8 的前提。放最後一層 → 不 bust 上面
+# materialize 的 cache。（註：limn/process 的 6 個容器限定測試 fail 與此無關，
+# 是 Linux vs macOS 的 signal / subprocess pipe 解碼平台差異，見 README。）
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# ── 不要覆寫 ENTRYPOINT / CMD ─────────────────────────────────────────────
+# 沿用 nikolaik 的 entrypoint（它啟動 OpenHands action-execution server）。
+# 我們只是在它的環境裡多塞了 nix + limn 工具鏈。
