@@ -12,6 +12,8 @@ house rules」+ 指路；細節在各權威文檔裡，**別在這裡重複**。
   main。** 每個 session 有自己的 git worktree，改動留在分支上。
 - **只在使用者明確要求時才 commit / push / 打 tag。** 不擅自 push、不做
   破壞性 git 操作、不刪 branch/worktree。
+- **新 interactive 指令的預設綁定走 Doom =SPC= leader 樹**（不是只給
+  =C-x=/=C-c=）。詳見 §7。
 
 ## 1. 版本與發布 → `docs/versioning-policy.md`
 
@@ -80,3 +82,19 @@ unit/integration test 測不到「畫面有沒有渲染對」。那一段靠使�
   直接複製回去重跑。
 
 這是目前**人機之間驗證前端最省力的介面**——agent 出腳本與「預期」，人只出眼睛。
+
+## 7. 鍵位慣例：預設 Doom =SPC= leader → `docs/leader-keys-design.md`
+
+limn 的**預設**鍵位是 Doom-Emacs 風：**evil 模態 + namespaced =SPC= leader**
+（配 which-key 可探索）。normal state 下 =SPC= 是 leader、insert state 下
+=SPC= 打空白、leader 退到 =M-SPC=。純 Emacs 使用者用 config 開關退回經典
+非模態 =C-x=/=C-c= 自綁。對 agent 這是**強制慣例**：
+
+- **新增任何 interactive 指令時，要在 =SPC= leader 樹下給它一個合理 namespace
+  的綁定**（例：window→=SPC w=、buffer→=SPC b=、search→=SPC s=、narrow→
+  =SPC n=…），並更新 which-key 標籤。
+- **不要只給 =C-x=/=C-c= 就當做完。** 經典 Emacs 綁定可以保留為並存層（給肌肉
+  記憶 / 關掉 leader 的人），但**不是新功能的預設路徑**。
+- namespace 字母盡量對齊 Doom，降低既有 Doom 使用者的學習成本。
+- 完整 namespace 表、模態張力（可編輯 buffer 的 =SPC= vs =M-SPC=）、opt-out
+  設計都在 `docs/leader-keys-design.md`。
