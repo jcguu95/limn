@@ -14,6 +14,15 @@ house rules」+ 指路；細節在各權威文檔裡，**別在這裡重複**。
   破壞性 git 操作、不刪 branch/worktree。
 - **新 interactive 指令的預設綁定走 Doom =SPC= leader 樹**（不是只給
   =C-x=/=C-c=）。詳見 §7。
+- **【依賴單一版本鐵律】** macOS host 上的**人 / Claude**，與 Linux 容器裡的
+  **DeepSeek**，三方測試與跑動所用的**所有依賴**，一律經 `nix develop` 鎖在
+  **同一個 `flake.lock`**（單一真相，platform 不同但版本相同）。host 每次
+  `nix develop` 讀現場 lock、永不過期；唯一會 drift 的是 OpenHands runtime
+  image 烤進去的那份 lock。**一旦 image 的 lock ≠ repo 的 lock，就是鐵律被
+  打破** → `bash openhands/check-lock-sync.sh` 會印巨大警報、`meta/openhands/run.sh`
+  會**拒絕啟動 DeepSeek**。改動 `flake.lock`（含 `nix flake update` / 升任何
+  依賴）後，**必須**重跑 `bash openhands/build-runtime.sh` 讓容器吃到新 lock，
+  否則 DeepSeek 的測試結論不可信。細節見 `meta/openhands/README.md`。
 
 ## 1. 版本與發布 → `docs/versioning-policy.md`
 
