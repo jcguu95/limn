@@ -176,6 +176,11 @@
              ;; v0.40 §2.3 — visual feedback: dim the inaccessible region.
              (when (and idoy (fboundp idoy))
                (ignore-errors (funcall idoy buf)))
+             ;; v0.40 §2.5 — refresh modeline so the "Narrow" segment appears.
+             (let* ((tpkg2 (find-package '#:limn/text))
+                    (upd   (and tpkg2 (find-symbol "TEXT-MODE-UPDATE-MODELINE" tpkg2))))
+               (when (and upd (fboundp upd))
+                 (ignore-errors (funcall upd :buffer-id buf))))
              (when (and call-sym (fboundp call-sym))
                (ignore-errors
                  (funcall call-sym "message/echo"
@@ -253,6 +258,11 @@
           (let ((rdoy (and xpkg (find-symbol "REMOVE-DIM-OVERLAYS" xpkg))))
             (when (and rdoy (fboundp rdoy))
               (ignore-errors (funcall rdoy buf))))
+          ;; v0.40 §2.5 — refresh modeline so the "Narrow" segment goes away.
+          (let* ((tpkg2 (find-package '#:limn/text))
+                 (upd   (and tpkg2 (find-symbol "TEXT-MODE-UPDATE-MODELINE" tpkg2))))
+            (when (and upd (fboundp upd))
+              (ignore-errors (funcall upd :buffer-id buf))))
           (when (and call-sym (fboundp call-sym))
             (ignore-errors
               (funcall call-sym "message/echo" :|text| "Widened"))))))))

@@ -162,7 +162,9 @@
                 ;; v0.40 §2.3 — dim overlay for inaccessible region
                 "narrow-dim.lisp"
                 ;; v0.40 §2.4 — narrow-to-defun via reader
-                "narrow-defun.lisp"))
+                "narrow-defun.lisp"
+                ;; v0.40 §2.5 — text-mode modeline formatter
+                "narrow-text-modeline.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
