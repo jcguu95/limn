@@ -4,10 +4,33 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
+* v0.43.0 — ibuffer mode + limn:call 同步 shim
+:PROPERTIES:
+:DATE: 2026-05-30
+:END:
+
+把 Emacs 的 =ibuffer= 搬進 Limn，並補完跨層的 buffer 狀態同步：
+
+- *ibuffer mode*：=M-x ibuffer= 列出所有 buffer，可標記 / 切換 / 排序 /
+  過濾 / 執行（=d= 標殺、=s= 標存、=x= 執行）。仿 =limn-occur= 的
+  vtable + 純 state 三層架構，=*Buffer List*= 為 chrome buffer。
+- *=limn:call= sync-shim 補完整*：原本只 mirror =bridge/engine-load=，
+  現在也 mirror =buffer/load-file= / =buffer/show= / =buffer/close=，並給
+  =%on-buffer-opened= 加 race guard——避免晚到的 wire event 把高階指令
+  （如 =M-x ibuffer=）已設好的 major mode / window active buffer 清掉。
+  受益的不只 ibuffer：任何用 =buffer/show= 切 buffer 的指令，dispatch 都
+  跟得上、不再把鍵路到舊 buffer。
+
+純 Lisp，無 C++ 改動。新增 22 個 ibuffer unit test（全綠）。
+已知 limitation：=q= / =ibuffer-quit= 刻意不綁（卡 sioyek 端 text↔pdf
+切換的 Qt paint quirk，屬獨立議題，見 ISSUES）。
+
 * v0.42.0 — buffer narrow / widen
 :PROPERTIES:
 :DATE: 2026-05-30
 :END:
+
+把 Emacs 的 =narrow-to-region= / =widen= 完整搬進 Limn，三層：
 
 把 Emacs 的 =narrow-to-region= / =widen= 完整搬進 Limn，三層：
 

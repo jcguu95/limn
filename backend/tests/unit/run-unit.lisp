@@ -105,6 +105,7 @@
                 ;; v0.26 RED tests — expected to fail until impl lands
                 "isearch-v026.lisp"
                 "occur-v026.lisp"
+                "ibuffer.lisp"
                 ;; v0.27 tests
                 "pdf-mode-v027.lisp"
                 ;; v0.28 tests

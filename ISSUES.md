@@ -291,6 +291,52 @@ calibrated to help.  When you start one:
 - **Blocked by**: 部分卡 **I-1**（headless 環境 `grabFramebuffer()` 拿不到
   framebuffer，golden-image 路線需先解 GL 離屏 render）
 
+## I-9 — text↔pdf 視圖切換有 Qt paint quirk → ibuffer 的 q 不能綁
+
+- **Status**: deferred
+- **First noticed**: v0.43（ibuffer dogfood）
+- **Symptom**: 從 text-engine buffer（如 =*Buffer List*=）切回 PDF 時，
+  wire 狀態與 Lisp 狀態都正確（=view/get= 回 =b1=、=*window-active-buffer*=
+  同步、後續鍵正確路到 pdf-mode），但 **Qt 視覺上仍停在舊的 text 視圖**。
+  因此 ibuffer 的 =q= / =ibuffer-quit=（會觸發 text→pdf 切換）**刻意不綁**
+  —— 綁了會讓使用者按 q 後看起來「卡住」。
+- **Root cause**: sioyek C++ =main_widget->show_pdf_view()=
+  （=main_stack_->setCurrentIndex(0)=）在 text↔pdf 切換時沒有實際重繪
+  對方 widget。屬 sioyek 端 paint 議題，與 ibuffer/narrow 等 Lisp 邏輯
+  無關，會影響**所有** text↔pdf 切換（不只 ibuffer）。
+- **What shipped (workaround)**: ibuffer 不綁 =q=；離開 ibuffer 改走
+  =RET= / =f=（visit row，自然切到目標 buffer）或 =M-x switch-to-buffer=。
+  branch 作者在 worktree 試過一版 C++ patch（=show_pdf_view= /
+  =show_text_view= 內顯式 =hide()/show()/raise()= 對方 widget），確認可解，
+  但**刻意不夾帶**進 ibuffer 這個純 Lisp branch（scope / risk / 無 C++ 單測）。
+- **What's needed for a true fix**:
+  - **(a)** 獨立 sioyek branch：把 =hide()/show()/raise()= 加進
+    =show_pdf_view= / =show_text_view=，跑視覺回歸（與 I-8 的 golden-image
+    驗證路線相關）。
+  - **(b)** paint fix 落地後，補回 =ibuffer-quit=：=%quit= helper（記住
+    =previous-buffer= + fallback）+ =ibuffer-quit= defcommand + keymap =q= +
+    unit test。
+- **Complexity**: (a) 數小時 C++ + 視覺驗證 / (b) 1–2 hr Lisp
+- **Blocked by**: 驗證面與 **I-8**（golden-image / 視覺回歸）相關
+
+## I-10 — buffer 生命週期 invariant 未成形（window 自動顯示 active / 不可殺最後一個 buffer）
+
+- **Status**: deferred
+- **First noticed**: v0.43（ibuffer review 中 user 提出）
+- **Symptom**: 兩條應有但尚未保證的 invariant：(1)「window 應自動顯示其
+  active buffer」；(2)「最後一個 buffer 不應被 kill（或 kill 後自動找下一個
+  遞補）」。ibuffer 的 =d= + =x= 在 =*Buffer List*= 自己那一行會把 ibuffer
+  自身 kill 掉，即為缺 (2) 的具體案例。
+- **Root cause**: buffer 生命週期目前散在各指令裡，沒有中央 invariant 守門
+  （與 I-6「=*bufs*= 與 =text_buffers= 雙 registry」同源——缺一個共享的
+  canonical buffer 抽象）。
+- **What shipped (workaround)**: 無；目前靠使用者不去 kill 最後一個 / ibuffer
+  自己那行。
+- **What's needed for a true fix**: 一個中央 buffer-manager 把
+  「active 顯示」「kill 遞補」做成 invariant；最好與 I-6 的統一抽象一起做。
+- **Complexity**: sprint 級（與 I-6 綁）
+- **Blocked by**: 與 **I-6** 同源，宜一起做
+
 ---
 
 # Closed entries (kept for receipt)

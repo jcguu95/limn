@@ -120,9 +120,13 @@
 ;;; ── chrome bootstrap ───────────────────────────────────────────────────
 
 (defparameter *chrome-buffer-modes*
-  '(("*minibuffer*" . minibuffer-mode)
-    ("*messages*"   . fundamental-mode)
-    ("*echo-area*"  . fundamental-mode))
+  `(("*minibuffer*"  . minibuffer-mode)
+    ("*messages*"    . fundamental-mode)
+    ("*echo-area*"   . fundamental-mode)
+    ;; ibuffer-mode lives in CL-USER (per text-mode convention); the
+    ;; symbol resolves lazily inside init-chrome-buffers so loading
+    ;; limn-runtime ahead of limn-ibuffer in the ASDF chain is fine.
+    ("*Buffer List*" . ,(intern "IBUFFER-MODE" :cl-user)))
   "Mapping of reserved chrome buffer-id → default major mode symbol.
    These mode-buffers are created at runtime startup so chrome buffers
    can have their own keymap stack (e.g. *minibuffer* uses minibuffer-mode

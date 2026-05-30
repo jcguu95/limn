@@ -1,0 +1,296 @@
+#+TITLE: ibuffer mode merge notes
+#+AUTHOR: Jin + Claude (worktree branch claude/mystifying-dijkstra-2400c3)
+#+DATE: 2026-05-30
+#+OPTIONS: toc:2
+
+* TL;DR
+
+這個 branch 做了兩件事：
+
+1. *新增 limn/ibuffer mode*：M-x ibuffer 列出所有 buffer，能標記 / 切換 / 排序 / 過濾 / 執行（D 殺、S 存）。
+2. *把 limn:call 的 wire ↔ Lisp 同步 shim 補完整*：原本只 mirror ~bridge/engine-load~，現在也 mirror ~buffer/load-file~、~buffer/show~、~buffer/close~；並讓 ~%on-buffer-opened~ 不再 race-clobber 高階指令的設定。
+
+*本次故意不做的*：~q~ / ~ibuffer-quit~ 沒有 binding。原因是 ~buffer/show~ 在 text-engine → mupdf-engine 切換時，sioyek C++ 端的 ~main_widget->show_pdf_view()~（~main_stack_->setCurrentIndex(0)~）會有 Qt paint quirk — wire 狀態正確但 Qt 沒實際視覺切換。這是 sioyek 獨立議題，跟 ibuffer 邏輯無關，不應該被夾帶進這個 work branch。
+
+*狀態*：所有 unit test 都過（2707 passed / 5 failed，5 個 fail 都是 v0.27 PDF search + init-load 既有問題，跟這個 branch 無關）。
+
+* 範圍與檔案變更
+
+** 新檔
+- ~backend/limn-ibuffer.lisp~ — ibuffer mode 主模組（package ~limn/ibuffer~，命令在 ~cl-user~）
+- ~backend/tests/unit/ibuffer.lisp~ — 22 個 unit test，含 mock vtable
+
+** 改檔
+- ~backend/limn-runtime.lisp~ — ~*chrome-buffer-modes*~ 加 ~("*Buffer List*" . ibuffer-mode)~ 一筆
+- ~backend/limn.asd~ — 在 ~limn-occur~ 後插入 ~limn-ibuffer~ component，並把 ~limn-pdf-mode~ 的 ~:depends-on~ 接到 ~limn-ibuffer~
+- ~backend/tests/unit/run-unit.lisp~ — 把 ~ibuffer.lisp~ 加進 dolist 載入列表
+- ~backend/limn.lisp~ — *最大改動*：
+  - ~call~ 函數的 sync-shim 從 ~bridge/engine-load~ 一個 case 擴張到四個 case（細節見下）
+  - ~%on-buffer-opened~ 加兩條 race guard、加 path 同步
+
+** 不動的檔
+- *無 C++ 改動*。我們曾試著修 ~main_widget.cpp~ 的 ~show_pdf_view~ / ~show_text_view~（加 ~hide()/show()/raise()~），看到效果但決議*不夾帶進這個 branch*；那個 fix 應該另開 branch 走 sioyek 端的審查。
+
+** ~tmp/~ 下的 helpers（dev scratch，可一併刪除也行）
+| 檔                              | 用途                                              |
+|---------------------------------+---------------------------------------------------|
+| ~ibuffer-gui-driver.lisp~       | 互動 GUI walkthrough，13 步                       |
+| ~run-ibuffer-gui.sh~            | GUI walkthrough 的 bash 啟動                      |
+| ~ibuffer-test-driver.lisp~      | 早期 REPL-only walkthrough（15 step）             |
+| ~run-ibuffer-tests.sh~          | 跑 unit + REPL walkthrough                        |
+| ~ibuffer-debug.lisp~            | 短：M-x ibuffer + buffer/show 來回探狀態          |
+| ~ibuffer-debug-full.lisp~       | 長：模擬完整 14 步驟（headless 可跑）             |
+| ~ibuffer-test-checklist.org~    | 最早的 org-mode 靜態 checklist（已被 GUI driver 取代） |
+
+merging agent 可以把 ~tmp/~ 下的這些當 dev scratch，要保留 / 整理 / 直接刪除都可。
+
+* ibuffer 設計
+
+** 架構：vtable + 純 state，仿 ~limn-occur~
+
+整個模組分三層：
+
+1. *純資料層*
+   - ~ibuffer-row~ struct：~id path engine mode~
+   - ~ibuffer-state~ struct：~rows current marks sort-key filter ibuffer-buf-id~
+   - ~*ibuffer-state*~ 是單例（一個 ~*Buffer List*~ 而已）
+2. *純邏輯層*
+   - ~collect-rows~ / ~sort-rows~ / ~filter-rows~
+   - ~format-ibuffer-results~ / ~format-ibuffer-line~ / ~format-mark~
+   - ~next-row~ / ~prev-row~ / ~mark-set~ / ~mark-clear~ / ~unmark-all~
+   - ~render~（呼叫 vtable 把 content 推出去 + 移 cursor）
+3. *I/O vtable*
+   - ~*ibuffer-write-fn*~ — 把 content 寫到 ~*Buffer List*~（預設用 ~buffer/text + buffer/delete + buffer/insert~ 重置）
+   - ~*ibuffer-switch-fn*~ — 切到目標 buffer（預設 ~buffer/show~）
+   - ~*ibuffer-save-fn*~ — S mark 執行（預設 ~buffer/save~）
+   - ~*ibuffer-kill-fn*~ — D mark 執行（預設 ~buffer/close~ + ~limn/buffer:unregister~）
+   - ~*ibuffer-cursor-fn*~ — 移 cursor（預設 ~buffer/cursor-set~）
+
+vtable 是 dynamic var，install 時 setf 成 wire-talking lambda，unit test progv-bind 成 mock。
+
+** ibuffer-mode 的 keymap
+
+| key             | command                          |
+|-----------------+----------------------------------|
+| ~n~ / ~<down>~  | ~ibuffer-next-line~              |
+| ~p~ / ~<up>~    | ~ibuffer-prev-line~              |
+| ~RET~ / ~f~     | ~ibuffer-visit-buffer~           |
+| ~d~             | ~ibuffer-mark-for-delete~        |
+| ~s~             | ~ibuffer-mark-for-save~          |
+| ~u~             | ~ibuffer-unmark~                 |
+| ~U~             | ~ibuffer-unmark-all~             |
+| ~x~             | ~ibuffer-do-execute~             |
+| ~g~             | ~ibuffer-revert~                 |
+| ~S~             | ~ibuffer-sort-by~                |
+| ~/~             | ~ibuffer-filter-by-substring~    |
+
+~q~ *刻意不綁*（見 [[*為什麼 ~q~ 不綁][為什麼 ~q~ 不綁]]）。
+
+離開 ibuffer 的方式：
+- ~RET~ / ~f~ 在某一行 → 切到那個 buffer（自然離開）
+- ~M-x switch-to-buffer~ → 自選一個切過去
+
+** *Buffer List* 是 chrome buffer
+
+加進 ~limn-runtime.lisp~ 的 ~*chrome-buffer-modes*~：
+#+begin_src lisp
+("*Buffer List*" . ,(intern "IBUFFER-MODE" :cl-user))
+#+end_src
+
+這個 symbol resolution 是 lazy 的（cl-user 包 ~ibuffer-mode~ symbol 在 limn-runtime 編譯時被 ~intern~ 進去，但 mode 物件本身是 limn-ibuffer.lisp 載入時才 ~define-mode~ 註冊）。~init-chrome-buffers~ 有 ~(when (find-mode ...))~ guard，未註冊就 no-op，無 race。
+
+** *Buffer List* 自己會出現在 list 裡
+
+像 Emacs ibuffer 一樣，~*Buffer List*~ 自己也是一個 text-engine buffer，所以也會出現在表格裡。Wire id 一般是 ~t1~，path 是空字串顯示成 ~<no file>~。這是預期行為，不要 exclude。
+
+** Render 格式
+
+#+begin_example
+   M  ID                ENGINE   PATH
+>  D  b1                mupdf    /tmp/zeta.pdf
+      t1                text     <no file>
+   S  t2                mupdf    /tmp/alpha.pdf
+#+end_example
+
+欄位：
+- 1 char cursor 欄（~>~ 表示當前 row）
+- 2 char mark 欄（~D ~ / ~S ~ / ~DS~ / ~  ~）
+- 17 char ID
+- 8 char ENGINE
+- PATH
+
+header 用 ~format-ibuffer-line~ 同樣 format string 自動生成，欄寬機械同步。
+
+* limn:call sync-shim 補完整
+
+** 為什麼這個改動跟 ibuffer 一起走
+
+ibuffer 嚴重依賴 ~limn/buffer~ 跟 ~*window-active-buffer*~ 真的反映 wire 端最新狀態。我們在 dogfood 過程中發現現有 sync 只覆蓋 ~bridge/engine-load~，導致：
+
+1. ~buffer/load-file~ 後 ~limn/buffer~ 的 path 還是 engine-load 時的空字串 → ibuffer 顯示 ~<no file>~ 即使檔案載好了
+2. ~buffer/show~ 不更新 ~*window-active-buffer*~ → 按 ~n~ 等鍵 dispatch 到舊 buffer 的 mode-buffer，鍵被吃掉 user 看不到視覺反應
+3. ~buffer/close~ 不從 ~limn/buffer~ 拔掉 → ibuffer 列幽靈 buffer
+4. ~%on-buffer-opened~ event handler 永遠覆寫 major mode 跟 window active → 如果高階指令（M-x ibuffer）已經 explicit 設好，event 晚到一秒就把它清掉
+
+這些其實都是 architecturally 應該存在的 sync，pre-v0.40 因為沒有需要才沒做。ibuffer 是第一個踩到這些洞的功能，所以順便補。
+
+** ~call~ 函數的 sync-shim（~backend/limn.lisp~）
+
+從一個 ~when~ 分支擴張成 4 個 case：
+
+| wire cmd                | sync 動作                                                  |
+|-------------------------+------------------------------------------------------------|
+| ~bridge/engine-load~    | 註冊新 buffer 進 ~limn/buffer~ + 設 ~*window-active-buffer*~ |
+| ~buffer/load-file~      | 透過 ~(setf buffer-path)~ 更新 ~limn/buffer~ entry 的 path  |
+| ~buffer/show~           | 設 ~*window-active-buffer*[win-id] = bid~                  |
+| ~buffer/close~          | 從 ~limn/buffer~ unregister                                |
+
+實作上拆成 helper ~%sync-after-call~，包在 ~handler-case~ 裡，失敗只印 ~*error-output*~ 不會打斷 ~call~ 回應。
+
+** ~%on-buffer-opened~ race guard（~backend/limn.lisp~）
+
+兩條新 guard：
+
+1. *不覆寫已存在的 major mode*
+   #+begin_src lisp
+   (already-set (and existing major-of
+                     (funcall major-of existing)))
+   (when (and (not already-set) ...)
+     (funcall activate mb mode-name))
+   #+end_src
+   情境：~M-x ibuffer~ 先 ~bridge/engine-load~ 拿到新 bid，~%enter-ibuffer~ 隨即在 bid 的 mode-buffer 上 activate ibuffer-mode。Pump thread 後到的 ~buffer-opened~ event 不會把 ibuffer-mode 換回 text-mode（engine 預設）。
+
+2. *不覆寫已設好的 window active buffer*
+   #+begin_src lisp
+   (let ((current (and get-active (funcall get-active wid))))
+     (when (or (null current) (equal current bid))
+       (funcall set-active wid bid)))
+   #+end_src
+   情境：~M-x ibuffer~ 內部開了 ~/tmp/foo.txt~（為了讓你看到），然後 ~buffer/show~ ibuffer 自己拉回前景。Pump thread 後到的 ~buffer-opened~ event for ~/tmp/foo.txt~ 不會把 active 從 ibuffer 改回 foo.txt。
+
+** Sync-shim 也讓其他 caller 受益
+
+不只 ibuffer。任何用 ~buffer/show~ 切 buffer 的指令都會自動讓 dispatch 跟得上，避免 keys 路到舊 buffer 的 mode-buffer。任何 ~buffer/load-file~ 後，~switch-to-buffer~（讀 wire ~buffer/list~）跟 ibuffer（讀 ~limn/buffer~）都會看到正確 path。
+
+* 為什麼 ~q~ 不綁
+
+** 發現過程
+
+dogfood 走到「M-x ibuffer → q 切回 PDF」這步時：
+
+- ~%quit~ 確實被執行（trace ~[ibuffer] %quit prev="b1" target="b1"~）
+- ~buffer/show "b1"~ 也確實送了出去（~view/get~ 回 ~"b1"~）
+- ~*window-active-buffer*["w1"] = "b1"~ 也同步好了（dispatch 接下來的鍵路到 pdf-mode）
+
+但 Qt *視覺上看到的還是 ibuffer 表格*。
+
+我們在 worktree 編了一版 C++ patch（在 ~main_widget.cpp~ 的 ~show_pdf_view~ / ~show_text_view~ 裡顯式 ~hide()/show()/raise()~ 對方 widget），用 headless test 確認 wire state 跟 Lisp state 都正確，視覺問題只剩 Qt 端。
+
+** 為什麼不夾帶 C++ patch
+
+最後決定*不把 C++ patch 帶進 ibuffer 這個 branch*：
+
+1. *scope creep*：~show_pdf_view~ 影響所有 text↔pdf 切換（不只 ibuffer），是 sioyek 端獨立的 paint 議題
+2. *risk surface*：C++ paint 邏輯沒有 unit test framework，需要視覺驗證；不該跟著 ibuffer 的 Lisp 邏輯一起被審查
+3. *ibuffer 不需要 q 也是完整的*：~RET~ / ~f~（visit row）跟 ~M-x switch-to-buffer~ 已經提供「離開 ibuffer」的所有實際工作場景
+
+** 衍生問題（merging agent 後續可以另開 branch 做）
+
+1. *sioyek C++ ~show_pdf_view~ paint fix*
+   - 把 ~hide()/show()/raise()~ 加進 ~show_pdf_view~ 跟 ~show_text_view~
+   - 這個 patch 我們有試過，工作的
+   - 應該獨立成一個 sioyek 端 branch，跑 visual regression（如果有），測 text-engine 跟 pdf 之間的切換
+2. *paint fix 落地後再加回 ibuffer-quit*
+   - 在 limn-ibuffer.lisp 加 ~%quit~ helper（記住 ~previous-buffer~、處理 fallback）
+   - 加 ~ibuffer-quit~ defcommand
+   - 在 install 的 keymap 補 ~q~ binding
+   - 加 unit test
+   - 我把這次 cleanup 掉的 code 放在 commit message 裡，直接 revert 可以看
+3. *buffer 生命週期 invariant*（user 在 review 中提到）
+   - 「windows 應該自動顯示其 active buffer」
+   - 「最後一個 buffer 不應該被 kill（或自動找下一個）」
+   - 這是另一個層級的工作，跟 ibuffer 也是 orthogonal 的
+
+* 怎麼驗證這個 branch
+
+** 自動（unit tests，~10 秒）
+
+#+begin_src sh
+nix develop --command sbcl --script /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/tests/unit/run-unit.lisp
+#+end_src
+
+預期：~2707 passed, 5 failed~。Failures 必須是這 5 個（跟 ibuffer 無關，預先就壞）：
+- ~INIT-LOAD-RETURNS-NIL-WHEN-NONE-FOUND~
+- ~V027-B-PDF-SEARCH-EXECUTE-STORES-STATE~
+- ~V027-B-SEARCH-RESET-CLEARS-STATE~
+- ~V027-I-SEARCH-STATE-CLEARED-ON-BUFFER-CLOSE~
+- ~V027-I-SEARCH-STATE-ISOLATED-PER-BUFFER~
+
+ibuffer 自身 20 個 test 應該全綠（沒有 IBUFFER- 前綴的 fail）。
+
+** 自動 headless（短，看 wire+Lisp 同步）
+
+#+begin_src sh
+HEADLESS=1 \
+LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/run-repl.sh \
+  --eval '(o "/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/sioyek/tutorial.pdf")' \
+  --load /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/tmp/ibuffer-debug.lisp
+#+end_src
+
+預期：印出 ~T+0~ 到 ~T+3~ 的狀態，每一步 ~wire view/get~ 跟 ~Lisp *active*~ 都應該同步（都是 ~"b1"~ 或都是 ~"t1"~）。
+
+** 自動 headless（長，模擬整個 GUI walkthrough）
+
+#+begin_src sh
+HEADLESS=1 \
+LIMN_BIN=/Users/jin/data/local/projects/sioyek-core/sioyek/limn.app/Contents/MacOS/limn \
+bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/backend/run-repl.sh \
+  --eval '(o "/Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/sioyek/tutorial.pdf")' \
+  --load /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/tmp/ibuffer-debug-full.lisp
+#+end_src
+
+預期：印出 ~T+0~ 到 step 14 的所有狀態。每一步的 ~wire view/get~ 跟 ~Lisp *active*~ 在切換時都應同步；mark / unmark / execute / sort / filter 都看 ~rows~ 跟 ~current~ 反映合理。
+
+** 互動 GUI（可選，看視覺）
+
+#+begin_src sh
+bash /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/tmp/run-ibuffer-gui.sh
+#+end_src
+
+預期：13 step 走完。每一步看 Qt 窗變化、按 RET 確認。
+
+* Commit
+
+- ~9db9190~ ~feat: ibuffer mode + limn:call 同步 shim 補完~
+
+* Merge 策略建議
+
+** 推薦：squash merge
+
+整個 branch 只有一個 commit (~9db9190~)，內容是「ibuffer + 配套 sync-shim」這一塊邏輯，建議用 squash merge 直接落到 main。
+
+#+begin_src sh
+gh pr create --base main --head claude/mystifying-dijkstra-2400c3 \
+  --title "feat: ibuffer mode + limn:call 同步 shim 補完" \
+  --body-file /Users/jin/data/local/projects/sioyek-core/.claude/worktrees/mystifying-dijkstra-2400c3/tmp/IBUFFER-MERGE-NOTES.org
+gh pr merge --squash
+#+end_src
+
+** Merge 前的 sanity check
+
+請在 main 上跑一次 unit test，確認 baseline 是 ~2707 passed / 5 failed~（或者 2685 + 5 之類，只要 ibuffer test 一加進來通過、其他 fail 沒新增就 OK）。
+
+** Merge 後可能要做的後續
+
+1. *sioyek 端 ~show_pdf_view~ paint fix*（獨立 branch，獨立評估）
+2. *把 ~q~ / ~ibuffer-quit~ 加回來*（paint fix 落地後再做）
+3. *user 提到的 buffer 生命週期 invariant*（更廣的議題，獨立 spec）
+
+* 已知 limitation
+
+- ~q~ 不綁 ibuffer-quit（見上）
+- ibuffer 表格的 column 寬度是 hardcoded（ID 17 char、ENGINE 8 char）；超長 path 不會 wrap、超長 ID 會把 ENGINE 推開
+- sort 跟 filter 都走 minibuffer，沒有 single-key cycle
+- 沒有 ~o~ (visit-other-window)，因為目前 sioyek 只有 w1
+- ibuffer 自己也會出現在 list 裡，使用者按 ~d~ + ~x~ 在那一行會把 ibuffer 自己 kill 掉 → 已知行為，未來可以加保護
