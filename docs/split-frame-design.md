@@ -343,13 +343,16 @@ bookmark」。兩個功能天然組合。
 
 - [x] Phase 1 —— 稽核 + 設計文件
 - [x] Phase 2 —— `document_view(win_id)` overload + 遷移呼叫點
-- [ ] Phase 3a —— pane 基礎建設 + `document_view()` 改走 focused(畫面零變化)
-- [ ] Phase 3b —— 真正的第二個 pane(`win-split`/`focus`/`close` + 輸入路由)
-- [ ] Phase 3c —— 收編 notes panel(`WINDOW-SYSTEM-DEBT`)
+- [x] Phase 3a —— pane 基礎建設 + `document_view()` 改走 focused(畫面零變化)
+- [x] Phase 3b —— 真正的第二個 pane(`win-split`/`focus`/`close` + 輸入路由 + 游標捲動 + 視窗標題品牌化)。dogfood 12 項全通過,收尾於 commit `d80cc9b`,tag `phase-3b-complete`。
+- [ ] **Phase 3c —— 收編 notes panel(`WINDOW-SYSTEM-DEBT`)← 下一個待辦**
+      退掉手刻的 `enter_text_panel`/`chrome/focus-pane`/`%notes-focus-*`/`NOTES-PANEL-MODE`,
+      改走通用 `win-split`/`win-focus`/`win-close`。著手點:`grep -rn WINDOW-SYSTEM-DEBT`。
+      詳見上方「待收編的既有特例 —— notes panel」章節。
 - [ ] Phase 4 —— per-DV overlay raster(待辦)
 - [ ] Phase 5 —— `C-x` window 綁定(待辦)
-- [ ] 開工 3a 前先用 `WINDOW-SYSTEM-DEBT` 標記原始碼(可 grep)
-- [ ] (獨立任務,window 收尾後)Bookmark Everywhere —— 具名視角快照 set/jump
+- [x] 開工 3a 前先用 `WINDOW-SYSTEM-DEBT` 標記原始碼(可 grep)
+- [ ] (獨立任務,window 收尾後)Bookmark Everywhere —— 具名視角快照 set/jump(註:跨-buffer 命名書籤已於 optimistic-brahmagupta 分支 v0.37 另行實作)
 
 ## 下個 session 的具體步驟
 
