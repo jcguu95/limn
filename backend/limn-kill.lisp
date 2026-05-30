@@ -21,6 +21,8 @@
            #:*buffer-insert-fn* #:*buffer-delete-fn*
            #:*buffer-cursor-fn* #:*buffer-set-cursor-fn*
            #:*buffer-text-fn*
+           ;; v0.40 narrow — accessible-region bounds (NIL = no narrowing)
+           #:*point-min-fn* #:*point-max-fn*
            #:*yank-from* #:*yank-to*))
 
 (in-package #:limn/kill)
@@ -36,6 +38,30 @@
 (defvar *buffer-cursor-fn*     (lambda (bid) (declare (ignore bid)) 0))
 (defvar *buffer-set-cursor-fn* (lambda (bid off) (declare (ignore bid off))))
 (defvar *buffer-text-fn*       (lambda (bid from to) (declare (ignore bid from to)) ""))
+
+;;; ── v0.40 narrow — accessible-region bounds ─────────────────────────
+;;;
+;;; Same nil-means-no-narrow contract as limn/text-nav.  Rewired at
+;;; limn/excursion load time.  When set, kill-region / copy-region-as-
+;;; kill clip their [FROM, TO) range into the accessible region so a
+;;; stale mark or external caller can't kill text outside the
+;;; narrowing.
+
+(defvar *point-min-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
+(defvar *point-max-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
+(defun %clip-to-narrow (from to buf-id)
+  "Return (values from' to') clipped into BUF-ID's narrow region.
+   Either FROM or TO may be nudged toward the boundary; if the
+   resulting range is empty (from >= to), the caller short-circuits."
+  (let ((lo (funcall *point-min-fn* buf-id))
+        (hi (funcall *point-max-fn* buf-id)))
+    (when lo (setf from (max from lo)))
+    (when hi (setf to   (min to   hi)))
+    (values from to)))
 
 (defvar *yank-from* nil)
 (defvar *yank-to*   nil)
@@ -68,18 +94,26 @@
      (car *kill-ring*))))
 
 (defun copy-region-as-kill (buf-id from to)
-  "Copy buffer text in [FROM, TO) onto the kill ring without deleting."
-  (when (and (integerp from) (integerp to) (< from to))
-    (let ((text (funcall *buffer-text-fn* buf-id from to)))
-      (kill-new text)))
+  "Copy buffer text in [FROM, TO) onto the kill ring without deleting.
+   v0.40: when BUF-ID is narrowed, [FROM, TO) is clipped into
+   [point-min, point-max) first."
+  (when (and (integerp from) (integerp to))
+    (multiple-value-setq (from to) (%clip-to-narrow from to buf-id))
+    (when (< from to)
+      (let ((text (funcall *buffer-text-fn* buf-id from to)))
+        (kill-new text))))
   nil)
 
 (defun kill-region (buf-id from to)
-  "Delete buffer text in [FROM, TO) and push it onto the kill ring."
-  (when (and (integerp from) (integerp to) (< from to))
-    (let ((text (funcall *buffer-text-fn* buf-id from to)))
-      (kill-new text)
-      (funcall *buffer-delete-fn* buf-id from (- to from))))
+  "Delete buffer text in [FROM, TO) and push it onto the kill ring.
+   v0.40: when BUF-ID is narrowed, [FROM, TO) is clipped into
+   [point-min, point-max) first."
+  (when (and (integerp from) (integerp to))
+    (multiple-value-setq (from to) (%clip-to-narrow from to buf-id))
+    (when (< from to)
+      (let ((text (funcall *buffer-text-fn* buf-id from to)))
+        (kill-new text)
+        (funcall *buffer-delete-fn* buf-id from (- to from)))))
   nil)
 
 (defun %nth-kill (n)

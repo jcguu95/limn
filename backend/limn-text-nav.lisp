@@ -19,6 +19,11 @@
            #:*kill-new-fn*
            ;; v0.31 §A — syntax-table vtable + helpers
            #:*syntax-table-fn*
+           ;; v0.40 narrow — bounds vtable; defaults 0 / text-length.
+           ;; Wired by limn/excursion at its load time to point-min-of /
+           ;; point-max-of so all text-nav commands respect narrowing.
+           #:*point-min-fn*
+           #:*point-max-fn*
            #:skip-syntax-forward
            #:skip-syntax-backward
            #:next-line #:previous-line
@@ -52,12 +57,34 @@
   "When non-nil, (syntax-table-fn BUF-ID) → syntax-table object for that buffer.
    nil = no syntax table, fall back to %word-char-p defaults.")
 
+;; v0.40 narrow — accessible-region bounds.
+;;
+;; Contract: each fn returns the narrow boundary, or NIL to mean "no
+;; narrowing active — fall back to 0 / (length text)".  Defaults
+;; return NIL (full buffer accessible).  limn/excursion's load-time
+;; block rewires these to query buffer-local narrow markers, so when a
+;; buffer is narrowed every text-nav command (M-< / M-> / C-a / C-e /
+;; C-n / C-p / M-f / M-b / DEL / C-k / M-d) stays inside the
+;; accessible region.
+;;
+;; The nil-means-default contract lets text-nav-only tests (which
+;; don't wire limn/excursion at all) keep working — the defaults give
+;; whole-buffer access without ever consulting excursion's text-len-fn.
+(defvar *point-min-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
+(defvar *point-max-fn*
+  (lambda (bid) (declare (ignore bid)) nil))
+
 (defun %text   (bid)         (funcall *buffer-text-fn*       bid))
 (defun %cursor (bid)         (funcall *buffer-cursor-fn*     bid))
 (defun %scur   (bid off)     (funcall *buffer-set-cursor-fn* bid off))
 (defun %ins    (bid off str) (funcall *buffer-insert-fn*     bid off str))
 (defun %del    (bid from to) (funcall *buffer-delete-fn*     bid from to))
 (defun %kill   (str)         (funcall *kill-new-fn*          str))
+(defun %pmin   (bid)         (or (funcall *point-min-fn* bid) 0))
+(defun %pmax   (bid)         (or (funcall *point-max-fn* bid)
+                                 (length (%text bid))))
 
 ;;; ── helpers ───────────────────────────────────────────────────────────────
 
@@ -87,44 +114,47 @@
   (let ((cls (%char-syntax-class c table)))
     (or (eq cls :word) (eq cls :symbol))))
 
-(defun %line-start (text pos)
-  "Offset of the first char on the line containing POS."
+(defun %line-start (text pos &optional (lo 0))
+  "Offset of the first char on the line containing POS.  Scans
+   backwards until a #\\Newline or LO (whichever comes first).  LO is
+   the lower bound of the accessible region (point-min when narrowed)."
   (let ((p (1- pos)))
-    (loop while (>= p 0) do
+    (loop while (>= p lo) do
       (when (char= (char text p) #\Newline)
         (return-from %line-start (1+ p)))
       (decf p))
-    0))
+    lo))
 
-(defun %line-end (text pos)
-  "Offset of the \\n that terminates the current line, or (length text)
-   if the line runs to end-of-buffer."
-  (let ((p pos) (len (length text)))
-    (loop while (< p len) do
+(defun %line-end (text pos &optional (hi (length text)))
+  "Offset of the \\n that terminates the current line, or HI if the
+   line runs to the upper bound of the accessible region (point-max
+   when narrowed)."
+  (let ((p pos))
+    (loop while (< p hi) do
       (when (char= (char text p) #\Newline)
         (return-from %line-end p))
       (incf p))
-    len))
+    hi))
 
 ;;; ── M-< / M-> ────────────────────────────────────────────────────────────
 
 (defun beginning-of-buffer (bid)
   (setf *goal-column* nil)
-  (%scur bid 0))
+  (%scur bid (%pmin bid)))
 
 (defun end-of-buffer (bid)
   (setf *goal-column* nil)
-  (%scur bid (length (%text bid))))
+  (%scur bid (%pmax bid)))
 
 ;;; ── C-a / C-e ────────────────────────────────────────────────────────────
 
 (defun move-beginning-of-line (bid)
   (setf *goal-column* nil)
-  (%scur bid (%line-start (%text bid) (%cursor bid))))
+  (%scur bid (%line-start (%text bid) (%cursor bid) (%pmin bid))))
 
 (defun move-end-of-line (bid)
   (setf *goal-column* nil)
-  (%scur bid (%line-end (%text bid) (%cursor bid))))
+  (%scur bid (%line-end (%text bid) (%cursor bid) (%pmax bid))))
 
 ;;; ── C-n / C-p ────────────────────────────────────────────────────────────
 
@@ -132,14 +162,15 @@
   "Move down one line, preserving the goal column."
   (let* ((text (%text bid))
          (cur  (%cursor bid))
-         (len  (length text))
-         (bol  (%line-start text cur))
-         (eol  (%line-end   text cur))
+         (lo   (%pmin bid))
+         (hi   (%pmax bid))
+         (bol  (%line-start text cur lo))
+         (eol  (%line-end   text cur hi))
          (col  (or *goal-column* (- cur bol))))
     (setf *goal-column* col)
-    (when (< eol len)
+    (when (< eol hi)
       (let* ((nbol (1+ eol))
-             (neol (%line-end text nbol))
+             (neol (%line-end text nbol hi))
              (target (min (+ nbol col) neol)))
         (%scur bid target)))))
 
@@ -147,12 +178,13 @@
   "Move up one line, preserving the goal column."
   (let* ((text (%text bid))
          (cur  (%cursor bid))
-         (bol  (%line-start text cur))
+         (lo   (%pmin bid))
+         (bol  (%line-start text cur lo))
          (col  (or *goal-column* (- cur bol))))
     (setf *goal-column* col)
-    (when (> bol 0)
+    (when (> bol lo)
       (let* ((peol (1- bol))
-             (pbol (%line-start text peol))
+             (pbol (%line-start text peol lo))
              (target (min (+ pbol col) peol)))
         (%scur bid target)))))
 
@@ -161,13 +193,13 @@
 (defun forward-word (bid)
   (setf *goal-column* nil)
   (let* ((text  (%text bid))
-         (len   (length text))
+         (hi    (%pmax bid))
          (table (%get-syntax-table bid))
          (p     (%cursor bid)))
-    (loop while (and (< p len)
+    (loop while (and (< p hi)
                      (not (%word-or-symbol-p (char text p) table)))
           do (incf p))
-    (loop while (and (< p len)
+    (loop while (and (< p hi)
                      (%word-or-symbol-p (char text p) table))
           do (incf p))
     (%scur bid p)))
@@ -175,12 +207,13 @@
 (defun backward-word (bid)
   (setf *goal-column* nil)
   (let* ((text  (%text bid))
+         (lo    (%pmin bid))
          (table (%get-syntax-table bid))
          (p     (%cursor bid)))
-    (loop while (and (> p 0)
+    (loop while (and (> p lo)
                      (not (%word-or-symbol-p (char text (1- p)) table)))
           do (decf p))
-    (loop while (and (> p 0)
+    (loop while (and (> p lo)
                      (%word-or-symbol-p (char text (1- p)) table))
           do (decf p))
     (%scur bid p)))
@@ -211,11 +244,11 @@
   "Move cursor forward past consecutive chars whose syntax is in CLASS-STR."
   (setf *goal-column* nil)
   (let* ((text    (%text bid))
-         (len     (length text))
+         (hi      (%pmax bid))
          (table   (%get-syntax-table bid))
          (classes (%class-str-to-keywords class-str))
          (p       (%cursor bid)))
-    (loop while (and (< p len)
+    (loop while (and (< p hi)
                      (member (%char-syntax-class (char text p) table) classes))
           do (incf p))
     (%scur bid p)))
@@ -224,10 +257,11 @@
   "Move cursor backward past consecutive chars whose syntax is in CLASS-STR."
   (setf *goal-column* nil)
   (let* ((text    (%text bid))
+         (lo      (%pmin bid))
          (table   (%get-syntax-table bid))
          (classes (%class-str-to-keywords class-str))
          (p       (%cursor bid)))
-    (loop while (and (> p 0)
+    (loop while (and (> p lo)
                      (member (%char-syntax-class (char text (1- p)) table) classes))
           do (decf p))
     (%scur bid p)))
@@ -240,42 +274,42 @@
 
 (defun delete-forward-char (bid)
   (setf *goal-column* nil)
-  (let* ((text (%text bid))
-         (cur  (%cursor bid))
-         (len  (length text)))
-    (when (< cur len)
+  (let* ((cur (%cursor bid))
+         (hi  (%pmax bid)))
+    (when (< cur hi)
       (%del bid cur (1+ cur)))))
 
 ;;; ── C-k / M-d ───────────────────────────────────────────────────────────
 
 (defun kill-line (bid)
   "Kill from cursor to end of line.  If cursor is exactly at the line's
-   \\n, kill the \\n (merging with next line).  No-op at end-of-buffer."
+   \\n, kill the \\n (merging with next line).  No-op at end-of-buffer
+   or at the upper narrow bound."
   (setf *goal-column* nil)
   (let* ((text (%text bid))
          (cur  (%cursor bid))
-         (len  (length text)))
-    (when (< cur len)
-      (let* ((eol (%line-end text cur))
-             (to  (if (= cur eol) (1+ cur) eol))
+         (hi   (%pmax bid)))
+    (when (< cur hi)
+      (let* ((eol (%line-end text cur hi))
+             (to  (if (= cur eol) (min (1+ cur) hi) eol))
              (killed (subseq text cur to)))
         (%kill killed)
         (%del bid cur to)))))
 
 (defun kill-word (bid)
   "Kill from cursor to end of next word (including any preceding non-word
-   chars).  No-op at end-of-buffer."
+   chars).  No-op at end-of-buffer or upper narrow bound."
   (setf *goal-column* nil)
   (let* ((text  (%text bid))
          (cur   (%cursor bid))
-         (len   (length text))
+         (hi    (%pmax bid))
          (table (%get-syntax-table bid)))
-    (when (< cur len)
+    (when (< cur hi)
       (let ((p cur))
-        (loop while (and (< p len)
+        (loop while (and (< p hi)
                          (not (%word-or-symbol-p (char text p) table)))
               do (incf p))
-        (loop while (and (< p len)
+        (loop while (and (< p hi)
                          (%word-or-symbol-p (char text p) table))
               do (incf p))
         (when (> p cur)

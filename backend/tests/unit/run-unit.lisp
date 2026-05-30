@@ -147,7 +147,30 @@
                 ;; v0.37 bookmark-everywhere
                 "bookmark-v037.lisp"
                 "bookmark-cmds-v037.lisp"
-                "bookmark-handlers-v037.lisp"))
+                "bookmark-handlers-v037.lisp"
+                ;; narrow/widen §1.1 — text-nav narrow-aware (depends on
+                ;; with-excursion-ctx from excursion-v032.lisp)
+                "text-nav-narrow.lisp"
+                ;; narrow/widen §1.2 — mark narrow-aware
+                "mark-narrow.lisp"
+                ;; narrow/widen §1.3 — isearch narrow-aware
+                "isearch-narrow.lisp"
+                ;; narrow/widen §1.4 — regex narrow-aware
+                "regex-narrow.lisp"
+                ;; narrow/widen §1.5 — kill narrow-aware
+                "kill-narrow.lisp"
+                ;; narrow/widen §1.6 — occur narrow-aware
+                "occur-narrow.lisp"
+                ;; narrow/widen §2.1 — narrow-to-region / widen commands + keymap
+                "narrow-cmd.lisp"
+                ;; narrow/widen §2.2 — modeline narrow indicator
+                "narrow-modeline.lisp"
+                ;; narrow/widen §2.3 — dim overlay for inaccessible region
+                "narrow-dim.lisp"
+                ;; narrow/widen §2.4 — narrow-to-defun via reader
+                "narrow-defun.lisp"
+                ;; narrow/widen §2.5 — text-mode modeline formatter
+                "narrow-text-modeline.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))

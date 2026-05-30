@@ -4,17 +4,45 @@
 每個 release 一段：交付什麼、為什麼。本檔由 git tag annotation 整理
 而來，配合 =LIMN-SPEC.org §12 實作路線圖= 一起看。
 
-* v0.37.0 — dogfood sprint (in progress)
+* v0.42.0 — buffer narrow / widen
+:PROPERTIES:
+:DATE: 2026-05-30
+:END:
+
+把 Emacs 的 =narrow-to-region= / =widen= 完整搬進 Limn，三層：
+
+- *語意層*：text-nav / mark / isearch / regex / kill / occur 六個 Lisp
+  module 全部尊重 =[point-min, point-max)=。
+- *UX 層*：=C-x n n= / =C-x n w= / =C-x n d= interactive commands、
+  modeline 顯示 =Narrow=、=narrow-to-defun= 走 SBCL reader。
+- *視覺/中央 gate*：新 C++ =TextBuffer= class 把 =GapBuffer= 鎖進
+  =private=，所有 buffer mutation 走 method，narrow 成為 compiler 守住的
+  invariant；widget 只看到切片（外面的字真的消失，跟 Emacs 一致）。
+
+沿路修掉兩個自 narrow 前就潛伏的 production bug：=limn/excursion= 與
+=limn/text-nav= 的 wire vtable 從未在 =limn:start= 被接上。
+
+新增 ~114 個 unit test（全綠）+ 2 個 narrow integration test。
+
+* v0.41.0 — window split Phase 3a/3b
 :PROPERTIES:
 :DATE: 2026-05-29
 :END:
 
-把 v0.27→v0.36 累積的 10 個 feature batch 攤開來真的用、把擋路的東西
-修掉。See [[file:LIMN-SPEC.org][LIMN-SPEC.org]] §12 路線圖 + repo root
-=v037-bugs.md= / =v037-phase-e-keymap-audit.md=。
+多 pane 視窗分割從 logical-only 升成「真正獨立的第二 pane」：每個 pane
+自己的 =DocumentView=、獨立捲動、=C-x o= 焦點切換、焦點邊框、=win-close=
+移除 pane。Item-5 游標捲動獨立 + 視窗標題品牌化 + 一鍵 dogfood 腳本。
+詳見 =docs/split-frame-design.md=（Phase 3c / 4 / 5 待續）。
 
-(本段僅列已落地的 v0.37 sub-batches；最終 release notes 在 ship 前
-整合。)
+* v0.40.0 — bookmark everywhere + logging + 版本制度地基
+:PROPERTIES:
+:DATE: 2026-05-29
+:END:
+
+（原誤標為 =v0.37.0 dogfood sprint=；依 =docs/versioning-policy.md= §4
+更正為實際 ship 的權威 tag =v0.40.0=。）本段含這次 dogfood sprint 落地的
+兩個 feature sub-batch，以及新版本制度的地基（=VERSION= / =changelog.d/=
+/ 收攏腳本 / 首個權威 tag）。
 
 ** bookmark everywhere — 跨 buffer 可命名書籤
 

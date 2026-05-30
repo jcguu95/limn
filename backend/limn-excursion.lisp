@@ -41,6 +41,26 @@
            #:save-restriction
            #:point-min
            #:point-max
+           ;; v0.40 — explicit-bid accessors used by other modules
+           ;; (limn/text-nav etc.) to query narrow bounds without having
+           ;; to bind *current-buffer* first.
+           #:point-min-of
+           #:point-max-of
+           ;; v0.40 — nil-returning accessors for late-loaded modules
+           ;; whose *point-{min,max}-fn* vtable contract is "nil means
+           ;; no narrowing — fall back to default bounds".
+           #:narrow-start-of
+           #:narrow-end-of
+           ;; v0.40 §2.2 — modeline indicator: "Narrow" when narrowed,
+           ;; "" otherwise.  Modes thread this into their modeline format.
+           #:format-narrow-indicator
+           ;; v0.40 §2.4 — find top-level Lisp form bounds for
+           ;; narrow-to-defun.  Returns (values start end) or nil/nil.
+           #:find-defun-bounds
+           ;; v0.40 §2.3 — dim overlays for the non-accessible region.
+           #:install-dim-overlays
+           #:remove-dim-overlays
+           #:dim-overlay-count-for
            #:narrowed-p
            ;; point helpers
            #:point
@@ -336,14 +356,20 @@
       (funcall (find-symbol "SET-BUFFER-LOCAL-VALUE" lpkg)
                '*narrow-end-marker* m bid))))
 
-(defun %make-narrow-marker (bid pos)
-  "Create a marker at POS in BID. Returns the marker."
+(defun %make-narrow-marker (bid pos &key (insertion-type :before))
+  "Create a marker at POS in BID with the given INSERTION-TYPE.
+   v0.40 Phase 3 — narrow-end is created with :after so that an insert
+   AT the end pushes the end forward (extending the narrow), matching
+   Emacs's `ZV += nchars`.  narrow-start stays :before so an insert AT
+   the start is *inside* the narrow."
   (let ((mpkg (find-package '#:limn/marker)))
     (when mpkg
       (let* ((make (find-symbol "MAKE-MARKER" mpkg))
              (setm (find-symbol "SET-MARKER" mpkg))
+             (sit  (find-symbol "SET-MARKER-INSERTION-TYPE" mpkg))
              (m    (and make (funcall make))))
         (when (and m setm) (funcall setm m pos bid))
+        (when (and m sit)  (funcall sit  m insertion-type))
         m))))
 
 (defun %marker-pos (m)
@@ -364,22 +390,215 @@
              (%narrow-end bid))
          t)))
 
+(defun point-min-of (bid)
+  "Lowest accessible point in BID (respects narrowing).  Used by
+   modules whose vtable callbacks receive an explicit buf-id rather
+   than relying on *current-buffer*."
+  (let* ((m  (%narrow-start bid))
+         (mp (%marker-pos m)))
+    (or mp 0)))
+
+(defun point-max-of (bid)
+  "Highest accessible point in BID (respects narrowing)."
+  (let* ((m  (%narrow-end bid))
+         (mp (%marker-pos m)))
+    (or mp (%text-len bid))))
+
+(defun narrow-start-of (bid)
+  "Position of BID's active narrow-start, or NIL when not narrowed.
+   Designed for late-loaded modules (limn/regex etc.) whose
+   *point-min-fn* / *point-max-fn* vtable closures want the nil
+   sentinel to mean \"no narrowing — use default\"."
+  (%marker-pos (%narrow-start bid)))
+
+(defun narrow-end-of (bid)
+  "Position of BID's active narrow-end, or NIL when not narrowed."
+  (%marker-pos (%narrow-end bid)))
+
+;;; ── v0.40 §2.4 — find-defun-bounds for narrow-to-defun ──────────────
+;;;
+;;; Uses the host SBCL reader to walk top-level forms.  Skips
+;;; whitespace + line ( ; ... ) and block ( #| ... |# ) comments
+;;; manually so we know the form's real START position before handing
+;;; the substring to READ-FROM-STRING (which only reports the END).
+
+(defun %skip-cl-ws (text pos)
+  "Skip whitespace + #\\; line comments + #| ... |# block comments
+   starting at POS.  Returns the new POS, or (length text) at EOF."
+  (let ((len (length text)))
+    (loop while (< pos len) do
+      (let ((c (char text pos)))
+        (cond
+          ((member c '(#\Space #\Tab #\Newline #\Return) :test #'char=)
+           (incf pos))
+          ((char= c #\;)
+           (loop while (and (< pos len)
+                            (not (char= (char text pos) #\Newline)))
+                 do (incf pos)))
+          ((and (char= c #\#) (< (1+ pos) len)
+                (char= (char text (1+ pos)) #\|))
+           (incf pos 2)
+           (let ((depth 1))
+             (loop while (and (< pos len) (plusp depth)) do
+               (cond
+                 ((and (char= (char text pos) #\|)
+                       (< (1+ pos) len)
+                       (char= (char text (1+ pos)) #\#))
+                  (decf depth) (incf pos 2))
+                 ((and (char= (char text pos) #\#)
+                       (< (1+ pos) len)
+                       (char= (char text (1+ pos)) #\|))
+                  (incf depth) (incf pos 2))
+                 (t (incf pos))))))
+          (t (return-from %skip-cl-ws pos)))))
+    pos))
+
+(defun find-defun-bounds (text point)
+  "Return (values START END) of the top-level Common Lisp form in TEXT
+   that contains POINT, or (values nil nil) when POINT falls between
+   forms or parsing fails.  Backed by READ-FROM-STRING; comments and
+   whitespace between forms are skipped."
+  (let ((pos 0)
+        (len (length text)))
+    (block out
+      (loop while (< pos len) do
+        (let ((start (%skip-cl-ws text pos)))
+          (when (>= start len) (return-from out (values nil nil)))
+          ;; Reader the form *preserving* trailing whitespace so END is
+          ;; exactly one past the form's last char — not the position
+          ;; after the reader skipped following whitespace.  Without
+          ;; this, two adjacent forms separated by a newline would
+          ;; share boundaries (form₁.end == form₂.start), and
+          ;; narrow-to-defun on the first form would include the
+          ;; separator newline.
+          (let ((end (handler-case
+                         (with-input-from-string (in text :start start)
+                           (let ((*read-suppress* nil))
+                             (read-preserving-whitespace in t nil))
+                           (+ start (file-position in)))
+                       (error () nil))))
+            (cond
+              ((null end) (return-from out (values nil nil)))
+              ((and (<= start point) (<= point end))
+               (return-from out (values start end)))
+              (t (setf pos end))))))
+      (values nil nil))))
+
+(defun format-narrow-indicator (bid)
+  "Return \"Narrow\" when BID is narrowed, \"\" otherwise.  Designed
+   to be threaded into mode-specific modeline format functions (e.g.
+   pdf-format-modeline appends it after the zoom percent)."
+  (if (or (narrow-start-of bid) (narrow-end-of bid))
+      "Narrow"
+      ""))
+
+;;; ── v0.40 §2.3 — dim overlays for the non-accessible region ─────────
+;;;
+;;; While a buffer is narrowed, the user usually wants visual feedback
+;;; about *where* the accessible region is.  We achieve this by laying
+;;; two overlays on top of the inaccessible portions:
+;;;
+;;;   head : [0, narrow-start)
+;;;   tail : [narrow-end, text-len)
+;;;
+;;; Both carry face 'shadow (an Emacs convention the wire face layer
+;;; already maps to a low-contrast colour).  The overlays are stored
+;;; per-buffer so install / remove are idempotent.
+;;;
+;;; limn/overlays loads AFTER limn/excursion, so the API is late-bound
+;;; via find-package — calling install-dim-overlays before overlays is
+;;; loaded is a graceful no-op.
+
+(defvar *dim-narrow-overlays* (make-hash-table :test 'equal)
+  "buf-id → list of dim overlays currently installed for that buffer.")
+
+(defun %ov-pkg () (find-package '#:limn/overlays))
+
+(defun %make-dim-overlay (start end buf-id)
+  (let* ((p (%ov-pkg))
+         (mk (and p (find-symbol "MAKE-OVERLAY" p)))
+         (op (and p (find-symbol "OVERLAY-PUT" p))))
+    (when (and mk op (fboundp mk) (fboundp op))
+      (let ((ov (funcall mk start end buf-id)))
+        (funcall op ov 'face 'shadow)
+        (funcall op ov 'priority -20)
+        ov))))
+
+(defun %delete-overlay (ov)
+  (let* ((p (%ov-pkg))
+         (del (and p (find-symbol "DELETE-OVERLAY" p))))
+    (when (and del (fboundp del))
+      (funcall del ov))))
+
+(defun install-dim-overlays (bid)
+  "Lay 'shadow-faced overlays over the non-accessible portions of BID
+   so the narrowing is visually obvious.  Idempotent — replaces any
+   existing dim overlays for BID.  No-op when BID isn't narrowed or
+   when limn/overlays isn't loaded."
+  (remove-dim-overlays bid)
+  (let ((ns (narrow-start-of bid))
+        (ne (narrow-end-of   bid))
+        (tlen (%text-len bid))
+        (ovs '()))
+    (when (and ns (> ns 0))
+      (let ((ov (%make-dim-overlay 0 ns bid)))
+        (when ov (push ov ovs))))
+    (when (and ne (< ne tlen))
+      (let ((ov (%make-dim-overlay ne tlen bid)))
+        (when ov (push ov ovs))))
+    (when ovs
+      (setf (gethash bid *dim-narrow-overlays*) ovs))
+    ovs))
+
+(defun remove-dim-overlays (bid)
+  "Delete any dim overlays previously installed for BID.  Idempotent."
+  (let ((ovs (gethash bid *dim-narrow-overlays*)))
+    (dolist (ov ovs) (%delete-overlay ov))
+    (remhash bid *dim-narrow-overlays*))
+  nil)
+
+(defun dim-overlay-count-for (bid)
+  "Test introspection: how many dim overlays are currently installed
+   for BID."
+  (length (gethash bid *dim-narrow-overlays*)))
+
 (defun point-min ()
   "Lowest accessible point in current buffer (respects narrowing)."
-  (let* ((bid (current-buffer-id))
-         (m   (%narrow-start bid))
-         (mp  (%marker-pos m)))
-    (or mp 0)))
+  (point-min-of (current-buffer-id)))
 
 (defun point-max ()
   "Highest accessible point in current buffer (respects narrowing)."
-  (let* ((bid (current-buffer-id))
-         (m   (%narrow-end bid))
-         (mp  (%marker-pos m)))
-    (or mp (%text-len bid))))
+  (point-max-of (current-buffer-id)))
+
+(defun %push-narrow-wire (bid &key clear)
+  "Best-effort sync of the current narrow state to C++ via buffer/narrow.
+   When CLEAR is t the C++ side widens; otherwise the active narrow
+   marker positions are pushed.  Errors are swallowed because the wire
+   may not be live (unit tests).  Late-bound on limn:call so this
+   module can load before limn.lisp."
+  (let* ((pkg (find-package '#:limn))
+         (call (and pkg (find-symbol "CALL" pkg))))
+    (when (and call (fboundp call))
+      (handler-case
+          (cond
+            (clear
+             (funcall call "buffer/narrow"
+                      :|buffer-id| bid :|clear| t))
+            (t
+             (let ((s (%marker-pos (%narrow-start bid)))
+                   (e (%marker-pos (%narrow-end   bid))))
+               (when (and s e)
+                 (funcall call "buffer/narrow"
+                          :|buffer-id| bid
+                          :|start|     s
+                          :|end|       e)))))
+        (error () nil)))))
 
 (defun narrow-to-region (start end)
-  "Limit point-min/point-max to [START, END)."
+  "Limit point-min/point-max to [START, END).
+   v0.40 Phase 3: also push the new narrow range to the C++ side via
+   buffer/narrow, so the QPlainTextEdit widget physically shows only
+   the accessible region."
   (when (> start end)
     (error "narrow-to-region: start (~a) > end (~a)" start end))
   (let* ((bid (current-buffer-id))
@@ -391,18 +610,22 @@
     ;; release any pre-existing markers to keep marker-count tidy
     (%release-marker (%narrow-start bid))
     (%release-marker (%narrow-end   bid))
-    (%set-narrow-start bid (%make-narrow-marker bid s))
-    (%set-narrow-end   bid (%make-narrow-marker bid e))
+    (%set-narrow-start bid (%make-narrow-marker bid s :insertion-type :before))
+    (%set-narrow-end   bid (%make-narrow-marker bid e :insertion-type :after))
+    (%push-narrow-wire bid)
     nil))
 
 (defun widen ()
-  "Remove narrowing in current buffer."
+  "Remove narrowing in current buffer.
+   v0.40 Phase 3: also tells C++ to widen so the widget restores the
+   full content."
   (let ((bid (current-buffer-id)))
     (when bid
       (%release-marker (%narrow-start bid))
       (%release-marker (%narrow-end   bid))
       (%set-narrow-start bid nil)
-      (%set-narrow-end   bid nil)))
+      (%set-narrow-end   bid nil)
+      (%push-narrow-wire bid :clear t)))
   nil)
 
 (defmacro save-restriction (&body body)
@@ -426,12 +649,17 @@
            (cond
              ((and ,saved-s-pos ,saved-e-pos)
               (%set-narrow-start
-               ,bid (%make-narrow-marker ,bid ,saved-s-pos))
+               ,bid (%make-narrow-marker ,bid ,saved-s-pos
+                                          :insertion-type :before))
               (%set-narrow-end
-               ,bid (%make-narrow-marker ,bid ,saved-e-pos)))
+               ,bid (%make-narrow-marker ,bid ,saved-e-pos
+                                          :insertion-type :after))
+              ;; v0.40 Phase 3 — sync the restored narrow to C++.
+              (%push-narrow-wire ,bid))
              (t
               (%set-narrow-start ,bid nil)
-              (%set-narrow-end   ,bid nil))))))))
+              (%set-narrow-end   ,bid nil)
+              (%push-narrow-wire ,bid :clear t))))))))
 
 ;;; ── §C. save-excursion ───────────────────────────────────────────────
 
@@ -659,3 +887,32 @@
     (t (let ((bid (current-buffer-id)))
          (when bid (setf (gethash bid *id->name*) new-name)))))
   new-name)
+
+;;; ── v0.40 narrow integration: wire limn/text-nav's bounds vtable ─────
+;;;
+;;; text-nav loads BEFORE excursion, so we patch its *POINT-MIN-FN* /
+;;; *POINT-MAX-FN* here at excursion's load time.  The closures return
+;;; the active narrow marker position, or NIL when the buffer isn't
+;;; narrowed — text-nav's helpers fall back to 0 / (length text) in
+;;; the NIL case, so the wire-up doesn't disturb text-nav unit tests
+;;; that don't set up excursion at all.
+
+(eval-when (:load-toplevel :execute)
+  (let ((pmin-closure (lambda (bid)
+                        (and bid (%marker-pos (%narrow-start bid)))))
+        (pmax-closure (lambda (bid)
+                        (and bid (%marker-pos (%narrow-end bid))))))
+    ;; Only modules that load BEFORE limn/excursion are patched here.
+    ;; Modules that load AFTER (e.g. limn/regex) wire themselves in
+    ;; their own load-time block via limn/excursion:narrow-{start,end}-of.
+    (dolist (pkg-name '(#:limn/text-nav #:limn/mark
+                        #:limn/isearch #:limn/kill
+                        #:limn/occur))
+      (let ((pkg (find-package pkg-name)))
+        (when pkg
+          (let ((pmin-sym (find-symbol "*POINT-MIN-FN*" pkg))
+                (pmax-sym (find-symbol "*POINT-MAX-FN*" pkg)))
+            (when (and pmin-sym (boundp pmin-sym))
+              (set pmin-sym pmin-closure))
+            (when (and pmax-sym (boundp pmax-sym))
+              (set pmax-sym pmax-closure))))))))

@@ -3059,21 +3059,25 @@
 ;;; ═════════════════════════════════════════════════════════════════════
 
 (defun limn/pdf-mode:pdf-format-modeline (path page page-count zoom
-                                          &optional counter)
-  "Format \"PDF: name [P/T] Z%  [N / T-matches]\". Page is 1-indexed.
-   COUNTER is the optional search-match string (\"3 / 17\") shown only
-   when a search is active.  Embedded in the left slot so it always
-   renders, regardless of whether Qt's modeline layout shows :right."
-  (let ((basename (file-namestring (pathname path)))
-        (zoom-pct (round (* 100 zoom))))
-    (if (and counter (stringp counter) (plusp (length counter)))
-        (format nil "PDF: ~a   [~a / ~a]   ~a%   match ~a"
-                basename (1+ page) page-count zoom-pct counter)
-        (format nil "PDF: ~a   [~a / ~a]   ~a%"
-                basename (1+ page) page-count zoom-pct))))
+                                          &optional counter narrow)
+  "Format \"PDF: name [P/T] Z%  [N / T-matches]  Narrow\". Page is
+   1-indexed.  COUNTER is the optional search-match string (\"3 / 17\")
+   shown only when a search is active.  NARROW is the indicator string
+   returned by limn/excursion:format-narrow-indicator — \"Narrow\" or
+   empty.  Both are embedded in the left slot so they always render,
+   regardless of whether Qt's modeline layout shows :right."
+  (let* ((basename (file-namestring (pathname path)))
+         (zoom-pct (round (* 100 zoom)))
+         (base     (if (and counter (stringp counter) (plusp (length counter)))
+                       (format nil "PDF: ~a   [~a / ~a]   ~a%   match ~a"
+                               basename (1+ page) page-count zoom-pct counter)
+                       (format nil "PDF: ~a   [~a / ~a]   ~a%"
+                               basename (1+ page) page-count zoom-pct))))
+    (if (and narrow (stringp narrow) (plusp (length narrow)))
+        (format nil "~a   ~a" base narrow)
+        base)))
 
 (defun limn/pdf-mode:pdf-mode-update-modeline (&key buffer-id path)
-  (declare (ignore buffer-id))
   ;; v0.39.17 — modeline/set wire requires :|win-id|.  Missed in the
   ;; v0.39.12 attempt, which is why the modeline label NEVER appeared
   ;; even though all the Lisp-side plumbing looked right.  Without
@@ -3083,9 +3087,15 @@
          (pc (or (getf v :|page-count|) 1))
          (zoom (or (getf v :|zoom|) 1.0))
          (counter (limn/pdf-mode:pdf-format-search-counter))
+         ;; v0.40 §2.2 — narrow indicator for the current buffer.
+         (narrow (let* ((ex (find-package '#:limn/excursion))
+                        (fn (and ex (find-symbol "FORMAT-NARROW-INDICATOR" ex))))
+                   (if (and buffer-id fn (fboundp fn))
+                       (funcall fn buffer-id)
+                       "")))
          (label (limn/pdf-mode:pdf-format-modeline
                   (or path "/tmp/unknown.pdf")
-                  page pc zoom counter)))
+                  page pc zoom counter narrow)))
     (limn/pdf-mode::%limn-call "modeline/set"
                                 :|win-id| limn/pdf-mode::*current-win-id*
                                 :|left|   label

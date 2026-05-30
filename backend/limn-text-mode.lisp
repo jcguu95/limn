@@ -18,6 +18,9 @@
 (defpackage #:limn/text
   (:use #:cl)
   (:export #:install                 ; called from limn.lisp bootstrap
+           ;; v0.40 §2.5 — modeline pushing for text buffers.
+           #:text-format-modeline
+           #:text-mode-update-modeline
            #:*last-key*
            #:*current-text-buffer*))
 
@@ -69,6 +72,66 @@
   (let* ((r (%limn-call "buffer/text" :|buffer-id| buf))
          (d (%response-data r)))
     (length (or (getf d :|text|) ""))))
+
+(defun %buffer-text (buf)
+  "Full text of BUF as a string.  v0.40 §2.4 — used by narrow-to-defun
+   so the Lisp reader can walk top-level forms."
+  (let* ((r (%limn-call "buffer/text" :|buffer-id| buf))
+         (d (%response-data r)))
+    (or (getf d :|text|) "")))
+
+;;; ── v0.40 §2.5: modeline labels for text buffers ─────────────────────
+;;;
+;;; Pre-v0.40 text-mode never pushed a modeline label; only PDF mode
+;;; did.  That meant the Narrow indicator (§2.2) was invisible for
+;;; text buffers — the very buffers narrow most usefully applies to.
+;;;
+;;; text-format-modeline produces the label string; text-mode-update-
+;;; modeline pushes it via modeline/set, threading the active narrow
+;;; indicator through limn/excursion:format-narrow-indicator.
+
+(defun text-format-modeline (path narrow)
+  "Format \"Text: name   Narrow\".  PATH may be nil (scratch buffer);
+   NARROW is the indicator string from format-narrow-indicator
+   (\"Narrow\" or empty)."
+  (let ((basename (if (and path (stringp path) (plusp (length path)))
+                      (file-namestring (pathname path))
+                      "*scratch*")))
+    (if (and narrow (stringp narrow) (plusp (length narrow)))
+        (format nil "Text: ~a   ~a" basename narrow)
+        (format nil "Text: ~a" basename))))
+
+(defun %lookup-buffer-path (bid)
+  "Best-effort path lookup for BID via buffer/list.  Returns the path
+   string or NIL.  Errors are swallowed."
+  (handler-case
+      (let* ((r (%limn-call "buffer/list"))
+             (entries (%response-data r)))
+        (when (listp entries)
+          (loop for e in entries
+                when (and (listp e) (equal (getf e :|buffer-id|) bid))
+                  return (getf e :|path|))))
+    (error () nil)))
+
+(defun text-mode-update-modeline (&key buffer-id path)
+  "Push a text-mode modeline label for BUFFER-ID (or *current-text-
+   buffer*).  The label includes the buffer name plus the Narrow
+   indicator from limn/excursion when the buffer is narrowed.
+   PATH may be supplied by the caller (e.g. the buffer-opened event
+   handler).  When omitted, looked up via buffer/list.  Wire errors
+   are silently swallowed so the caller doesn't have to defend."
+  (let* ((bid (or buffer-id *current-text-buffer*))
+         (path (or path (and bid (%lookup-buffer-path bid))))
+         (narrow (let* ((ex (find-package '#:limn/excursion))
+                        (fn (and ex (find-symbol "FORMAT-NARROW-INDICATOR" ex))))
+                   (if (and bid fn (fboundp fn))
+                       (funcall fn bid)
+                       "")))
+         (label (text-format-modeline path narrow)))
+    (handler-case
+        (%limn-call "modeline/set" :|win-id| "w1" :|left| label)
+      (error () nil))
+    label))
 
 ;;; ── commands (defined in CL-USER per init.lisp convention) ─────────────
 
@@ -438,14 +501,22 @@
     ;; does a view/get per keystroke and fast typing races (chars get
     ;; reordered, e.g. "abc" → "acb"). Idempotent: hook is idempotent
     ;; via add-hook's name-based dedup behavior.
+    ;;
+    ;; v0.40 §2.5: also push the initial modeline label so the buffer
+    ;; name (and a future Narrow indicator) appear immediately.
     (let ((add (find-symbol "ADD-HOOK" :limn/hooks)))
       (when (and add (fboundp add))
         (funcall (symbol-function add) "event/buffer-opened"
                  (lambda (ev)
                    (when (equal (getf ev :|engine|) "text")
-                     (let ((bid (getf ev :|buffer-id|)))
+                     (let ((bid  (getf ev :|buffer-id|))
+                           (path (getf ev :|path|)))
                        (when (and bid (stringp bid))
-                         (setf *current-text-buffer* bid))))))))
+                         (setf *current-text-buffer* bid)
+                         (handler-case
+                             (text-mode-update-modeline
+                              :buffer-id bid :path path)
+                           (error () nil)))))))))
 
     sym-tm))
 

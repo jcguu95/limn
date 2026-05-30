@@ -12,6 +12,7 @@
 //   buffer/open, buffer/close
 //
 #include "gap_buffer.h"
+#include "limn_text_buffer.h"
 
 #include <QObject>
 #include <QJsonObject>
@@ -127,6 +128,11 @@ private:
     void cmd_buffer_cursor_set   (const QString& id, const QJsonObject& msg);
     void cmd_buffer_insert       (const QString& id, const QJsonObject& msg);
     void cmd_buffer_delete       (const QString& id, const QJsonObject& msg);
+    // v0.40 Phase 3 — buffer/narrow {start, end} or {clear: true}.
+    // Sets/clears the narrow range for a text-engine buffer; sync_text_widget
+    // then renders only [BEGV, ZV) so the widget physically shows the
+    // accessible region only.
+    void cmd_buffer_narrow       (const QString& id, const QJsonObject& msg);
 
     // SPEC v0.22 §A — text-engine file I/O
     void cmd_buffer_load_file    (const QString& id, const QJsonObject& msg);
@@ -276,8 +282,13 @@ private:
     // §1.2 says all chrome text surfaces are text-engine buffers; this
     // is where that promise materialises. ChromeBar (Qt widget) just
     // reads the strings via the helpers below.
-    QHash<QString, GapBuffer> text_buffers;
-    QHash<QString, int>       text_cursors;   // per-buffer cursor (UTF-16 offset)
+    // v0.40 Phase 3: text-engine buffers are TextBuffer objects which
+    // encapsulate GapBuffer + per-buffer cursor + per-buffer narrow
+    // state.  The old parallel `text_cursors` QHash is folded in.
+    // All mutation / read paths must go through TextBuffer methods —
+    // the GapBuffer is private inside TextBuffer, so the compiler
+    // enforces the central-gate invariant.
+    QHash<QString, TextBuffer> text_buffers;
     // SPEC v0.22 §A: text-engine buffer-id → bound on-disk path.
     // Set by buffer/load-file, consumed by buffer/save. Absent = "no path".
     QHash<QString, QString>   buffer_paths;

@@ -130,7 +130,142 @@
             (lambda () (funcall (symbol-function qr-i)))))
         (when (and qrr-i (fboundp qrr-i))
           (limn/cmd:defcommand cl-user::query-replace-regexp ()
-            (lambda () (funcall (symbol-function qrr-i)))))))))
+            (lambda () (funcall (symbol-function qrr-i))))))))
+
+  ;; ── v0.40 §2.1: narrow-to-region / widen interactive commands ────
+  ;;
+  ;; Emacs convention: C-x n n (narrow to [mark, point)), C-x n w
+  ;; (widen).  Both work on the focused text buffer.  PDF mode doesn't
+  ;; have a single text-stream so narrow doesn't apply there (yet).
+  ;;
+  ;; narrow-to-region reads mark and point from limn/mark + the
+  ;; focused buffer's cursor; if no mark is set, echoes a hint and
+  ;; does nothing.  widen is unconditional.
+  (limn/cmd:defcommand cl-user::narrow-to-region ()
+    (lambda ()
+      (let* ((tpkg  (find-package '#:limn/text))
+             (fbf   (and tpkg (find-symbol "%FOCUSED-TEXT-BUFFER" tpkg)))
+             (buf   (and fbf (fboundp fbf) (funcall fbf)))
+             (cur-fn (and tpkg (find-symbol "%CURSOR" tpkg)))
+             (cur   (and buf cur-fn (fboundp cur-fn) (funcall cur-fn buf)))
+             (mpkg  (find-package '#:limn/mark))
+             (mf    (and mpkg (find-symbol "MARK" mpkg)))
+             (mk    (and buf mf (fboundp mf) (funcall mf buf)))
+             (xpkg  (find-package '#:limn/excursion))
+             (lpkg  (find-package '#:limn/local))
+             (ntr   (and xpkg (find-symbol "NARROW-TO-REGION" xpkg)))
+             (call-sym (and (find-package '#:limn)
+                            (find-symbol "CALL" '#:limn))))
+        (cond
+          ((not (and buf (integerp cur) (integerp mk)))
+           (when (and call-sym (fboundp call-sym))
+             (ignore-errors
+               (funcall call-sym "message/echo"
+                        :|text| "narrow-to-region: no mark set"))))
+          (t
+           (let* ((start (min mk cur))
+                  (end   (max mk cur))
+                  (xsym  (and xpkg (find-symbol "*CURRENT-BUFFER*" xpkg)))
+                  (lsym  (and lpkg (find-symbol "*CURRENT-BUFFER-ID*" lpkg)))
+                  (idoy  (and xpkg (find-symbol "INSTALL-DIM-OVERLAYS" xpkg))))
+             (progv
+                 (remove nil (list xsym lsym))
+                 (remove nil (list (and xsym buf) (and lsym buf)))
+               (when (and ntr (fboundp ntr))
+                 (funcall ntr start end)))
+             ;; v0.40 §2.3 — visual feedback: dim the inaccessible region.
+             (when (and idoy (fboundp idoy))
+               (ignore-errors (funcall idoy buf)))
+             ;; v0.40 §2.5 — refresh modeline so the "Narrow" segment appears.
+             (let* ((tpkg2 (find-package '#:limn/text))
+                    (upd   (and tpkg2 (find-symbol "TEXT-MODE-UPDATE-MODELINE" tpkg2))))
+               (when (and upd (fboundp upd))
+                 (ignore-errors (funcall upd :buffer-id buf))))
+             (when (and call-sym (fboundp call-sym))
+               (ignore-errors
+                 (funcall call-sym "message/echo"
+                          :|text| (format nil "Narrowed to [~a, ~a)"
+                                          start end))))))))))
+
+  ;; v0.40 §2.4: narrow-to-defun (Emacs C-x n d).  Reader-driven: walk
+  ;; top-level forms of the focused buffer's text, find the one that
+  ;; contains point, and narrow to its bounds.  Lisp-specific (uses
+  ;; READ-FROM-STRING).  Other major modes can later override.
+  (limn/cmd:defcommand cl-user::narrow-to-defun ()
+    (lambda ()
+      (let* ((tpkg  (find-package '#:limn/text))
+             (fbf   (and tpkg (find-symbol "%FOCUSED-TEXT-BUFFER" tpkg)))
+             (buf   (and fbf (fboundp fbf) (funcall fbf)))
+             (cur-fn (and tpkg (find-symbol "%CURSOR" tpkg)))
+             (txt-fn (and tpkg (find-symbol "%BUFFER-TEXT" tpkg)))
+             (cur   (and buf cur-fn (fboundp cur-fn) (funcall cur-fn buf)))
+             (txt   (and buf txt-fn (fboundp txt-fn) (funcall txt-fn buf)))
+             (xpkg  (find-package '#:limn/excursion))
+             (lpkg  (find-package '#:limn/local))
+             (fdb   (and xpkg (find-symbol "FIND-DEFUN-BOUNDS" xpkg)))
+             (ntr   (and xpkg (find-symbol "NARROW-TO-REGION" xpkg)))
+             (idoy  (and xpkg (find-symbol "INSTALL-DIM-OVERLAYS" xpkg)))
+             (call-sym (and (find-package '#:limn)
+                            (find-symbol "CALL" '#:limn))))
+        (cond
+          ((not (and buf (integerp cur) (stringp txt) fdb (fboundp fdb)))
+           (when (and call-sym (fboundp call-sym))
+             (ignore-errors
+               (funcall call-sym "message/echo"
+                        :|text| "narrow-to-defun: no buffer"))))
+          (t
+           (multiple-value-bind (start end) (funcall fdb txt cur)
+             (cond
+               ((not (and start end))
+                (when (and call-sym (fboundp call-sym))
+                  (ignore-errors
+                    (funcall call-sym "message/echo"
+                             :|text| "Point is not in a defun"))))
+               (t
+                (let ((xsym (and xpkg (find-symbol "*CURRENT-BUFFER*" xpkg)))
+                      (lsym (and lpkg (find-symbol "*CURRENT-BUFFER-ID*" lpkg))))
+                  (progv
+                      (remove nil (list xsym lsym))
+                      (remove nil (list (and xsym buf) (and lsym buf)))
+                    (when (and ntr (fboundp ntr))
+                      (funcall ntr start end))))
+                (when (and idoy (fboundp idoy))
+                  (ignore-errors (funcall idoy buf)))
+                (when (and call-sym (fboundp call-sym))
+                  (ignore-errors
+                    (funcall call-sym "message/echo"
+                             :|text|
+                             (format nil "Narrowed to defun [~a, ~a)"
+                                     start end))))))))))))
+
+  (limn/cmd:defcommand cl-user::widen ()
+    (lambda ()
+      (let* ((tpkg  (find-package '#:limn/text))
+             (fbf   (and tpkg (find-symbol "%FOCUSED-TEXT-BUFFER" tpkg)))
+             (buf   (and fbf (fboundp fbf) (funcall fbf)))
+             (xpkg  (find-package '#:limn/excursion))
+             (lpkg  (find-package '#:limn/local))
+             (widen (and xpkg (find-symbol "WIDEN" xpkg)))
+             (xsym  (and xpkg (find-symbol "*CURRENT-BUFFER*" xpkg)))
+             (lsym  (and lpkg (find-symbol "*CURRENT-BUFFER-ID*" lpkg)))
+             (call-sym (and (find-package '#:limn)
+                            (find-symbol "CALL" '#:limn))))
+        (when buf
+          (progv (remove nil (list xsym lsym))
+                 (remove nil (list (and xsym buf) (and lsym buf)))
+            (when (and widen (fboundp widen)) (funcall widen)))
+          ;; v0.40 §2.3 — clear the dim overlays installed by narrow.
+          (let ((rdoy (and xpkg (find-symbol "REMOVE-DIM-OVERLAYS" xpkg))))
+            (when (and rdoy (fboundp rdoy))
+              (ignore-errors (funcall rdoy buf))))
+          ;; v0.40 §2.5 — refresh modeline so the "Narrow" segment goes away.
+          (let* ((tpkg2 (find-package '#:limn/text))
+                 (upd   (and tpkg2 (find-symbol "TEXT-MODE-UPDATE-MODELINE" tpkg2))))
+            (when (and upd (fboundp upd))
+              (ignore-errors (funcall upd :buffer-id buf))))
+          (when (and call-sym (fboundp call-sym))
+            (ignore-errors
+              (funcall call-sym "message/echo" :|text| "Widened"))))))))
 
 ;; Register at load time.  (install-defaults below re-calls this so any
 ;; clear-commands between bring-up + start gets undone.)
@@ -188,6 +323,34 @@
     (error (e)
       (format *error-output*
               ";; bookmark sidecar load failed: ~a~%" e)))
+
+  ;; narrow/widen §2.1: narrow-to-region / widen.  Emacs conventions:
+  ;;   C-x n n  narrow-to-region
+  ;;   C-x n w  widen
+  ;; C-x n is a prefix; which-key shows the sub-bindings after idle.
+  (limn/keys:define-key
+   global-keymap "C-x n n"
+   (lambda (ev) (declare (ignore ev))
+     (handler-case (limn/cmd:call-interactively
+                    (find-symbol "NARROW-TO-REGION" :cl-user))
+       (error (e)
+         (format *error-output* ";; C-x n n errored: ~a~%" e)))))
+
+  (limn/keys:define-key
+   global-keymap "C-x n w"
+   (lambda (ev) (declare (ignore ev))
+     (handler-case (limn/cmd:call-interactively
+                    (find-symbol "WIDEN" :cl-user))
+       (error (e)
+         (format *error-output* ";; C-x n w errored: ~a~%" e)))))
+
+  (limn/keys:define-key
+   global-keymap "C-x n d"
+   (lambda (ev) (declare (ignore ev))
+     (handler-case (limn/cmd:call-interactively
+                    (find-symbol "NARROW-TO-DEFUN" :cl-user))
+       (error (e)
+         (format *error-output* ";; C-x n d errored: ~a~%" e)))))
 
   ;; Enable which-key by default — popup hints after prefix-key idle.
   ;; Users wanting it off can call (limn/which-key:which-key-mode -1)
