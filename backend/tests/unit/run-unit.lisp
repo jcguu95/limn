@@ -175,7 +175,9 @@
                 ;; limn-client §1–§3 — eval-server socket eval
                 "eval-server.lisp"
                 ;; orderless 比對引擎 — P1 Fuzzy Selector 的比對核心
-                "orderless.lisp"))
+                "orderless.lisp"
+                ;; vertico 補全 UI 狀態機 — P2 Vertico 後端
+                "vertico.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
