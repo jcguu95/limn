@@ -64,7 +64,7 @@ docker run -it --rm \
   -e SANDBOX_RUNTIME_CONTAINER_IMAGE="$RUNTIME_IMAGE" \
   -e WORKSPACE_MOUNT_PATH="$WORKSPACE" \
   -e LOG_ALL_EVENTS=true \
-  -e LLM_MODEL="deepseek/deepseek-chat" \
+  -e LLM_MODEL="${LLM_MODEL:-deepseek/deepseek-v4-pro}" \
   -e LLM_BASE_URL="https://api.deepseek.com/v1" \
   -e LLM_API_KEY="$DEEPSEEK_API_KEY" \
   -v /var/run/docker.sock:/var/run/docker.sock \

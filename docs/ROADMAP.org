@@ -46,11 +46,21 @@ roadmap / sub-roadmap / 進度 checklist 住在它**自己的 design doc** 裡�
 
 * 計劃中 / 未排（planned）
 
-** Fuzzy Selector（minad Vertico+Orderless 等價）  ⏭ planned ★第一優先
-- 設計：=docs/completion-ui-design.md=（P1 章節）
-- 把現有 =completing-read= 升級成垂直、即時、模糊比對的選單。是 minad 整套
-  生態（Vertico/Orderless/Consult/Marginalia/Corfu/Cape/Embark/Tempel）的
-  **第一塊**;其餘 P2–P4 先記在該 doc、deferred。
+** minad 補全生態系（Vertico/Orderless/Consult/Marginalia/Corfu/Cape/Embark）  ✅ DONE v0.44.0
+- 設計：=docs/completion-ui-design.md=
+- 純 Lisp 重做 minad 整套後端 + Fuzzy Selector 前後端整合，已 merge（v0.44.0）：
+  - P1 Orderless 比對引擎（literal/flex/initialism…）✅
+  - P2 Vertico 垂直選單狀態機（過濾/捲動/選中）✅
+  - P3 Consult（consult-line 等）+ Marginalia（候選註解）✅
+  - P4 Corfu（行內 popup 狀態機）+ Cape（dabbrev/file capf）+ Embark（情境動作）✅
+  - UI §3–§6：minibuffer/set-candidates wire + Qt 垂直渲染 + C-n/C-p/RET/C-g
+    鍵位 + completing-read 路由（=*enable-fuzzy-selector*=）✅
+  - 驗證：unit 全綠（FS1–FS14 39/39）；showcase 在 =scratch/run-minad-showcase.sh=。
+- ⏭ 剩餘（純 Qt 視覺整合，後端邏輯都已就緒，是接手者的下一步）：
+  - Marginalia 獨立註解欄（set-candidates 加 annotations 欄位 + chrome 第二欄）
+  - Consult 即時預覽（選候選 → 跳 PDF 視圖）
+  - Corfu 行內 popup（游標處的補全視窗，非 minibuffer）
+  - Embark 原生動作選單
 - 槓桿大：leader 樹每個葉子幾乎都叫 completing-read,一次升級全面受益。
   零件多已存在（v0.25 completing-read、v0.28 which-key 渲染、vendored fzf）。
 
