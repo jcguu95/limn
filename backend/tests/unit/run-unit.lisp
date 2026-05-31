@@ -178,6 +178,10 @@
                 "orderless.lisp"
                 ;; vertico 補全 UI 狀態機 — P2 Vertico 後端
                 "vertico.lisp"
+                ;; minad P4: Corfu (in-buffer popup) + Cape (backends) + Embark (actions)
+                "corfu.lisp"
+                "cape.lisp"
+                "embark.lisp"
                 ;; minad P3: Consult + Marginalia
                 "consult.lisp"
                 "marginalia.lisp"))
