@@ -13,11 +13,29 @@
            #:minibuffer-completion-help
            #:*completion-styles*
            #:complete-with-styles
-           #:quit-minibuffer))
+           #:quit-minibuffer
+           #:quit-condition
+           #:*enable-fuzzy-selector*
+           #:enable-fuzzy-selector
+           #:disable-fuzzy-selector))
 
 (in-package #:limn/completion)
 
 (defvar *completion-styles* '(substring prefix flex))
+
+;;; ─── Fuzzy Selector 開關（§6）─────────────────────────────────────────
+
+(defvar *enable-fuzzy-selector* nil
+  "當設為 T 時，completing-read 會走 Vertico 垂直選單路徑（Orderless 模糊比對）。
+   預設為 NIL，不破壞現有行為。")
+
+(defun enable-fuzzy-selector ()
+  "開啟 Fuzzy Selector 模式。"
+  (setf *enable-fuzzy-selector* t))
+
+(defun disable-fuzzy-selector ()
+  "關閉 Fuzzy Selector 模式。"
+  (setf *enable-fuzzy-selector* nil))
 
 ;;; Last minibuffer state (used by minibuffer-prompt / minibuffer-contents)
 (defvar *current-prompt* "")
@@ -99,6 +117,20 @@
                              initial-input history default
                              annotation-function)
   (setf *current-prompt* prompt)
+  ;; §5 §6：當 Fuzzy Selector 開啟且在 live session 時，走 vertico-completing-read
+  (when *enable-fuzzy-selector*
+    (let ((vertico-pkg (find-package '#:limn/vertico)))
+      (when (and vertico-pkg
+                 (find-symbol "VERTICO-COMPLETING-READ" vertico-pkg))
+        (return-from completing-read
+          (funcall (symbol-function
+                    (find-symbol "VERTICO-COMPLETING-READ" vertico-pkg))
+                   prompt collection
+                   :predicate predicate
+                   :require-match require-match
+                   :initial-input initial-input
+                   :history history
+                   :default default)))))
   ;; v0.38: in a live session, delegate to *minibuffer-read* to actually
   ;; open the minibuffer over the bridge.  Otherwise (unit tests) fall
   ;; through to the existing collection-matching behavior.

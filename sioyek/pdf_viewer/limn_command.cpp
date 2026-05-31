@@ -143,11 +143,12 @@ void LimnCommand::dispatch(const QJsonObject& msg) {
     if (cmd == "message/clear") { cmd_message_clear(id, msg); return; }
 
     // minibuffer/* (SPEC §5.4)
-    if (cmd == "minibuffer/open")       { cmd_minibuffer_open       (id, msg); return; }
-    if (cmd == "minibuffer/close")      { cmd_minibuffer_close      (id, msg); return; }
-    if (cmd == "minibuffer/set-prompt") { cmd_minibuffer_set_prompt (id, msg); return; }
-    if (cmd == "minibuffer/set-text")   { cmd_minibuffer_set_text   (id, msg); return; }
-    if (cmd == "minibuffer/get")        { cmd_minibuffer_get        (id, msg); return; }
+    if (cmd == "minibuffer/open")            { cmd_minibuffer_open            (id, msg); return; }
+    if (cmd == "minibuffer/close")           { cmd_minibuffer_close           (id, msg); return; }
+    if (cmd == "minibuffer/set-prompt")      { cmd_minibuffer_set_prompt      (id, msg); return; }
+    if (cmd == "minibuffer/set-text")        { cmd_minibuffer_set_text        (id, msg); return; }
+    if (cmd == "minibuffer/get")             { cmd_minibuffer_get             (id, msg); return; }
+    if (cmd == "minibuffer/set-candidates")  { cmd_minibuffer_set_candidates  (id, msg); return; }
 
     // buffer/*
     if (cmd == "buffer/open")          { cmd_buffer_open         (id, msg); return; }
@@ -893,6 +894,9 @@ void LimnCommand::cmd_minibuffer_open(const QString& id, const QJsonObject& msg)
 
 void LimnCommand::cmd_minibuffer_close(const QString& id, const QJsonObject&) {
     minibuffer_open = false;
+    minibuffer_candidates.clear();
+    minibuffer_candidate_index = 0;
+    minibuffer_candidate_total = 0;
     // v0.40 Phase 3 — reset cursor for a clean re-open.  Pre-refactor,
     // TextBuffer wasn't tracking cursor inside the buffer object so
     // close left text_cursors["*minibuffer*"] untouched; tests that
@@ -956,6 +960,21 @@ void LimnCommand::cmd_minibuffer_get(const QString& id, const QJsonObject&) {
         data.insert("cursor", cp);
     }
     bridge->send_ok(id, data);
+}
+
+// §3 fuzzy selector: SBCL pushes candidate list for vertical rendering.
+void LimnCommand::cmd_minibuffer_set_candidates(const QString& id, const QJsonObject& msg) {
+    minibuffer_candidates.clear();
+    const QJsonArray arr = msg.value("candidates").toArray();
+    for (const auto& v : arr)
+        minibuffer_candidates.append(v.toString());
+    minibuffer_candidate_index = msg.value("index").toInt(0);
+    minibuffer_candidate_total = msg.value("total").toInt(minibuffer_candidates.size());
+    if (auto* c = chrome_of(main_widget))
+        c->set_candidates(minibuffer_candidates,
+                          minibuffer_candidate_index,
+                          minibuffer_candidate_total);
+    bridge->send_ok(id);
 }
 
 // Called by LimnInputFilter on every KeyPress. Returns TRUE iff this
@@ -1031,9 +1050,46 @@ void LimnCommand::handle_ime_event(const QString& preedit, const QString& commit
 bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mods) {
     if (!minibuffer_open) return false;
 
+    // ─── §4 fuzzy selector 鍵位（candidates 非空時優先處理）────────────
+    const bool fuzzy = !minibuffer_candidates.isEmpty();
+    if (fuzzy) {
+        // Check for Ctrl modifier.
+        // On macOS, Qt maps the physical Ctrl key to Qt::MetaModifier,
+        // which limn serializes as "meta".  Qt::ControlModifier is the
+        // Command key.  Accept both so C-n/C-p work on all platforms.
+        bool has_ctrl = false;
+        bool has_other = false;
+        for (const auto& m : mods) {
+            const QString s = m.toString();
+            if (s == "ctrl" || s == "control" || s == "meta") has_ctrl = true;
+            else if (s != "shift") has_other = true;
+        }
+        // C-n / C-p / <down> / <up> in fuzzy mode → move selection
+        if ((has_ctrl && !has_other && (key == "n" || key == "p"))
+            || (!has_ctrl && !has_other && (key == "<down>" || key == "<up>"))) {
+            const bool is_next = (key == "n" || key == "<down>");
+            QJsonObject ev;
+            ev.insert("frame-id", "f1");
+            bridge->push_event(is_next ? "minibuffer/candidates-next"
+                                       : "minibuffer/candidates-prev", ev);
+            return true;
+        }
+        // C-g in fuzzy mode → cancel (like ESC)
+        if (has_ctrl && !has_other && key == "g") {
+            QJsonObject ev;
+            ev.insert("frame-id", "f1");
+            bridge->push_event("minibuffer-cancel", ev);
+            minibuffer_open = false;
+            minibuffer_candidates.clear();
+            if (auto* c = chrome_of(main_widget))
+                c->set_minibuffer(false, "", "");
+            return true;
+        }
+    }
+
     // Modifier combos other than Shift fall through to a normal key
-    // event — keeps C-g / M-x / Up / Down / etc reachable through
-    // global keymap.
+    // event — keeps C-g / M-x / etc reachable through global keymap.
+    // In fuzzy mode, C-n/C-p/C-g are already handled above.
     for (const auto& m : mods) {
         const QString s = m.toString();
         if (s != "shift") return false;
@@ -1052,6 +1108,7 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
         // make-minibuffer-reader still calls minibuffer/close from its
         // unwind — both paths are idempotent, so the double-close is harmless.
         minibuffer_open = false;
+        minibuffer_candidates.clear();
         if (auto* c = chrome_of(main_widget))
             c->set_minibuffer(false, "", "");
         return true;
@@ -1061,6 +1118,7 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
         // Same close-on-cancel rationale as RET above.  v027-completing-read
         // Ω4 ("open is false after cancel") was the symptom.
         minibuffer_open = false;
+        minibuffer_candidates.clear();
         if (auto* c = chrome_of(main_widget))
             c->set_minibuffer(false, "", "");
         return true;
@@ -1151,10 +1209,9 @@ bool LimnCommand::minibuffer_handle_key(const QString& key, const QJsonArray& mo
         bridge->push_event("minibuffer-input", ev);
         return true;
     }
-    // Anything else (TAB / BS / arrow keys / etc) is currently NOT
-    // consumed. Future: BS deletes a char, Up/Down browse history,
-    // TAB completes — for now they fall through and the user can
-    // still hit ESC to cancel.
+    // Anything else (TAB / arrow keys / etc) is currently NOT
+    // consumed. Future: TAB completes — for now they fall through and
+    // the user can still hit ESC to cancel.
     return false;
 }
 

@@ -102,6 +102,8 @@
                 "advice-v025.lisp"
                 "defcustom-v025.lisp"
                 "completion-v025.lisp"
+                ;; v0.39 fuzzy-selector tests (§5–§6 Vertico + Orderless)
+                "fuzzy-selector.lisp"
                 ;; v0.26 RED tests — expected to fail until impl lands
                 "isearch-v026.lisp"
                 "occur-v026.lisp"

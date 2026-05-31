@@ -45,6 +45,16 @@ LimnChromeBar::LimnChromeBar(QWidget* parent) : QWidget(parent) {
     root->addLayout(modeline_row);
     root->addWidget(echo_line_);
 
+    // ── §3 fuzzy selector: candidate labels (up to 10, created ahead) ──
+    for (int i = 0; i < 10; ++i) {
+        QLabel* lbl = new QLabel(this);
+        lbl->setObjectName(QStringLiteral("candidate_row"));
+        lbl->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+        lbl->hide();
+        root->addWidget(lbl);
+        candidate_labels_.append(lbl);
+    }
+
     // ── minimal styling so the two rows are visually distinct ───────
     // Route A: use the `status_font` config value (falls back to the embedded
     // JetBrainsMono when unset) rather than a hard-coded OS-specific cascade
@@ -76,7 +86,57 @@ void LimnChromeBar::set_minibuffer(bool open,
     minibuffer_open_   = open;
     minibuffer_prompt_ = prompt;
     minibuffer_text_   = text;
+    // §3：close 時清除候選
+    if (!open) {
+        candidates_.clear();
+        candidate_idx_   = 0;
+        candidate_total_ = 0;
+        refresh_candidates();
+    }
     refresh_echo_line();
+}
+
+// §3 fuzzy selector: draw vertical candidate list
+void LimnChromeBar::set_candidates(const QStringList& candidates,
+                                    int idx, int total) {
+    candidates_       = candidates;
+    candidate_idx_    = idx;
+    candidate_total_  = total;
+    refresh_candidates();
+}
+
+void LimnChromeBar::refresh_candidates() {
+    const int vis_count = candidates_.size();
+    for (int i = 0; i < candidate_labels_.size(); ++i) {
+        if (i < vis_count) {
+            QString label_text = candidates_.at(i);
+            if (i == candidate_idx_) {
+                // 高亮選中行：加上「>」前綴與不同背景
+                label_text = QString("> %1   [%2/%3]")
+                    .arg(label_text)
+                    .arg(i + 1)
+                    .arg(candidate_total_);
+                candidate_labels_[i]->setStyleSheet(
+                    QStringLiteral("QLabel#candidate_row {"
+                        "background: #3a5a8c; color: #ffffff;"
+                        "padding: 1px 8px; font-size: 11px; }"));
+            } else {
+                label_text = QString("  %1").arg(label_text);
+                candidate_labels_[i]->setStyleSheet(
+                    QStringLiteral("QLabel#candidate_row {"
+                        "background: #2a2a2a; color: #c0c0c0;"
+                        "padding: 1px 8px; font-size: 11px; }"));
+            }
+            candidate_labels_[i]->setText(label_text);
+            candidate_labels_[i]->show();
+        } else {
+            candidate_labels_[i]->hide();
+        }
+    }
+    // trigger layout refresh
+    updateGeometry();
+    if (parentWidget())
+        parentWidget()->update();
 }
 
 void LimnChromeBar::refresh_echo_line() {
@@ -111,6 +171,11 @@ void LimnChromeBar::rebuild_stylesheet(const QString& font_family) {
         QLabel#echo_line {
             background: #1a1a1a; color: #e8e8e8;
             padding: 2px 8px;  font-size: 12px;
+            %1
+        }
+        QLabel#candidate_row {
+            background: #2a2a2a; color: #c0c0c0;
+            padding: 1px 8px;  font-size: 11px;
             %1
         }
     )").arg(ff_rule));

@@ -203,6 +203,7 @@ private:
     void cmd_minibuffer_set_prompt  (const QString& id, const QJsonObject& msg);
     void cmd_minibuffer_set_text    (const QString& id, const QJsonObject& msg);
     void cmd_minibuffer_get         (const QString& id, const QJsonObject& msg);
+    void cmd_minibuffer_set_candidates(const QString& id, const QJsonObject& msg);
 
 public:
     // Called by LimnInputFilter on every KeyPress. Returns TRUE if the
@@ -300,6 +301,13 @@ private:
     // currently shown? what's the prompt prefix?
     bool     minibuffer_open = false;
     QString  minibuffer_prompt;
+    
+    // ─── fuzzy selector state (§3–§6) ──────────────────────────────
+    // When non-empty, the minibuffer is showing vertical candidates
+    // (Vertico mode).  Pushed by minibuffer/set-candidates.
+    QStringList minibuffer_candidates;
+    int         minibuffer_candidate_index = 0;
+    int         minibuffer_candidate_total = 0;
 
     // ─── v0.25 face registry ───────────────────────────────────────
     // Populated by display/sync-faces from the Lisp face table.
