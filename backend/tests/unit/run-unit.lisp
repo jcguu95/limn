@@ -177,7 +177,10 @@
                 ;; orderless 比對引擎 — P1 Fuzzy Selector 的比對核心
                 "orderless.lisp"
                 ;; vertico 補全 UI 狀態機 — P2 Vertico 後端
-                "vertico.lisp"))
+                "vertico.lisp"
+                ;; minad P3: Consult + Marginalia
+                "consult.lisp"
+                "marginalia.lisp"))
   (format t "[loading unit] ~a~%" file)
   (handler-case (load (rel file))
     (error (e) (format t "  !! ~a: ~a~%" file e))))
